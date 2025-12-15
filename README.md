@@ -1,12 +1,15 @@
-# btc-orderflow-system
+### Data Flow (High Level)
 
-BTC order book analysis system based on **delta and imbalance signals**.
+Binance Trades Stream (executed trades) ↓ Aggregator
 
-The project focuses on **market intelligence** — identifying valid entry points
-from order flow dynamics, not on simple price-based indicators.
+- collects executed trade events (market prints)
+- aggregates + normalizes into time-based metrics (volume, delta, imbalance)
+- outputs: aggregated.csv ↓ DeltaScout
 
-Automated trade execution is a **logical next step** in the project’s evolution
-and is currently under development.
+DeltaScout
+- reads: aggregated.csv
+- detects PEAK events (signals)
+
 
 ---
 
