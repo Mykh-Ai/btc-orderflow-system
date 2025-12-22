@@ -1,9 +1,8 @@
 # Changelog
 
-## [Unreleased]
-- Public repository initialized (README, structure, env example)
-- Buyer module: alerting and risk planning (stable)
-- Executor module: execution engine under development (paper mode available)
+- Executor module: execution engine in beta testing
+  - Single-position execution model implemented
+  - Risk-based SL/TP logic (R-multiples)
+  - Paper trading fully operational
+  - Limited live execution under controlled testing
 
-## [0.1.0] - Initial public version
-- Project overview and architecture
