@@ -41,9 +41,7 @@ The system is designed with a clear separation between:
 This allows the same signals to be used in **manual, semi-automatic, or fully
 automated** workflows.
 
----
 
-## Architecture (High Level)
 ## Architecture (High Level)
 
 The system is built as a set of loosely coupled modules with clear responsibilities
