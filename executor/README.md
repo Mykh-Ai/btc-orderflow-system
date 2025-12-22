@@ -1,7 +1,12 @@
-Executor 
+# Executor
+
 > **Status:** Beta testing  
 > Core functionality is implemented.  
 > Paper trading is fully operational; live execution is available in controlled scenarios.
+
+> **Demo scope:**  
+> This repository includes a **paper-first executor demo** with a minimal live-trading skeleton.  
+> The full production execution engine is maintained privately during beta.
 
 ### Data Flow (High Level)
 
