@@ -23,3 +23,7 @@ Thumbs.db
 # DeltaScout
 deltascout/.env
 deltascout/.env.*
+
+#aggregator.py
+data/feed/.gitkeep
+data/logs/.gitkeep
