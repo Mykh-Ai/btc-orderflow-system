@@ -16,8 +16,8 @@ This service connects to the Binance WebSocket **trade** stream and produces a c
 
 Default paths:
 
-- Trade log: `/app/logs/trades_log.txt`
-- Aggregated feed: `/app/feed/aggregated.csv`
+- Trade log: `/data/logs/trades_log.txt`
+- Aggregated feed: `/data/feed/aggregated.csv`
 
 CSV header:
 
@@ -48,20 +48,18 @@ Requirements: Docker Desktop
 ```powershell
 docker compose -f .\docker-compose.demo.yml up -d
 .\demo_aggregator.ps1
+
 Stop:
-
-powershell
 docker compose -f .\docker-compose.demo.yml down
-Manual check:
 
-powershell
+Manual check:
 Get-Content .\data\feed\aggregated.csv -Tail 5
 Get-Content .\data\logs\trades_log.txt -Tail 10
 
-## Install / Run
-```bash
+Install / Run (without Docker)
 pip install websocket-client
 python aggregator.py
+
 
 
 
