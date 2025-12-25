@@ -41,10 +41,13 @@ Current implementation uses constants defined in the script:
 - `AGG_INTERVAL` (default: `60`)
 - `MAX_RECORDS` (default: `1500`)
 
-## Install / Run
+## Quick demo (Windows)
+Requirements: Docker Desktop
+```powershell
 docker compose -f .\docker-compose.demo.yml up -d
 .\demo_aggregator.ps1
 
+## Install / Run
 ```bash
 pip install websocket-client
 python aggregator.py
