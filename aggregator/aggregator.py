@@ -23,19 +23,20 @@ import os
 import sys
 
 # --- directories inside container ---
-feed_dir = "/app/feed"
-logs_dir = "/app/logs"
+feed_dir = os.getenv("FEED_DIR", "/data/feed")
+logs_dir = os.getenv("LOGS_DIR", "/data/logs")
+
 
 os.makedirs(feed_dir, exist_ok=True)
 os.makedirs(logs_dir, exist_ok=True)
 
+
 aggregated_file_path = os.path.join(feed_dir, "aggregated.csv")
 log_file_path = os.path.join(logs_dir, "trades_log.txt")
 
-
 # Settings
-AGG_INTERVAL = 60
-MAX_RECORDS = 1500
+AGG_INTERVAL = int(os.getenv("AGG_INTERVAL", "60"))
+MAX_RECORDS = int(os.getenv("MAX_RECORDS", "1500"))
 
 # Writer (Binance WebSocket)
 # ===========================
