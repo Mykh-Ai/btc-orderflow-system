@@ -44,12 +44,19 @@ Current implementation uses constants defined in the script:
 ## Quick demo (Aggregator live feed)
 
 Requirements: Docker Desktop
+
 ```powershell
 docker compose -f .\docker-compose.demo.yml up -d
 .\demo_aggregator.ps1
-
 Stop:
+
+powershell
 docker compose -f .\docker-compose.demo.yml down
+Manual check:
+
+powershell
+Get-Content .\data\feed\aggregated.csv -Tail 5
+Get-Content .\data\logs\trades_log.txt -Tail 10
 
 ## Install / Run
 ```bash
