@@ -24,13 +24,12 @@ reads: aggregated.csv
 computes: delta / imbalance metrics
 
 outputs: PEAK events (JSONL)
-↓
 ├── Buyer
 │ - reads: PEAK events
-│ - produces: human-readable trade plan (Entry / SL / TP1 / TP2)
+│ - produces:  trade plan (Entry /SL/TP1/TP2)
 │ - sends: Telegram alerts via n8n
 │
-└── Executor
+       └────────────────│── Executor
 - reads: PEAK events
 - executes: paper trading (DRY mode)
 - planned: live Binance execution
