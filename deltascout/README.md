@@ -32,6 +32,9 @@ The script reads configuration from environment variables (with defaults in code
 - `WEBHOOK_URL` — optional webhook endpoint for debug payloads
 - Tier/gate parameters: `TIER_*`, `IMB_*`, `AVG9_MAX`, `CHOP30_MAX`, `COH10_MIN`, etc.
 - “Peak/trigger thresholds are required via environment variables. See .env.example
+- Peak and trigger thresholds are required via environment variables.
+See `.env.example`. The service will not start without them.
+
 
 ## Run
 
