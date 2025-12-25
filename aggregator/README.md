@@ -42,16 +42,15 @@ Current implementation uses constants defined in the script:
 - `MAX_RECORDS` (default: `1500`)
 
 ## Install / Run
+docker compose -f .\docker-compose.demo.yml up -d
+.\demo_aggregator.ps1
 
 ```bash
 pip install websocket-client
 python aggregator.py
 
-## Quick demo (Aggregator)
 
-Requirements: Docker Desktop (or Docker Engine + Compose)
 
-```bash
-docker compose -f docker-compose.demo.yml up -d
+
 
 
