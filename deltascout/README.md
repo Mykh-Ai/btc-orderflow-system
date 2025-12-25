@@ -31,6 +31,7 @@ The script reads configuration from environment variables (with defaults in code
 - `ROLL_WINDOW_MIN`, `STARTUP_LOOKBACK_MIN` — rolling/window sizing
 - `WEBHOOK_URL` — optional webhook endpoint for debug payloads
 - Tier/gate parameters: `TIER_*`, `IMB_*`, `AVG9_MAX`, `CHOP30_MAX`, `COH10_MIN`, etc.
+- “Peak/trigger thresholds are required via environment variables. See .env.example
 
 ## Run
 
