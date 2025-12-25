@@ -19,3 +19,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# DeltaScout
+deltascout/.env
+deltascout/.env.*
