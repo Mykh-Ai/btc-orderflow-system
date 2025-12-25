@@ -4,10 +4,10 @@ This service connects to the Binance WebSocket **trade** stream and produces a c
 
 ## What it does
 
-- Subscribes to Binance `@trade` stream.
+- Subscribes to the Binance `@trade` stream.
 - Logs raw trades to `trades_log.txt`.
 - Every `AGG_INTERVAL` seconds (default: 60):
-  - aggregates trades into one row of metrics,
+  - aggregates trades into a single row of metrics,
   - appends the row to `aggregated.csv`,
   - trims `aggregated.csv` to a bounded size,
   - clears `trades_log.txt` for the next interval.
@@ -36,7 +36,7 @@ CSV header:
 
 ## Configuration
 
-Current implementation uses constants in the script:
+Current implementation uses constants defined in the script:
 
 - `AGG_INTERVAL` (default: `60`)
 - `MAX_RECORDS` (default: `1500`)
@@ -46,3 +46,4 @@ Current implementation uses constants in the script:
 ```bash
 pip install websocket-client
 python aggregator.py
+
