@@ -41,11 +41,15 @@ Current implementation uses constants defined in the script:
 - `AGG_INTERVAL` (default: `60`)
 - `MAX_RECORDS` (default: `1500`)
 
-## Quick demo (Windows)
+## Quick demo (Aggregator live feed)
+
 Requirements: Docker Desktop
 ```powershell
 docker compose -f .\docker-compose.demo.yml up -d
 .\demo_aggregator.ps1
+
+Stop:
+docker compose -f .\docker-compose.demo.yml down
 
 ## Install / Run
 ```bash
