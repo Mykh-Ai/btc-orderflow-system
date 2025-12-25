@@ -1,0 +1,23 @@
+services:
+  aggregator:
+    image: python:3.11-slim
+    container_name: demo-aggregator
+    working_dir: /app
+    volumes:
+      - ./aggregator:/app
+      - ./data/feed:/data/feed
+      - ./data/logs:/data/logs
+    environment:
+      # make output visible in docker logs immediately
+      - PYTHONUNBUFFERED=1
+      # aggregator script uses these paths (align with your code)
+      - OUTPUT_CSV=/data/feed/aggregated.csv
+      - TRADES_LOG=/data/logs/trades_log.txt
+      - AGG_INTERVAL=60
+      - MAX_RECORDS=1500
+      # choose symbol if your aggregator supports it
+      - SYMBOL=btcusdc
+    command: >
+      sh -lc "pip -q install websocket-client
+      && python aggregator.py"
+    restart: unless-stopped
