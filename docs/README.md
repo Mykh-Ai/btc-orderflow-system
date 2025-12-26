@@ -1,20 +1,27 @@
-# BTC Order Flow System (Demo)
+## Safe Execution & Order-Flow Analytics for Binance Spots (R&D)
 
-This repository demonstrates the architecture and core components of a
-Python-based real-time market data and trade execution system.
+This repository demonstrates a production-oriented trading pipeline designed to
+handle real-market edge cases: partial fills, TP/SL sequencing, retries,
+and exchange-specific quirks.
 
-## Scope
-This is a **demonstration / skeleton project**, focused on:
-- real-time data ingestion and aggregation
-- signal detection logic
-- execution flow and risk control structure
-- clean separation between data, signals, and execution
+It is not a "profit bot".
+It is an execution-first architecture built to avoid the most common reasons
+trading systems fail in live environments.
+
+### Scope
+This is a demonstration / research project focused on:
+
+- real-time market data ingestion and aggregation
+- order-flow based signal detection
+- execution flow with explicit risk and state control
+- safe separation between data, signals, and execution
+- designing systems that can survive partial fills, latency, and API failures
 
 ## Important
 - This repository is **not a complete trading bot**
 - No trading strategy or profitability claims are included
-- Production-ready code, full execution logic, and integrations
-  are maintained privately and shared only within client projects
+- Production-ready execution logic and integrations are developed
+  separately and adapted within individual client projects
 
 ## Components
 - `aggregator` — real-time market data ingestion
