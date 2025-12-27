@@ -1,12 +1,12 @@
-## Safe Execution & Order-Flow Analytics for Binance Spots (R&D)
+## Safe Execution & Order-Flow Analytics for Binance Spots  
+(VPS • Docker • n8n • Telegram • Binance Spot)
 
-This repository demonstrates a production-oriented trading pipeline designed to
-handle real-market edge cases: partial fills, TP/SL sequencing, retries,
-and exchange-specific quirks.
+This repository is an end-to-end **market data → analytics → alerts → execution** stack deployed on a VPS.
+Goal: demonstrate a **full spectrum system**, not a single script.
 
-It is not a "profit bot".
-It is an execution-first architecture built to avoid the most common reasons
-trading systems fail in live environments.
+**Pipeline:** Binance Market Feed → VPS (Docker) → Aggregator/Analytics → n8n automation → Telegram alerts → Binance Spot API (Executor)
+
+> ⚠️ **Disclaimer:** This is an educational/engineering project. **Not financial advice.** Use at your own risk.
 
 ### Scope
 This is a demonstration / research project focused on:
