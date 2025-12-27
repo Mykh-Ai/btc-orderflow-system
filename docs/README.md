@@ -1,4 +1,4 @@
-## Safe Execution & Order-Flow Analytics for Binance Spots  
+## Execution-first Order-Flow Analytics Stack for Binance Spot
 (VPS • Docker • n8n • Telegram • Binance Spot)
 
 This repository is an end-to-end **market data → analytics → alerts → execution** stack deployed on a VPS.
