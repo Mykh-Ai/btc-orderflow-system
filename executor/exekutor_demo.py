@@ -7,7 +7,7 @@ Executor — execution engine for DeltaScout PEAK signals.
 Design goals
 - Reads DeltaScout JSONL events from a shared log file (DELTASCOUT_LOG)
 - Single-position mode: ignores new PEAK while a position is OPEN/PENDING
-- DRY=1 (paper) now, DRY=0 (Binance) later
+- DRY=1 (paper) now, DRY=0 (Binance Spot)
 - Writes ONLY to its own state/log files (never appends to deltascout.log)
 - Keeps executor log capped to LOG_MAX_LINES (default: 200)
 
