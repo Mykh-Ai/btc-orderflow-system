@@ -888,7 +888,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 sl_now = int((pos.get("orders") or {}).get("sl") or 0)
 
                # Primary: trailing stop from aggregated.csv swings (low API usage).
-                desired = binance_api._trail_desired_stop_from_agg(pos)
+                desired = _trail_desired_stop_from_agg(pos)
                 if desired is None:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
                     mid = 0.0
@@ -1053,7 +1053,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         every = float(ENV.get("TRAIL_UPDATE_EVERY_SEC") or 20)
         if now_s - last_u >= every:
             # Primary: aggregated.csv swings (no Binance polling).
-            desired = binance_api._trail_desired_stop_from_agg(pos)
+            desired = _trail_desired_stop_from_agg(pos)
             if desired is None and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
                 mid = 0.0
