@@ -42,6 +42,7 @@ import executor_mod.trail as trail
 import executor_mod.binance_api as binance_api
 import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
+import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 from executor_mod.risk_math import (
     floor_to_step,
@@ -292,59 +293,14 @@ def validate_qty(qty: float, entry: float) -> bool:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    # Robust loader: returns empty DF on schema issues.
-    if not os.path.exists(ENV["AGG_CSV"]):
-        return pd.DataFrame()
-
-    df = pd.read_csv(ENV["AGG_CSV"])
-    df.columns = [c.strip() for c in df.columns]
-
-    if "Timestamp" not in df.columns:
-        return pd.DataFrame()
-
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce").dt.floor("min")
-
-    # price
-    if "ClosePrice" in df.columns:
-        price = df["ClosePrice"]
-    elif "AvgPrice" in df.columns:
-        price = df["AvgPrice"]
-    else:
-        return pd.DataFrame()
-
-    df["price"] = pd.to_numeric(price, errors="coerce").ffill()
-
-    buy = pd.to_numeric(df.get("BuyQty", 0.0), errors="coerce").fillna(0.0)
-    sell = pd.to_numeric(df.get("SellQty", 0.0), errors="coerce").fillna(0.0)
-    df["buy"] = buy
-    df["sell"] = sell
-
-    df["vol1m"] = df["buy"] + df["sell"]
-    df["delta"] = df["buy"] - df["sell"]
-
-    df = df.dropna(subset=["Timestamp", "price"])
-
-    return df.reset_index(drop=True)
+    return market_data.load_df_sorted()
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    # normalize to minute resolution; be tolerant to tz formats
-    try:
-        target = pd.to_datetime(ts, utc=True).tz_convert(None).floor("min")
-    except Exception:
-        return len(df) - 1
-
-    try:
-        series = pd.to_datetime(df["Timestamp"], utc=True).tz_convert(None).dt.floor("min")
-        m = df.index[series == target]
-        return int(m[0]) if len(m) else len(df) - 1
-    except Exception:
-        return len(df) - 1
+    return market_data.locate_index_by_ts(df, ts)
 
 
 def latest_price(df: pd.DataFrame) -> float:
-    if len(df) == 0:
-        return float("nan")
-    return float(df.iloc[-1]["price"])
+    return market_data.latest_price(df)
 
 # ===================== Stop / TP ("far" stop logic) =====================
 
