@@ -25,7 +25,6 @@ Paper mode behavior (DRY=1)
 
 """
 from __future__ import annotations
-
 import os
 import json
 import time
@@ -38,8 +37,23 @@ from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
 from executor_mod.notifications import log_event, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
+from executor_mod import margin_guard 
+import executor_mod.paper_mode as paper_mode
+import executor_mod.trail as trail
 import executor_mod.binance_api as binance_api
 import executor_mod.event_dedup as event_dedup
+import executor_mod.risk_math as risk_math
+import executor_mod.market_data as market_data
+import executor_mod.exits_flow as exits_flow
+from executor_mod.risk_math import (
+    floor_to_step,
+    ceil_to_step,
+    round_nearest_to_step,
+    _decimals_from_step,
+    fmt_price,
+    fmt_qty,
+    round_qty,
+)
 import pandas as pd
 
 
@@ -201,6 +215,8 @@ def read_tail_lines(path: str, n: int) -> List[str]:
     except FileNotFoundError:
         return []
 
+# Configure trail helper module (inject ENV and file tail reader)
+trail.configure(ENV, read_tail_lines)
 
 def _now_s() -> float:
     return time.time()
@@ -210,37 +226,6 @@ def _now_s() -> float:
 # (moved to executor_mod.event_dedup)
 
 # ===================== Rounding / sizing =====================
-
-def floor_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_FLOOR) * step
-    return float(d)
-
-
-def ceil_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_CEILING) * step
-    return float(d)
-
-
-def round_nearest_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
-    return float(d)
-
-
-def _decimals_from_step(step: Decimal) -> int:
-    """Number of decimal places implied by a step (tick/lot)."""
-    step = Decimal(step)
-    return max(0, -step.as_tuple().exponent)
-
-
-def fmt_price(p: float) -> str:
-    """Format price as a string respecting TICK_SIZE."""
-    dp = _decimals_from_step(ENV["TICK_SIZE"])
-    return f"{p:.{dp}f}"
-
-
 
 def _oid_int(v: Any) -> Optional[int]:
     try:
@@ -260,20 +245,14 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
     except Exception:
         return None
     return None
-def fmt_qty(q: float) -> str:
-    """Format quantity as a string respecting QTY_STEP (trim trailing zeros)."""
-    dp = _decimals_from_step(ENV["QTY_STEP"])
-    s = f"{q:.{dp}f}"
-    return s.rstrip("0").rstrip(".") if "." in s else s
 
 # Backward-compatible name (kept for any leftover uses)
 
-def round_qty(x: float) -> float:
-    """Round a quantity DOWN to the configured qty step."""
-    return floor_to_step(x, ENV["QTY_STEP"])
 
 # Wire runtime dependencies for binance_api (keeps call sites unchanged).
-binance_api.configure(ENV, fmt_qty=fmt_qty, fmt_price=fmt_price, round_qty=round_qty)
+
+risk_math.configure(ENV)
+binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
 
 def build_entry_price(kind: str, close_price: float) -> float:
     """Entry price builder used for both paper and live.
@@ -315,59 +294,14 @@ def validate_qty(qty: float, entry: float) -> bool:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    # Robust loader: returns empty DF on schema issues.
-    if not os.path.exists(ENV["AGG_CSV"]):
-        return pd.DataFrame()
-
-    df = pd.read_csv(ENV["AGG_CSV"])
-    df.columns = [c.strip() for c in df.columns]
-
-    if "Timestamp" not in df.columns:
-        return pd.DataFrame()
-
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce").dt.floor("min")
-
-    # price
-    if "ClosePrice" in df.columns:
-        price = df["ClosePrice"]
-    elif "AvgPrice" in df.columns:
-        price = df["AvgPrice"]
-    else:
-        return pd.DataFrame()
-
-    df["price"] = pd.to_numeric(price, errors="coerce").ffill()
-
-    buy = pd.to_numeric(df.get("BuyQty", 0.0), errors="coerce").fillna(0.0)
-    sell = pd.to_numeric(df.get("SellQty", 0.0), errors="coerce").fillna(0.0)
-    df["buy"] = buy
-    df["sell"] = sell
-
-    df["vol1m"] = df["buy"] + df["sell"]
-    df["delta"] = df["buy"] - df["sell"]
-
-    df = df.dropna(subset=["Timestamp", "price"])
-
-    return df.reset_index(drop=True)
+    return market_data.load_df_sorted()
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    # normalize to minute resolution; be tolerant to tz formats
-    try:
-        target = pd.to_datetime(ts, utc=True).tz_convert(None).floor("min")
-    except Exception:
-        return len(df) - 1
-
-    try:
-        series = pd.to_datetime(df["Timestamp"], utc=True).tz_convert(None).dt.floor("min")
-        m = df.index[series == target]
-        return int(m[0]) if len(m) else len(df) - 1
-    except Exception:
-        return len(df) - 1
+    return market_data.locate_index_by_ts(df, ts)
 
 
 def latest_price(df: pd.DataFrame) -> float:
-    if len(df) == 0:
-        return float("nan")
-    return float(df.iloc[-1]["price"])
+    return market_data.latest_price(df)
 
 # ===================== Stop / TP ("far" stop logic) =====================
 
@@ -564,30 +498,7 @@ def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[st
     if qty_total_r < min_qty:
         raise RuntimeError(f"qty_total too small after rounding: qty_total={qt} -> {qty_total_r} (min_qty={min_qty})")
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    step_d = ENV["QTY_STEP"]  # Decimal
-    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
-    if total_units <= 0:
-        raise RuntimeError(f"Invalid qty after rounding: qty_total_r={qty_total_r} step={step_d}")
-
-    u1 = total_units // 3
-    u2 = total_units // 3
-    u3 = total_units - u1 - u2
-
-    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
-    if u1 <= 0 or u2 <= 0:
-        u1 = total_units // 2
-        u2 = total_units - u1
-        u3 = 0
-
-    if (u1 + u2 + u3) != total_units:
-        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
-
-    qty1 = float(Decimal(u1) * step_d)
-    qty2 = float(Decimal(u2) * step_d)
-    qty3 = float(Decimal(u3) * step_d)
-    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
-        raise RuntimeError(f"Invalid qty split after rounding: qty_total={qty_total_r} qty1={qty1} qty2={qty2} step={ENV.get('QTY_STEP')}")
-
+    qty1, qty2, qty3 = risk_math.split_qty_3legs_validate(qty_total_r)
     # Min notional safety (optional but helpful)
     min_notional = float(ENV.get("MIN_NOTIONAL", 0.0))
     if min_notional > 0:
@@ -644,29 +555,7 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     qty_total_r = round_qty(qty_total)
 
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    step_d = ENV["QTY_STEP"]  # Decimal
-    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
-    if total_units <= 0:
-        raise RuntimeError(f"Invalid qty split after rounding: qty_total_r={qty_total_r} step={step_d}")
-
-    u1 = total_units // 3
-    u2 = total_units // 3
-    u3 = total_units - u1 - u2
-
-    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
-    if u1 <= 0 or u2 <= 0:
-        u1 = total_units // 2
-        u2 = total_units - u1
-        u3 = 0
-
-    if (u1 + u2 + u3) != total_units:
-        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
-
-    qty1 = float(Decimal(u1) * step_d)
-    qty2 = float(Decimal(u2) * step_d)
-    qty3 = float(Decimal(u3) * step_d)
-    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
-        raise RuntimeError(f"Invalid qty split: qty_total={qty_total_r} qty1={qty1} qty2={qty2} qty3={qty3}")
+    qty1, qty2, qty3 = risk_math.split_qty_3legs_place(qty_total_r)
     # Binance expects strings for precise formatting
     qty_total_s = fmt_qty(qty_total_r)
     qty1_s = fmt_qty(qty1)
@@ -725,6 +614,15 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "qty2": qty2,
         "qty3": qty3,
     }
+# Wire runtime dependencies for exits placement flow (keeps call sites unchanged).
+exits_flow.configure(
+    ENV,
+    save_state_fn=lambda st: save_state(st),
+    log_event_fn=lambda *a, **k: log_event(*a, **k),
+    send_webhook_fn=lambda payload: send_webhook(payload),
+    validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
+    place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
+)
 def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     """Live V1.5 manager: TP1 -> move SL to BE (entry), TP2 continues.
 
@@ -1218,97 +1116,13 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 # ===================== State =====================
 
-def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
-    """
-    Read last N rows from aggregated.csv and extract ClosePrice (fallback to AvgPrice).
-    CSV header expected (example): Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice
-    """
-    if n_rows <= 0:
-        return []
-    # Read tail lines (avoid loading full file)
-    lines = read_tail_lines(path, n_rows + 5)  # header + a few extra
-    if not lines:
-        return []
-    # Find header
-    header_idx = None
-    for i, ln in enumerate(lines):
-        if "Timestamp" in ln and "ClosePrice" in ln:
-            header_idx = i
-            break
-    # If no header in tail, assume fixed order and parse from all lines
-    data_lines = lines[header_idx + 1:] if header_idx is not None else lines
-    closes: list[float] = []
-    for ln in data_lines:
-        ln = ln.strip()
-        if not ln or ln.startswith("Timestamp"):
-            continue
-        parts = [p.strip() for p in ln.split(",")]
-        if len(parts) < 7:
-            continue
-        # try ClosePrice last col (idx 7) if present
-        v = None
-        if len(parts) >= 8:
-            v = parts[7]
-        else:
-            v = parts[6]  # AvgPrice
-        try:
-            closes.append(float(v))
-        except Exception:
-            continue
-    return closes
-
-
-def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
-    """
-    Find last swing point in series using simple fractal:
-      low:  x[i] < x[i-1..i-lr] and x[i] < x[i+1..i+lr]
-      high: x[i] > x[i-1..i-lr] and x[i] > x[i+1..i+lr]
-    Returns swing price or None.
-    """
-    if lr < 1:
-        lr = 1
-    if len(series) < (2 * lr + 1):
-        return None
-    # scan from right to left so we get the most recent confirmed swing
-    # last index we can test is len(series)-lr-1
-    for i in range(len(series) - lr - 1, lr - 1, -1):
-        x = series[i]
-        left = series[i - lr:i]
-        right = series[i + 1:i + 1 + lr]
-        if len(left) < lr or len(right) < lr:
-            continue
-        if kind == "low":
-            if all(x < v for v in left) and all(x < v for v in right):
-                return x
-        else:
-            if all(x > v for v in left) and all(x > v for v in right):
-                return x
-    return None
-
-
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     """
     Compute desired trailing stop based on last swing from aggregated.csv ClosePrice.
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """
-    path = ENV.get("AGG_CSV") or ""
-    if not path:
-        return None
-    lookback = int(ENV.get("TRAIL_SWING_LOOKBACK") or 0)
-    lr = int(ENV.get("TRAIL_SWING_LR") or 2)
-    buf = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 0.0)
-    closes = _read_last_close_prices_from_agg_csv(path, lookback)
-    if not closes:
-        return None
-    kind = "low" if pos.get("side") == "LONG" else "high"
-    swing = _find_last_fractal_swing(closes, lr=lr, kind=kind)
-    if swing is None:
-        return None
-    if pos.get("side") == "LONG":
-        return float(swing - buf)
-    else:
-        return float(swing + buf)
+    return trail._trail_desired_stop_from_agg(pos)
 
 def get_usdt_usdc_k() -> float:
     mid_usdt = binance_api.get_mid_price("BTCUSDT")
@@ -1444,169 +1258,26 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
 
 # ===================== Paper execution =====================
 
+paper_mode.configure(
+    ENV,
+    _now_s=_now_s,
+    build_entry_price=build_entry_price,
+    notional_to_qty=notional_to_qty,
+    validate_qty=validate_qty,
+    locate_index_by_ts=locate_index_by_ts,
+    swing_stop_far=swing_stop_far,
+    compute_tps=compute_tps,
+    latest_price=latest_price,
+    iso_utc=iso_utc,
+    round_nearest_to_step=round_nearest_to_step,
+    floor_to_step=floor_to_step,
+    ceil_to_step=ceil_to_step,
+)
 def open_paper_position(st: Dict[str, Any], evt: Dict[str, Any], df: pd.DataFrame) -> None:
-    # Lock immediately to prevent duplicate opens in race/restart scenarios
-    st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
-    save_state(st)
-
-    kind = str(evt.get("kind"))
-    close_price = float(evt.get("price"))
-    entry = build_entry_price(kind, close_price)
-    qty = notional_to_qty(entry, ENV["QTY_USD"])
-
-    side = "BUY" if kind == "long" else "SELL"
-    side_txt = "LONG" if side == "BUY" else "SHORT"
-
-    if not validate_qty(qty, entry):
-        log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty)
-        return
-
-    # locate candle index by event timestamp
-    ts = evt.get("ts")
-    i = len(df) - 1
-    try:
-        if ts:
-            _ts = ts
-            if isinstance(_ts, str) and _ts.endswith("Z"):
-                _ts = _ts[:-1] + "+00:00"
-            i = locate_index_by_ts(df, pd.to_datetime(_ts, utc=True).to_pydatetime())
-    except Exception:
-        i = len(df) - 1
-
-    sl = swing_stop_far(df, i, side, entry)
-    tps = compute_tps(entry, sl, side)
-
-    pos = {
-        "status": "OPEN",
-        "mode": "paper",
-        "opened_at": iso_utc(),
-        "side": side_txt,
-        "qty": qty,
-        "entry": entry,
-        "sl": sl,
-        "tps": ([{"level": tps[0], "hit": False}, {"level": tps[1], "hit": False}] if len(tps) >= 2
-                else [{"level": tps[0], "hit": False}] if len(tps) == 1
-                else []),
-        "last_price": close_price,
-        "src_evt": {
-            "ts": evt.get("ts"),
-            "kind": kind,
-            "price": close_price,
-            "delta": evt.get("delta"),
-            "imb": evt.get("imb"),
-            "vol": evt.get("vol"),
-        },
-    }
-
-    st["position"] = pos
-    save_state(st)
-
-    log_event("OPEN", mode="paper", side=side_txt, entry=entry, sl=sl, qty=qty, tps=[x["level"] for x in pos["tps"]])
-
-    send_webhook(
-        {
-            "event": "OPEN",
-            "mode": "paper",
-            "symbol": ENV["SYMBOL"],
-            "side": side_txt,
-            "entry": entry,
-            "sl": sl,
-            "tps": [x["level"] for x in pos["tps"]],
-            "qty": qty,
-            "src": pos["src_evt"],
-        }
-    )
-
+    return paper_mode.open_paper_position(st, evt, df)
 
 def monitor_paper_position(st: Dict[str, Any], df: pd.DataFrame) -> None:
-    pos = st.get("position")
-    if not pos or pos.get("status") != "OPEN" or pos.get("mode") != "paper":
-        return
-
-    px = latest_price(df)
-    if not math.isfinite(px):
-        return
-
-    pos["last_price"] = px
-
-    side_txt = pos.get("side")
-    entry = float(pos.get("entry"))
-    sl = float(pos.get("sl"))
-    tps = pos.get("tps", [])
-
-    def _close(reason: str, level: float) -> None:
-        pos["status"] = "CLOSED"
-        pos["closed_at"] = iso_utc()
-        pos["close_reason"] = reason
-        pos["close_price"] = level
-        save_state(st)
-
-        log_event("CLOSE", mode="paper", reason=reason, close_price=level, last_price=px, side=side_txt)
-        send_webhook({"event": "CLOSE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "reason": reason, "close_price": level, "entry": entry, "sl": sl})
-
-        # persist last_closed but free slot for next trade
-        st["last_closed"] = {
-            "ts": iso_utc(),
-            "mode": "paper",
-            "reason": reason,
-            "side": side_txt,
-            "entry": entry,
-            "sl": sl,
-            "close_price": level,
-            "last_price": px,
-            "tps": pos.get("tps", []),
-            "src_evt": pos.get("src_evt"),
-        }
-        st["position"] = None
-        st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
-        st["lock_until"] = 0.0
-        save_state(st)
-
-    # SL check
-    if side_txt == "LONG":
-        if px <= sl:
-            _close("SL", sl)
-            return
-    else:
-        if px >= sl:
-            _close("SL", sl)
-            return
-
-    # TP progression
-    for idx, tp in enumerate(tps):
-        if tp.get("hit"):
-            continue
-        lvl = float(tp.get("level"))
-
-        hit = (side_txt == "LONG" and px >= lvl) or (side_txt == "SHORT" and px <= lvl)
-        if not hit:
-            continue
-
-        tp["hit"] = True
-        log_event("TP_HIT", tp_index=idx + 1, level=lvl, last_price=px)
-        send_webhook({"event": "TP_HIT", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "tp_index": idx + 1, "level": lvl, "last_price": px})
-
-        # After TP1: move SL to breakeven (entry) once
-        if idx == 0 and not pos.get("be_moved", False):
-            be = float(pos.get("entry"))
-            new_sl = round_nearest_to_step(be, ENV["TICK_SIZE"])
-
-            if side_txt == "LONG" and new_sl > be:
-                new_sl = floor_to_step(be, ENV["TICK_SIZE"])
-            if side_txt == "SHORT" and new_sl < be:
-                new_sl = ceil_to_step(be, ENV["TICK_SIZE"])
-
-            pos["sl"] = new_sl
-            pos["be_moved"] = True
-            log_event("SL_TO_BE", new_sl=new_sl, entry=be)
-            send_webhook({"event": "SL_TO_BE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "new_sl": new_sl, "entry": be})
-
-        save_state(st)
-
-    # Close on final TP
-    if tps and all(x.get("hit") for x in tps):
-        _close("TP", float(tps[-1]["level"]))
-
+    return paper_mode.monitor_paper_position(st, df)
 
 # ===================== Main loop =====================
 def handle_open_filled_exits_retry(st: dict) -> None:
@@ -1629,19 +1300,9 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     st["position"] = pos
     save_state(st)
 
-    try:
-        validated = validate_exit_plan(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
-        pos["qty"] = float(validated["qty_total_r"])
-        pos["prices"] = validated["prices"]
-        pos["orders"] = place_exits_v15(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
-        pos["status"] = "OPEN"
-        st["position"] = pos
-        save_state(st)
-        log_event("EXITS_PLACED_V15", mode="live", orders=pos["orders"], attempt=tries)
-        send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos["orders"], "prices": pos["prices"], "attempt": tries})
+    if exits_flow.ensure_exits(st, pos, reason="retry", best_effort=True, attempt=tries):
         return
-    except Exception as ee:
-        log_event("EXITS_RETRY_FAIL", error=str(ee), attempt=tries, symbol=ENV["SYMBOL"])
+
 
     if not ENV.get("FAILSAFE_FLATTEN", False):
         return
@@ -1732,19 +1393,7 @@ def main() -> None:
 
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
-                                try:
-                                    validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                    # Ensure we persist rounded qty/prices for consistency and clearer post-mortem
-                                    posi["qty"] = float(validated["qty_total_r"])
-                                    posi["prices"] = validated["prices"]
-                                    posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                    posi["status"] = "OPEN"
-                                    st["position"] = posi
-                                    save_state(st)
-                                    log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
-                                    send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
-                                except Exception as ee:
-                                    log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"), prices=posi.get("prices"))
+                                exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
 
                         elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
                             _clear_position_slot(st, f"ENTRY_{stt}", order_id=oid, status=stt)
@@ -1776,21 +1425,7 @@ def main() -> None:
                             # Best-effort immediate exits placement (reduces naked exposure window).
                             if posi.get("orders") or not posi.get("prices"):
                                 return
-                            try:
-                                validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                posi["qty"] = float(validated["qty_total_r"])
-                                posi["prices"] = validated["prices"]
-                                posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                posi["status"] = "OPEN"
-                                st["position"] = posi
-                                save_state(st)
-                                log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
-                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
-                            except Exception as ee:
-                                # Keep OPEN_FILLED; retry logic in main loop will handle.
-                                st["position"] = posi
-                                save_state(st)
-                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"))
+                            exits_flow.ensure_exits(st, posi, reason="try_now", best_effort=True, save_on_fail=True)
 
                         if exq_t > 0.0:
                             # Order partially/fully filled: keep the filled part and proceed to exits.
@@ -2143,17 +1778,7 @@ def main() -> None:
                     if status0 == "OPEN_FILLED":
                         pos0 = st.get("position") or {}
                         if (not pos0.get("orders")) and pos0.get("prices"):
-                            try:
-                                validated = validate_exit_plan(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
-                                pos0["qty"] = float(validated["qty_total_r"])
-                                pos0["prices"] = validated["prices"]
-                                pos0["orders"] = place_exits_v15(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
-                                pos0["status"] = "OPEN"
-                                st["position"] = pos0
-                                log_event("EXITS_PLACED_V15", mode="live", orders=pos0["orders"])
-                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos0["orders"], "prices": pos0["prices"]})
-                            except Exception as ee:
-                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=pos0.get("side"), qty=pos0.get("qty"), prices=pos0.get("prices"))
+                            exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                     save_state(st)
 
                     log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
