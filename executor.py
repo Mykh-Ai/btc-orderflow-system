@@ -29,6 +29,8 @@ import os
 import json
 import time
 import math
+import atexit
+import signal
 from collections import deque
 from contextlib import suppress
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
@@ -37,6 +39,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
 from executor_mod.notifications import log_event, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
+from executor_mod import margin_guard 
 import executor_mod.paper_mode as paper_mode
 import executor_mod.trail as trail
 import executor_mod.binance_api as binance_api
@@ -215,6 +218,9 @@ def read_tail_lines(path: str, n: int) -> List[str]:
         return []
 
 # Configure trail helper module (inject ENV and file tail reader)
+# Configure margin guard hooks (future margin support; safe no-op by default)
+with suppress(Exception):
+    margin_guard.configure(ENV, log_event)
 trail.configure(ENV, read_tail_lines)
 
 def _now_s() -> float:
@@ -1314,7 +1320,33 @@ def handle_open_filled_exits_retry(st: dict) -> None:
         _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
 def main() -> None:
     st = load_state()
+    # Margin-guard startup hook (safe no-op unless TRADE_MODE=margin)
+    # Best-effort shutdown hook for margin_guard (runs on SIGTERM and normal exit).
+    # Must never affect trading logic.
+    _shutdown_ran = False
 
+    def _shutdown_hook() -> None:
+        nonlocal _shutdown_ran
+        if _shutdown_ran:
+            return
+        _shutdown_ran = True
+        with suppress(Exception):
+            st2 = load_state()
+            margin_guard.on_shutdown(st2)
+
+    with suppress(Exception):
+        atexit.register(_shutdown_hook)
+
+    # Docker stop => SIGTERM. Don't touch SIGINT (KeyboardInterrupt already handled elsewhere).
+    with suppress(Exception):
+        def _sigterm_handler(signum, frame) -> None:
+            with suppress(Exception):
+                log_event("SIGTERM", signum=signum)
+            _shutdown_hook()
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+    with suppress(Exception):
+        margin_guard.on_startup(st)
     # Seed dedup keys with tail so we don't replay old PEAKs after fresh install
 
     # Always bootstrap seen_keys on start (safe by default)
@@ -1389,7 +1421,8 @@ def main() -> None:
                             save_state(st)
                             log_event("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
                             send_webhook({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
-
+                            with suppress(Exception):
+                                margin_guard.on_after_entry_opened(st)
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
                                 exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
@@ -1442,6 +1475,8 @@ def main() -> None:
                             save_state(st)
                             log_event("ENTRY_TIMEOUT_PARTIAL_FILLED", mode="live", order_id=oid, executedQty=exq_t)
                             send_webhook({"event": "ENTRY_TIMEOUT_PARTIAL_FILLED", "mode": "live", "order_id": oid, "executedQty": exq_t})
+                            with suppress(Exception):
+                                margin_guard.on_after_entry_opened(st)
                             _try_place_exits_now()
                         else:
                             # Cancel LIMIT (best-effort)
@@ -1468,6 +1503,8 @@ def main() -> None:
                                     save_state(st)
                                     log_event("ENTRY_TIMEOUT_LATE_FILL", mode="live", order_id=oid, executedQty=exq_after, status=st_after)
                                     send_webhook({"event": "ENTRY_TIMEOUT_LATE_FILL", "mode": "live", "order_id": oid, "executedQty": exq_after, "status": st_after})
+                                    with suppress(Exception):
+                                        margin_guard.on_after_entry_opened(st)
                                     _try_place_exits_now()
                                     continue
                             # Only place MARKET when LIMIT is confirmed canceled/expired/rejected; otherwise wait.
@@ -1507,7 +1544,8 @@ def main() -> None:
                                         send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": f"ABORT_{why}", "info": info})
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
                                         continue
-
+                                with suppress(Exception):
+                                    margin_guard.on_before_entry(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={})
                                 try:
                                     mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
                                 except Exception as ee:
@@ -1538,6 +1576,8 @@ def main() -> None:
                                                 posi["entry_actual"] = float(fmt_price(avgp2))
                                             st["position"] = posi
                                             save_state(st)
+                                            with suppress(Exception):
+                                                margin_guard.on_after_entry_opened(st)
                                             _try_place_exits_now()
                                         else:
                                             # Unexpected: market not filled. Keep pending and let poll loop handle it.
@@ -1741,12 +1781,16 @@ def main() -> None:
                     client_id = f"EX_EN_{int(time.time())}"
                     entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
                     if entry_mode == "MARKET_ONLY":
+                        with suppress(Exception):
+                            margin_guard.on_before_entry(ENV["SYMBOL"], side, float(qty), plan={})
                         order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
                         exq0 = float(order.get("executedQty") or 0.0)
                         status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
                         avgp0 = _avg_fill_price(order)
                         entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
                     else:
+                        with suppress(Exception):
+                            margin_guard.on_before_entry(ENV["SYMBOL"], side, float(qty), plan={})
                         order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
                         status0 = "PENDING"
                         entry_actual0 = None
@@ -1776,6 +1820,8 @@ def main() -> None:
                     }
                     if status0 == "OPEN_FILLED":
                         pos0 = st.get("position") or {}
+                        with suppress(Exception):
+                            margin_guard.on_after_entry_opened(st)
                         if (not pos0.get("orders")) and pos0.get("prices"):
                             exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                     save_state(st)
