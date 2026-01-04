@@ -25,37 +25,23 @@ Paper mode behavior (DRY=1)
 
 """
 from __future__ import annotations
+
 import os
 import json
 import time
 import math
+import hmac
+import hashlib
+import inspect
 from collections import deque
 from contextlib import suppress
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
-from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
-from executor_mod.notifications import log_event, send_webhook
-from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
-from executor_mod import margin_guard 
-import executor_mod.paper_mode as paper_mode
-import executor_mod.trail as trail
-import executor_mod.binance_api as binance_api
-import executor_mod.event_dedup as event_dedup
-import executor_mod.risk_math as risk_math
-import executor_mod.market_data as market_data
-import executor_mod.exits_flow as exits_flow
-from executor_mod.risk_math import (
-    floor_to_step,
-    ceil_to_step,
-    round_nearest_to_step,
-    _decimals_from_step,
-    fmt_price,
-    fmt_qty,
-    round_qty,
-)
-import pandas as pd
 
+import pandas as pd
+import requests
+from urllib.parse import urlencode
 
 # ===================== ENV =====================
 
@@ -176,6 +162,8 @@ ENV: Dict[str, Any] = {
 "TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
 }
 
+# Binance server time offset (ms). Helps avoid timestamp drift / -1021 errors.
+BINANCE_TIME_OFFSET_MS = 0
 
 # ===================== Time/IO helpers =====================
 
@@ -186,8 +174,37 @@ def now_utc() -> datetime:
 def iso_utc(dt: Optional[datetime] = None) -> str:
     return (dt or now_utc()).isoformat()
 
-# Wire runtime dependencies for event_dedup (keeps call sites unchanged).
-event_dedup.configure(ENV, iso_utc=iso_utc, save_state=save_state, log_event=log_event)
+
+def _ensure_dir(path: str) -> None:
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+
+
+def append_line_with_cap(path: str, line: str, cap: int) -> None:
+    """Append a line and keep only the last `cap` lines."""
+    _ensure_dir(path)
+    # append new line (explicit \n)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line.rstrip("\n") + "\n")
+
+    # File stays small by design; safe to read/trim each time.
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) > cap:
+            lines = lines[-cap:]
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+    except FileNotFoundError:
+        pass
+
+
+def log_event(action: str, **fields: Any) -> None:
+    obj = {"ts": iso_utc(), "source": "executor", "action": action}
+    obj.update(fields)
+    append_line_with_cap(ENV["EXEC_LOG"], json.dumps(obj, ensure_ascii=False), ENV["LOG_MAX_LINES"])
+
 
 def read_tail_lines(path: str, n: int) -> List[str]:
     """Read only the last N lines from a potentially large file.
@@ -215,17 +232,199 @@ def read_tail_lines(path: str, n: int) -> List[str]:
     except FileNotFoundError:
         return []
 
-# Configure trail helper module (inject ENV and file tail reader)
-trail.configure(ENV, read_tail_lines)
 
 def _now_s() -> float:
     return time.time()
 
 
 # ===================== DeltaScout event normalization / dedup =====================
-# (moved to executor_mod.event_dedup)
+
+def _ts_norm(ts: Any) -> Optional[str]:
+    """Normalize timestamp for stable dedup keys."""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        s = ts.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        with suppress(Exception):
+            return pd.to_datetime(s, utc=True).isoformat()
+        return s
+    with suppress(Exception):
+        return pd.to_datetime(ts, utc=True).isoformat()
+    return None
+
+
+def stable_event_key(evt: Dict[str, Any]) -> Optional[str]:
+    """Stable dedup key for PEAK events.
+
+    Previous version used only rounded price, which can 'glue' distinct events together (e.g. to 0.1).
+    Here we include multiple fields emitted by DeltaScout (ts/kind/price/delta/vol/imb).
+    """
+    if not isinstance(evt, dict):
+        return None
+
+    if evt.get("action") != "PEAK":
+        return None
+
+    if ENV["STRICT_SOURCE"] and evt.get("source") != "DeltaScout":
+        return None
+
+    kind = str(evt.get("kind") or "").strip().lower()
+    if kind not in ("long", "short"):
+        return None
+
+    ts = _ts_norm(evt.get("ts"))
+    if not ts:
+        return None
+
+    # Use quantized values (string-stable), but avoid over-rounding.
+    def _q(x: Any, nd: int) -> str:
+        with suppress(Exception):
+            xf = float(x)
+            if math.isfinite(xf):
+                return f"{xf:.{nd}f}"
+        return "na"
+
+    price_q = _q(evt.get("price"), max(2, int(ENV["DEDUP_PRICE_DECIMALS"])))
+    delta_q = _q(evt.get("delta"), 2)
+    vol_q = _q(evt.get("vol"), 2)
+    imb_q = _q(evt.get("imb"), 3)
+
+    return f"PEAK|{ts}|{kind}|p={price_q}|d={delta_q}|v={vol_q}|i={imb_q}"
+
+# ===================== Webhook =====================
+
+def dedup_fingerprint() -> str:
+    """Fingerprint of the current de-duplication scheme.
+
+    If stable_event_key() logic changes, this fingerprint changes too.
+    On boot we can safely rebuild seen_keys from the DeltaScout log tail.
+    """
+    try:
+        src = inspect.getsource(stable_event_key)
+    except Exception:
+        src = "stable_event_key"
+    base = f"{src}|DEDUP_PRICE_DECIMALS={ENV.get('DEDUP_PRICE_DECIMALS')}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+
+def _dt_utc(ts_any: Any) -> Optional[pd.Timestamp]:
+    """Parse various timestamp formats to UTC Timestamp, or None."""
+    if ts_any is None:
+        return None
+    try:
+        dt = pd.to_datetime(str(ts_any), utc=True, errors="coerce")
+    except Exception:
+        return None
+    if dt is None or pd.isna(dt):
+        return None
+    return dt
+
+
+def bootstrap_seen_keys_from_tail(st: Dict[str, Any], tail_lines: List[str]) -> None:
+    """On boot, mark all PEAKs currently present in the DeltaScout log tail as 'seen'.
+
+    This prevents accidental trading of historical PEAKs after container/VPS restart,
+    API-key rotation, or de-dup key format changes.
+    """
+    meta = st.setdefault("meta", {})
+
+    fp_now = dedup_fingerprint()
+    fp_old = meta.get("dedup_fp")
+    if fp_old != fp_now:
+        # Reset seen_keys when scheme changed
+        meta["seen_keys"] = []
+        log_event("DEDUP_SCHEMA_CHANGED", old=fp_old, new=fp_now)
+
+    seen = set(meta.get("seen_keys", []))
+    added = 0
+
+    # Watermark: newest PEAK timestamp we've already consumed/ignored
+    last_peak_ts_dt = _dt_utc(meta.get("last_peak_ts"))
+
+    for ln in tail_lines:
+        try:
+            evt = json.loads(ln)
+        except Exception:
+            continue
+        if evt.get("action") != "PEAK":
+            continue
+
+        k = stable_event_key(evt)
+        if k and k not in seen:
+            seen.add(k)
+            added += 1
+
+        dt = _dt_utc(evt.get("ts"))
+        if dt is not None and (last_peak_ts_dt is None or dt > last_peak_ts_dt):
+            last_peak_ts_dt = dt
+
+    if last_peak_ts_dt is not None:
+        meta["last_peak_ts"] = last_peak_ts_dt.isoformat()
+
+    meta["seen_keys"] = list(seen)[-int(ENV.get("SEEN_KEYS_MAX", 500)):]
+    meta["dedup_fp"] = fp_now
+    meta["boot_ts"] = iso_utc()
+
+    save_state(st)
+
+    log_event(
+        "BOOTSTRAP_SEEN_KEYS",
+        added=added,
+        total=len(meta["seen_keys"]),
+        last_peak_ts=meta.get("last_peak_ts"),
+        dedup_fp=meta.get("dedup_fp"),
+    )
+
+
+def send_webhook(payload: Dict[str, Any]) -> None:
+    url = ENV["N8N_WEBHOOK_URL"]
+    if not url:
+        return
+    payload = dict(payload)
+    payload.setdefault("source", "executor")
+    try:
+        auth = None
+        if ENV["N8N_BASIC_AUTH_USER"] and ENV["N8N_BASIC_AUTH_PASSWORD"]:
+            auth = (ENV["N8N_BASIC_AUTH_USER"], ENV["N8N_BASIC_AUTH_PASSWORD"])
+        requests.post(url, json=payload, timeout=5, auth=auth)
+    except Exception as e:
+        log_event("WEBHOOK_ERROR", error=str(e), payload=payload)
+
 
 # ===================== Rounding / sizing =====================
+
+def floor_to_step(x: float, step: Decimal) -> float:
+    step = Decimal(step)
+    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_FLOOR) * step
+    return float(d)
+
+
+def ceil_to_step(x: float, step: Decimal) -> float:
+    step = Decimal(step)
+    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_CEILING) * step
+    return float(d)
+
+
+def round_nearest_to_step(x: float, step: Decimal) -> float:
+    step = Decimal(step)
+    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
+    return float(d)
+
+
+def _decimals_from_step(step: Decimal) -> int:
+    """Number of decimal places implied by a step (tick/lot)."""
+    step = Decimal(step)
+    return max(0, -step.as_tuple().exponent)
+
+
+def fmt_price(p: float) -> str:
+    """Format price as a string respecting TICK_SIZE."""
+    dp = _decimals_from_step(ENV["TICK_SIZE"])
+    return f"{p:.{dp}f}"
+
+
 
 def _oid_int(v: Any) -> Optional[int]:
     try:
@@ -245,14 +444,18 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
     except Exception:
         return None
     return None
+def fmt_qty(q: float) -> str:
+    """Format quantity as a string respecting QTY_STEP (trim trailing zeros)."""
+    dp = _decimals_from_step(ENV["QTY_STEP"])
+    s = f"{q:.{dp}f}"
+    return s.rstrip("0").rstrip(".") if "." in s else s
 
 # Backward-compatible name (kept for any leftover uses)
 
+def round_qty(x: float) -> float:
+    """Round a quantity DOWN to the configured qty step."""
+    return floor_to_step(x, ENV["QTY_STEP"])
 
-# Wire runtime dependencies for binance_api (keeps call sites unchanged).
-
-risk_math.configure(ENV)
-binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
 
 def build_entry_price(kind: str, close_price: float) -> float:
     """Entry price builder used for both paper and live.
@@ -294,14 +497,59 @@ def validate_qty(qty: float, entry: float) -> bool:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    return market_data.load_df_sorted()
+    # Robust loader: returns empty DF on schema issues.
+    if not os.path.exists(ENV["AGG_CSV"]):
+        return pd.DataFrame()
+
+    df = pd.read_csv(ENV["AGG_CSV"])
+    df.columns = [c.strip() for c in df.columns]
+
+    if "Timestamp" not in df.columns:
+        return pd.DataFrame()
+
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce").dt.floor("min")
+
+    # price
+    if "ClosePrice" in df.columns:
+        price = df["ClosePrice"]
+    elif "AvgPrice" in df.columns:
+        price = df["AvgPrice"]
+    else:
+        return pd.DataFrame()
+
+    df["price"] = pd.to_numeric(price, errors="coerce").ffill()
+
+    buy = pd.to_numeric(df.get("BuyQty", 0.0), errors="coerce").fillna(0.0)
+    sell = pd.to_numeric(df.get("SellQty", 0.0), errors="coerce").fillna(0.0)
+    df["buy"] = buy
+    df["sell"] = sell
+
+    df["vol1m"] = df["buy"] + df["sell"]
+    df["delta"] = df["buy"] - df["sell"]
+
+    df = df.dropna(subset=["Timestamp", "price"])
+
+    return df.reset_index(drop=True)
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    return market_data.locate_index_by_ts(df, ts)
+    # normalize to minute resolution; be tolerant to tz formats
+    try:
+        target = pd.to_datetime(ts, utc=True).tz_convert(None).floor("min")
+    except Exception:
+        return len(df) - 1
+
+    try:
+        series = pd.to_datetime(df["Timestamp"], utc=True).tz_convert(None).dt.floor("min")
+        m = df.index[series == target]
+        return int(m[0]) if len(m) else len(df) - 1
+    except Exception:
+        return len(df) - 1
 
 
 def latest_price(df: pd.DataFrame) -> float:
-    return market_data.latest_price(df)
+    if len(df) == 0:
+        return float("nan")
+    return float(df.iloc[-1]["price"])
 
 # ===================== Stop / TP ("far" stop logic) =====================
 
@@ -359,6 +607,68 @@ def compute_tps(entry: float, sl: float, side: str) -> List[float]:
 
 # ===================== Binance adapter (used only when DRY=0) =====================
 
+def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = ENV["BINANCE_API_KEY"]
+    api_secret = ENV["BINANCE_API_SECRET"]
+    base_url = ENV["BINANCE_BASE_URL"]
+    if not api_key or not api_secret:
+        raise RuntimeError("Binance API key/secret missing")
+
+    params = dict(params)
+    params["timestamp"] = int(time.time() * 1000) + int(BINANCE_TIME_OFFSET_MS)
+    params.setdefault("recvWindow", ENV.get("RECV_WINDOW", 5000))
+
+    # Deterministic query string for signature
+    params_str = {k: str(v) for k, v in sorted(params.items(), key=lambda kv: kv[0])}
+    query = urlencode(params_str)
+    signature = hmac.new(api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    headers = {"X-MBX-APIKEY": api_key}
+    url = base_url + endpoint
+
+    req_params = dict(params_str)
+    req_params["signature"] = signature
+
+    if method == "POST":
+        r = requests.post(url, headers=headers, params=req_params, timeout=5)
+    elif method == "GET":
+        r = requests.get(url, headers=headers, params=req_params, timeout=5)
+    elif method == "DELETE":
+        r = requests.delete(url, headers=headers, params=req_params, timeout=5)
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+
+    if r.status_code != 200:
+        raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
+    return r.json()
+
+
+def binance_public_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Public GET without signature (used for rare Plan B guards)."""
+    base_url = ENV["BINANCE_BASE_URL"]
+    url = base_url + endpoint
+    r = requests.get(url, params=params or {}, timeout=5)
+    if r.status_code != 200:
+        raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
+    return r.json() if r.text else {}
+
+
+def _planb_exec_price(symbol: str, entry_side: str) -> Optional[float]:
+    """Return a conservative executable price for Plan B checks.
+    BUY  -> use ask
+    SELL -> use bid
+    """
+    j = binance_public_get("/api/v3/ticker/bookTicker", {"symbol": symbol})
+    try:
+        bid = float(j.get("bidPrice"))
+        ask = float(j.get("askPrice"))
+    except Exception:
+        return None
+    if not (math.isfinite(bid) and math.isfinite(ask) and bid > 0 and ask > 0):
+        return None
+    return ask if entry_side.upper() == "BUY" else bid
+
+
 def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, str, Dict[str, Any]]:
     """Guard against chasing far away from planned entry.
     Returns (allowed, reason, info).
@@ -408,10 +718,138 @@ def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None
         **fields,
     }
     st["position"] = None
-
     # unlock; avoid blocking next PEAK for no reason
     st["lock_until"] = 0.0
     save_state(st)
+
+
+def place_spot_limit(symbol: str, side: str, qty: float, price: float, client_id: Optional[str] = None) -> Dict[str, Any]:
+    """Place a LIMIT order.
+
+    Supports:
+      - TRADE_MODE=spot   -> POST /api/v3/order
+      - TRADE_MODE=margin -> POST /sapi/v1/margin/order
+
+    For margin we pass:
+      - isIsolated (TRUE/FALSE)
+      - sideEffectType (e.g. AUTO_BORROW_REPAY / AUTO_REPAY / MARGIN_BUY / NO_SIDE_EFFECT)
+      - autoRepayAtCancel (optional)
+      - newClientOrderId (optional, recommended for reliable sync-on-restart)
+    """
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+
+    # Format quantity/price as strings to avoid float quirks
+    qty_s = fmt_qty(qty)
+    price_s = fmt_price(price)
+
+    if mode == "margin":
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "isIsolated": ENV["MARGIN_ISOLATED"],
+            "side": side,
+            "type": "LIMIT",
+            "timeInForce": "GTC",
+            "quantity": qty_s,
+            "price": price_s,
+            "newOrderRespType": "FULL",
+            "sideEffectType": ENV["MARGIN_SIDE_EFFECT"],
+        }
+        if client_id:
+            params["newClientOrderId"] = client_id
+        params["autoRepayAtCancel"] = "TRUE" if ENV["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE"
+        return _binance_signed_request("POST", "/sapi/v1/margin/order", params)
+
+    # spot
+    params2: Dict[str, Any] = {
+        "symbol": symbol,
+        "side": side,
+        "type": "LIMIT",
+        "timeInForce": "GTC",
+        "quantity": qty_s,
+        "price": price_s,
+    }
+    if client_id:
+        params2["newClientOrderId"] = client_id
+    return _binance_signed_request("POST", "/api/v3/order", params2)
+
+
+def place_spot_market(symbol: str, side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
+    """Place a MARKET order in current TRADE_MODE (spot or margin)."""
+    qty_r = round_qty(qty)
+    params: Dict[str, Any] = {
+        "symbol": symbol,
+        "side": side,
+        "type": "MARKET",
+        "quantity": fmt_qty(qty_r),
+        "newOrderRespType": "FULL",
+    }
+    if client_id:
+        params["newClientOrderId"] = client_id
+    return place_order_raw(params)
+
+def flatten_market(symbol: str, pos_side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
+    """Fail-safe: close a live position by MARKET (best effort)."""
+    exit_side = "SELL" if str(pos_side).upper() == "LONG" else "BUY"
+    if not client_id:
+        client_id = f"EX_FLAT_{int(time.time())}"
+    return place_spot_market(symbol, exit_side, qty, client_id=client_id)
+def check_order_status(symbol: str, order_id: int) -> Dict[str, Any]:
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        return _binance_signed_request(
+            "GET",
+            "/sapi/v1/margin/order",
+            {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"], "orderId": order_id},
+        )
+    return _binance_signed_request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
+
+
+def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        return _binance_signed_request(
+            "DELETE",
+            "/sapi/v1/margin/order",
+            {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"], "orderId": order_id},
+        )
+    return _binance_signed_request("DELETE", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
+
+
+
+def open_orders(symbol: str) -> List[Dict[str, Any]]:
+    """Return open orders for symbol in current TRADE_MODE."""
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        j = _binance_signed_request("GET", "/sapi/v1/margin/openOrders", {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"]})
+        return list(j) if isinstance(j, list) else []
+    j = _binance_signed_request("GET", "/api/v3/openOrders", {"symbol": symbol})
+    return list(j) if isinstance(j, list) else []
+
+
+def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Place an order in current TRADE_MODE.
+
+    For margin orders, required common parameters are injected:
+      - isIsolated
+      - sideEffectType (if not already provided)
+      - autoRepayAtCancel (if not already provided)
+    """
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+
+    if mode == "margin":
+        p = dict(endpoint_params)
+        p.setdefault("symbol", ENV["SYMBOL"])
+        p.setdefault("isIsolated", ENV["MARGIN_ISOLATED"])
+        p.setdefault("sideEffectType", ENV["MARGIN_SIDE_EFFECT"])
+        p.setdefault("autoRepayAtCancel", "TRUE" if ENV["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE")
+        return _binance_signed_request("POST", "/sapi/v1/margin/order", p)
+
+    # spot
+    p = dict(endpoint_params)
+    p.setdefault("symbol", ENV["SYMBOL"])
+    return _binance_signed_request("POST", "/api/v3/order", p)
+
+
 
 def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
     """Validate exits inputs before placing orders.
@@ -498,7 +936,30 @@ def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[st
     if qty_total_r < min_qty:
         raise RuntimeError(f"qty_total too small after rounding: qty_total={qt} -> {qty_total_r} (min_qty={min_qty})")
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    qty1, qty2, qty3 = risk_math.split_qty_3legs_validate(qty_total_r)
+    step_d = ENV["QTY_STEP"]  # Decimal
+    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
+    if total_units <= 0:
+        raise RuntimeError(f"Invalid qty after rounding: qty_total_r={qty_total_r} step={step_d}")
+
+    u1 = total_units // 3
+    u2 = total_units // 3
+    u3 = total_units - u1 - u2
+
+    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
+    if u1 <= 0 or u2 <= 0:
+        u1 = total_units // 2
+        u2 = total_units - u1
+        u3 = 0
+
+    if (u1 + u2 + u3) != total_units:
+        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
+
+    qty1 = float(Decimal(u1) * step_d)
+    qty2 = float(Decimal(u2) * step_d)
+    qty3 = float(Decimal(u3) * step_d)
+    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
+        raise RuntimeError(f"Invalid qty split after rounding: qty_total={qty_total_r} qty1={qty1} qty2={qty2} step={ENV.get('QTY_STEP')}")
+
     # Min notional safety (optional but helpful)
     min_notional = float(ENV.get("MIN_NOTIONAL", 0.0))
     if min_notional > 0:
@@ -531,7 +992,7 @@ def _is_limit_maker_reject(exc: Exception) -> bool:
 def _place_limit_maker_then_limit(payload: dict) -> dict:
     """Try LIMIT_MAKER first; if rejected, retry as LIMIT GTC."""
     try:
-        return binance_api.place_order_raw(payload)
+        return place_order_raw(payload)
     except Exception as e:
         if not _is_limit_maker_reject(e):
             raise
@@ -543,7 +1004,7 @@ def _place_limit_maker_then_limit(payload: dict) -> dict:
         if cid:
             payload2["newClientOrderId"] = (cid + "_GTC")[:36]
         log_event("LIMIT_MAKER_REJECT", reason=str(e))
-        return binance_api.place_order_raw(payload2)
+        return place_order_raw(payload2)
 
 def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
     """Place TP1 + TP2 + SL for V1.5 (no OCO).
@@ -555,7 +1016,29 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     qty_total_r = round_qty(qty_total)
 
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    qty1, qty2, qty3 = risk_math.split_qty_3legs_place(qty_total_r)
+    step_d = ENV["QTY_STEP"]  # Decimal
+    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
+    if total_units <= 0:
+        raise RuntimeError(f"Invalid qty split after rounding: qty_total_r={qty_total_r} step={step_d}")
+
+    u1 = total_units // 3
+    u2 = total_units // 3
+    u3 = total_units - u1 - u2
+
+    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
+    if u1 <= 0 or u2 <= 0:
+        u1 = total_units // 2
+        u2 = total_units - u1
+        u3 = 0
+
+    if (u1 + u2 + u3) != total_units:
+        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
+
+    qty1 = float(Decimal(u1) * step_d)
+    qty2 = float(Decimal(u2) * step_d)
+    qty3 = float(Decimal(u3) * step_d)
+    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
+        raise RuntimeError(f"Invalid qty split: qty_total={qty_total_r} qty1={qty1} qty2={qty2} qty3={qty3}")
     # Binance expects strings for precise formatting
     qty_total_s = fmt_qty(qty_total_r)
     qty1_s = fmt_qty(qty1)
@@ -595,7 +1078,7 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     # Ensure price != stopPrice even after rounding to tick size
     if sl_price_s == sl_stop_s:
         sl_price_s = fmt_price((stop_p - tick) if exit_side == "SELL" else (stop_p + tick))
-    sl = binance_api.place_order_raw({
+    sl = place_order_raw({
         "symbol": symbol,
         "side": exit_side,
         "type": "STOP_LOSS_LIMIT",
@@ -614,15 +1097,6 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "qty2": qty2,
         "qty3": qty3,
     }
-# Wire runtime dependencies for exits placement flow (keeps call sites unchanged).
-exits_flow.configure(
-    ENV,
-    save_state_fn=lambda st: save_state(st),
-    log_event_fn=lambda *a, **k: log_event(*a, **k),
-    send_webhook_fn=lambda payload: send_webhook(payload),
-    validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
-    place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
-)
 def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     """Live V1.5 manager: TP1 -> move SL to BE (entry), TP2 continues.
 
@@ -638,7 +1112,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         return
     now_s = _now_s()
     try:
-        orders = binance_api.open_orders(symbol)
+        orders = open_orders(symbol)
     except Exception as e:
         # Do not abort manage-cycle: openOrders can be empty/incomplete or fail transiently.
         # We still can verify FILLED via check_order_status and cancel siblings best-effort.
@@ -660,7 +1134,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     def _status_is_filled(order_id: int) -> bool:
         try:
-            od = binance_api.check_order_status(symbol, int(order_id))
+            od = check_order_status(symbol, int(order_id))
             return str(od.get("status", "")).upper() == "FILLED"
         except Exception:
             return False
@@ -693,7 +1167,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             st["position"] = pos
             save_state(st)
             with suppress(Exception):
-                binance_api.cancel_order(symbol, sl_prev)
+                cancel_order(symbol, sl_prev)
 
     # TP1 filled -> move SL to BE (entry) for remaining qty2+qty3
     if tp1_id and not pos.get("tp1_done"):
@@ -720,7 +1194,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if be_limit_s == be_stop_s:
                     be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
                 try:
-                    sl_new = binance_api.place_order_raw({
+                    sl_new = place_order_raw({
                         "symbol": symbol,
                         "side": exit_side,
                         "type": "STOP_LOSS_LIMIT",
@@ -748,7 +1222,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     # Best-effort cancel of old SL (do not depend on openOrders).
                     if sl_id:
                         with suppress(Exception):
-                            binance_api.cancel_order(symbol, sl_id)
+                            cancel_order(symbol, sl_id)
             else:
                 # Log once to avoid spam; can happen if order exists but is not filled yet.
                 miss = pos.setdefault("missing_not_filled", {})
@@ -780,7 +1254,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # cancel TP1 best-effort (should already be filled, but do not assume)
                 if tp1_id:
                     with suppress(Exception):
-                        binance_api.cancel_order(symbol, tp1_id)
+                        cancel_order(symbol, tp1_id)
 
                 # replace current SL with trailing SL for remaining qty (qty3, or qty1+qty3 if TP2 filled first)
                 sl_now = int((pos.get("orders") or {}).get("sl") or 0)
@@ -791,7 +1265,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
                     mid = 0.0
                     with suppress(Exception):
-                        mid = float(binance_api.get_mid_price(symbol))
+                        mid = float(get_mid_price(symbol))
                     if mid > 0.0:
                         off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                         desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -820,10 +1294,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     if sl_now:
                         sl_canceled_ok = False
                         with suppress(Exception):
-                            binance_api.cancel_order(symbol, sl_now)
+                            cancel_order(symbol, sl_now)
                         od_c = None
                         with suppress(Exception):
-                            od_c = binance_api.check_order_status(symbol, sl_now)
+                            od_c = check_order_status(symbol, sl_now)
                         st_c = str((od_c or {}).get("status", "")).upper()
                         if st_c in ("CANCELED", "REJECTED", "EXPIRED"):
                             sl_canceled_ok = True
@@ -842,7 +1316,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     else:
                         pos["trail_pending_cancel_sl"] = 0
                     try:
-                        sl_new = binance_api.place_order_raw({
+                        sl_new = place_order_raw({
                             "symbol": symbol,
                             "side": exit_side,
                             "type": "STOP_LOSS_LIMIT",
@@ -865,7 +1339,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             if fb_limit_s == fb_stop_s:
                                 fb_limit_s = fmt_price((fb_stop - tick) if exit_side == "SELL" else (fb_stop + tick))
                             try:
-                                fb = binance_api.place_order_raw({
+                                fb = place_order_raw({
                                     "symbol": symbol,
                                     "side": exit_side,
                                     "type": "STOP_LOSS_LIMIT",
@@ -926,14 +1400,14 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             sl_now = int((pos.get("orders") or {}).get("sl") or 0)
             if sl_now:
                 with suppress(Exception):
-                    binance_api.cancel_order(symbol, sl_now)
+                    cancel_order(symbol, sl_now)
             if tp1_id:
                 with suppress(Exception):
-                    binance_api.cancel_order(symbol, tp1_id)
+                    cancel_order(symbol, tp1_id)
             sl_prev2 = int((pos.get("orders") or {}).get("sl_prev") or 0)
             if sl_prev2:
                 with suppress(Exception):
-                    binance_api.cancel_order(symbol, sl_prev2)
+                    cancel_order(symbol, sl_prev2)
             _close_slot("TP2")
             return
         else:
@@ -956,7 +1430,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
                 mid = 0.0
                 with suppress(Exception):
-                    mid = float(binance_api.get_mid_price(symbol))
+                    mid = float(get_mid_price(symbol))
                 if mid > 0.0:
                     off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                     desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -973,7 +1447,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if pend_sl:
                     od_p = None
                     with suppress(Exception):
-                        od_p = binance_api.check_order_status(symbol, pend_sl)
+                        od_p = check_order_status(symbol, pend_sl)
                     st_p = str((od_p or {}).get("status", "")).upper()
                     if st_p not in ("CANCELED", "REJECTED", "EXPIRED"):
                         pos["trail_last_update_s"] = now_s
@@ -989,7 +1463,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if sl_now:
                     od_s = None
                     with suppress(Exception):
-                        od_s = binance_api.check_order_status(symbol, sl_now)
+                        od_s = check_order_status(symbol, sl_now)
                     st_s = str((od_s or {}).get("status", "")).upper()
                     if st_s in ("CANCELED", "REJECTED", "EXPIRED"):
                         pos.setdefault("orders", {})["sl"] = 0
@@ -1014,7 +1488,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     # If SL disappeared while trailing is active -> restore immediately (best-effort).
                     if not sl_now:
                         try:
-                            sl_new = binance_api.place_order_raw({
+                            sl_new = place_order_raw({
                                 "symbol": symbol,
                                 "side": exit_side,
                                 "type": "STOP_LOSS_LIMIT",
@@ -1037,10 +1511,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     elif improve >= step:
                         # Cancel/replace. Do NOT place a new SL unless cancel is confirmed.
                         with suppress(Exception):
-                            binance_api.cancel_order(symbol, sl_now)
+                            cancel_order(symbol, sl_now)
                         od_c = None
                         with suppress(Exception):
-                            od_c = binance_api.check_order_status(symbol, sl_now)
+                            od_c = check_order_status(symbol, sl_now)
                         st_c = str((od_c or {}).get("status", "")).upper()
                         if st_c not in ("CANCELED", "REJECTED", "EXPIRED"):
                             pos["trail_last_update_s"] = now_s
@@ -1049,7 +1523,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             log_event("TRAIL_SL_CANCEL_NOT_CONFIRMED", mode="live", order_id_sl=sl_now, status=st_c or "UNKNOWN")
                         else:
                             try:
-                                sl_new = binance_api.place_order_raw({
+                                sl_new = place_order_raw({
                                     "symbol": symbol,
                                     "side": exit_side,
                                     "type": "STOP_LOSS_LIMIT",
@@ -1093,15 +1567,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # cancel any remaining exits (best-effort) to avoid orphan orders
                 if tp1_id:
                     with suppress(Exception):
-                        binance_api.cancel_order(symbol, tp1_id)
+                        cancel_order(symbol, tp1_id)
                 if tp2_id:
                     with suppress(Exception):
-                        binance_api.cancel_order(symbol, tp2_id)
+                        cancel_order(symbol, tp2_id)
 
                 sl_prev3 = int((pos.get("orders") or {}).get("sl_prev") or 0)
                 if sl_prev3:
                     with suppress(Exception):
-                        binance_api.cancel_order(symbol, sl_prev3)
+                        cancel_order(symbol, sl_prev3)
 
                 _close_slot("SL")
             else:
@@ -1116,18 +1590,139 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 # ===================== State =====================
 
+def get_mid_price(symbol: str) -> float:
+    j = binance_public_get("/api/v3/ticker/bookTicker", {"symbol": symbol})
+    bid = float(j["bidPrice"])
+    ask = float(j["askPrice"])
+    return (bid + ask) / 2.0
+
+def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
+    """
+    Read last N rows from aggregated.csv and extract ClosePrice (fallback to AvgPrice).
+    CSV header expected (example): Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice
+    """
+    if n_rows <= 0:
+        return []
+    # Read tail lines (avoid loading full file)
+    lines = read_tail_lines(path, n_rows + 5)  # header + a few extra
+    if not lines:
+        return []
+    # Find header
+    header_idx = None
+    for i, ln in enumerate(lines):
+        if "Timestamp" in ln and "ClosePrice" in ln:
+            header_idx = i
+            break
+    # If no header in tail, assume fixed order and parse from all lines
+    data_lines = lines[header_idx + 1:] if header_idx is not None else lines
+    closes: list[float] = []
+    for ln in data_lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("Timestamp"):
+            continue
+        parts = [p.strip() for p in ln.split(",")]
+        if len(parts) < 7:
+            continue
+        # try ClosePrice last col (idx 7) if present
+        v = None
+        if len(parts) >= 8:
+            v = parts[7]
+        else:
+            v = parts[6]  # AvgPrice
+        try:
+            closes.append(float(v))
+        except Exception:
+            continue
+    return closes
+
+
+def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
+    """
+    Find last swing point in series using simple fractal:
+      low:  x[i] < x[i-1..i-lr] and x[i] < x[i+1..i+lr]
+      high: x[i] > x[i-1..i-lr] and x[i] > x[i+1..i+lr]
+    Returns swing price or None.
+    """
+    if lr < 1:
+        lr = 1
+    if len(series) < (2 * lr + 1):
+        return None
+    # scan from right to left so we get the most recent confirmed swing
+    # last index we can test is len(series)-lr-1
+    for i in range(len(series) - lr - 1, lr - 1, -1):
+        x = series[i]
+        left = series[i - lr:i]
+        right = series[i + 1:i + 1 + lr]
+        if len(left) < lr or len(right) < lr:
+            continue
+        if kind == "low":
+            if all(x < v for v in left) and all(x < v for v in right):
+                return x
+        else:
+            if all(x > v for v in left) and all(x > v for v in right):
+                return x
+    return None
+
+
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     """
     Compute desired trailing stop based on last swing from aggregated.csv ClosePrice.
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """
-    return trail._trail_desired_stop_from_agg(pos)
+    path = ENV.get("AGG_CSV") or ""
+    if not path:
+        return None
+    lookback = int(ENV.get("TRAIL_SWING_LOOKBACK") or 0)
+    lr = int(ENV.get("TRAIL_SWING_LR") or 2)
+    buf = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 0.0)
+    closes = _read_last_close_prices_from_agg_csv(path, lookback)
+    if not closes:
+        return None
+    kind = "low" if pos.get("side") == "LONG" else "high"
+    swing = _find_last_fractal_swing(closes, lr=lr, kind=kind)
+    if swing is None:
+        return None
+    if pos.get("side") == "LONG":
+        return float(swing - buf)
+    else:
+        return float(swing + buf)
 
 def get_usdt_usdc_k() -> float:
-    mid_usdt = binance_api.get_mid_price("BTCUSDT")
-    mid_usdc = binance_api.get_mid_price("BTCUSDC")
+    mid_usdt = get_mid_price("BTCUSDT")
+    mid_usdc = get_mid_price("BTCUSDC")
     return mid_usdc / mid_usdt
+
+def binance_sanity_check() -> None:
+    """Fast connectivity + auth check.
+
+    - public ping/time via /api/v3
+    - signed check:
+        - spot  : GET /api/v3/account
+        - margin: GET /sapi/v1/margin/account
+    """
+    # public
+    binance_public_get("/api/v3/ping")
+    srv_time = binance_public_get("/api/v3/time")
+    global BINANCE_TIME_OFFSET_MS
+    try:
+        server_ms = int(srv_time.get("serverTime", 0) or 0)
+        local_ms = int(time.time() * 1000)
+        BINANCE_TIME_OFFSET_MS = (server_ms - local_ms) if server_ms else 0
+    except Exception:
+        BINANCE_TIME_OFFSET_MS = 0
+    log_event("BINANCE_PUBLIC_OK", server_time=srv_time.get("serverTime"), time_offset_ms=BINANCE_TIME_OFFSET_MS)
+
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        acc = _binance_signed_request("GET", "/sapi/v1/margin/account", {"recvWindow": ENV["RECV_WINDOW"]})
+        # Small, stable fields to log (avoid dumping huge balances)
+        log_event("BINANCE_SIGNED_OK", mode="margin", userAssets=len(acc.get("userAssets", [])))
+    else:
+        acc = _binance_signed_request("GET", "/api/v3/account", {"recvWindow": ENV["RECV_WINDOW"]})
+        log_event("BINANCE_SIGNED_OK", mode="spot", balances=len(acc.get("balances", [])))
+
+
 
 def sync_from_binance(st: Dict[str, Any]) -> None:
     """Best-effort reconciliation of executor state with Binance.
@@ -1150,7 +1745,7 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
         return
 
     try:
-        orders = binance_api.open_orders(ENV["SYMBOL"])
+        orders = open_orders(ENV["SYMBOL"])
     except Exception as e:
         log_event("SYNC_ERR_OPENORDERS", error=str(e))
         return
@@ -1174,7 +1769,7 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                 return
             od = None
             with suppress(Exception):
-                od = binance_api.check_order_status(ENV["SYMBOL"], oid)
+                od = check_order_status(ENV["SYMBOL"], oid)
             st_o = str((od or {}).get("status", "")).upper()
             exq = float((od or {}).get("executedQty") or 0.0)
             if st_o not in ("CANCELED", "REJECTED", "EXPIRED") or exq > 0.0:
@@ -1256,28 +1851,218 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     save_state(st)
     log_event("SYNC_ATTACHED", side=side_txt, tagged_orders=len(tagged))
 
+def load_state() -> Dict[str, Any]:
+    fn = ENV["STATE_FN"]
+    try:
+        with open(fn, "r", encoding="utf-8") as f:
+            st = json.load(f)
+    except FileNotFoundError:
+        st = {}
+    except Exception:
+        st = {}
+
+    st.setdefault("meta", {})
+    st["meta"].setdefault("seen_keys", [])
+    st.setdefault("position", None)
+    st.setdefault("last_closed", None)
+    st.setdefault("cooldown_until", 0.0)
+    st.setdefault("lock_until", 0.0)
+    return st
+
+
+def save_state(st: Dict[str, Any]) -> None:
+    fn = ENV["STATE_FN"]
+    _ensure_dir(fn)
+    tmp = fn + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, ensure_ascii=False, separators=(",", ":"), default=str)
+    os.replace(tmp, fn)
+
+
+def has_open_position(st: Dict[str, Any]) -> bool:
+    pos = st.get("position")
+    if not pos:
+        return False
+    return pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED")
+
+
+def in_cooldown(st: Dict[str, Any]) -> bool:
+    with suppress(Exception):
+        return _now_s() < float(st.get("cooldown_until") or 0.0)
+    return False
+
+
+def locked(st: Dict[str, Any]) -> bool:
+    with suppress(Exception):
+        return _now_s() < float(st.get("lock_until") or 0.0)
+    return False
+
+
 # ===================== Paper execution =====================
 
-paper_mode.configure(
-    ENV,
-    _now_s=_now_s,
-    build_entry_price=build_entry_price,
-    notional_to_qty=notional_to_qty,
-    validate_qty=validate_qty,
-    locate_index_by_ts=locate_index_by_ts,
-    swing_stop_far=swing_stop_far,
-    compute_tps=compute_tps,
-    latest_price=latest_price,
-    iso_utc=iso_utc,
-    round_nearest_to_step=round_nearest_to_step,
-    floor_to_step=floor_to_step,
-    ceil_to_step=ceil_to_step,
-)
 def open_paper_position(st: Dict[str, Any], evt: Dict[str, Any], df: pd.DataFrame) -> None:
-    return paper_mode.open_paper_position(st, evt, df)
+    # Lock immediately to prevent duplicate opens in race/restart scenarios
+    st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
+    save_state(st)
+
+    kind = str(evt.get("kind"))
+    close_price = float(evt.get("price"))
+    entry = build_entry_price(kind, close_price)
+    qty = notional_to_qty(entry, ENV["QTY_USD"])
+
+    side = "BUY" if kind == "long" else "SELL"
+    side_txt = "LONG" if side == "BUY" else "SHORT"
+
+    if not validate_qty(qty, entry):
+        log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty)
+        return
+
+    # locate candle index by event timestamp
+    ts = evt.get("ts")
+    i = len(df) - 1
+    try:
+        if ts:
+            _ts = ts
+            if isinstance(_ts, str) and _ts.endswith("Z"):
+                _ts = _ts[:-1] + "+00:00"
+            i = locate_index_by_ts(df, pd.to_datetime(_ts, utc=True).to_pydatetime())
+    except Exception:
+        i = len(df) - 1
+
+    sl = swing_stop_far(df, i, side, entry)
+    tps = compute_tps(entry, sl, side)
+
+    pos = {
+        "status": "OPEN",
+        "mode": "paper",
+        "opened_at": iso_utc(),
+        "side": side_txt,
+        "qty": qty,
+        "entry": entry,
+        "sl": sl,
+        "tps": ([{"level": tps[0], "hit": False}, {"level": tps[1], "hit": False}] if len(tps) >= 2
+                else [{"level": tps[0], "hit": False}] if len(tps) == 1
+                else []),
+        "last_price": close_price,
+        "src_evt": {
+            "ts": evt.get("ts"),
+            "kind": kind,
+            "price": close_price,
+            "delta": evt.get("delta"),
+            "imb": evt.get("imb"),
+            "vol": evt.get("vol"),
+        },
+    }
+
+    st["position"] = pos
+    save_state(st)
+
+    log_event("OPEN", mode="paper", side=side_txt, entry=entry, sl=sl, qty=qty, tps=[x["level"] for x in pos["tps"]])
+
+    send_webhook(
+        {
+            "event": "OPEN",
+            "mode": "paper",
+            "symbol": ENV["SYMBOL"],
+            "side": side_txt,
+            "entry": entry,
+            "sl": sl,
+            "tps": [x["level"] for x in pos["tps"]],
+            "qty": qty,
+            "src": pos["src_evt"],
+        }
+    )
+
 
 def monitor_paper_position(st: Dict[str, Any], df: pd.DataFrame) -> None:
-    return paper_mode.monitor_paper_position(st, df)
+    pos = st.get("position")
+    if not pos or pos.get("status") != "OPEN" or pos.get("mode") != "paper":
+        return
+
+    px = latest_price(df)
+    if not math.isfinite(px):
+        return
+
+    pos["last_price"] = px
+
+    side_txt = pos.get("side")
+    entry = float(pos.get("entry"))
+    sl = float(pos.get("sl"))
+    tps = pos.get("tps", [])
+
+    def _close(reason: str, level: float) -> None:
+        pos["status"] = "CLOSED"
+        pos["closed_at"] = iso_utc()
+        pos["close_reason"] = reason
+        pos["close_price"] = level
+        save_state(st)
+
+        log_event("CLOSE", mode="paper", reason=reason, close_price=level, last_price=px, side=side_txt)
+        send_webhook({"event": "CLOSE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "reason": reason, "close_price": level, "entry": entry, "sl": sl})
+
+        # persist last_closed but free slot for next trade
+        st["last_closed"] = {
+            "ts": iso_utc(),
+            "mode": "paper",
+            "reason": reason,
+            "side": side_txt,
+            "entry": entry,
+            "sl": sl,
+            "close_price": level,
+            "last_price": px,
+            "tps": pos.get("tps", []),
+            "src_evt": pos.get("src_evt"),
+        }
+        st["position"] = None
+        st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
+        st["lock_until"] = 0.0
+        save_state(st)
+
+    # SL check
+    if side_txt == "LONG":
+        if px <= sl:
+            _close("SL", sl)
+            return
+    else:
+        if px >= sl:
+            _close("SL", sl)
+            return
+
+    # TP progression
+    for idx, tp in enumerate(tps):
+        if tp.get("hit"):
+            continue
+        lvl = float(tp.get("level"))
+
+        hit = (side_txt == "LONG" and px >= lvl) or (side_txt == "SHORT" and px <= lvl)
+        if not hit:
+            continue
+
+        tp["hit"] = True
+        log_event("TP_HIT", tp_index=idx + 1, level=lvl, last_price=px)
+        send_webhook({"event": "TP_HIT", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "tp_index": idx + 1, "level": lvl, "last_price": px})
+
+        # After TP1: move SL to breakeven (entry) once
+        if idx == 0 and not pos.get("be_moved", False):
+            be = float(pos.get("entry"))
+            new_sl = round_nearest_to_step(be, ENV["TICK_SIZE"])
+
+            if side_txt == "LONG" and new_sl > be:
+                new_sl = floor_to_step(be, ENV["TICK_SIZE"])
+            if side_txt == "SHORT" and new_sl < be:
+                new_sl = ceil_to_step(be, ENV["TICK_SIZE"])
+
+            pos["sl"] = new_sl
+            pos["be_moved"] = True
+            log_event("SL_TO_BE", new_sl=new_sl, entry=be)
+            send_webhook({"event": "SL_TO_BE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "new_sl": new_sl, "entry": be})
+
+        save_state(st)
+
+    # Close on final TP
+    if tps and all(x.get("hit") for x in tps):
+        _close("TP", float(tps[-1]["level"]))
+
 
 # ===================== Main loop =====================
 def handle_open_filled_exits_retry(st: dict) -> None:
@@ -1300,9 +2085,19 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     st["position"] = pos
     save_state(st)
 
-    if exits_flow.ensure_exits(st, pos, reason="retry", best_effort=True, attempt=tries):
+    try:
+        validated = validate_exit_plan(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
+        pos["qty"] = float(validated["qty_total_r"])
+        pos["prices"] = validated["prices"]
+        pos["orders"] = place_exits_v15(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
+        pos["status"] = "OPEN"
+        st["position"] = pos
+        save_state(st)
+        log_event("EXITS_PLACED_V15", mode="live", orders=pos["orders"], attempt=tries)
+        send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos["orders"], "prices": pos["prices"], "attempt": tries})
         return
-
+    except Exception as ee:
+        log_event("EXITS_RETRY_FAIL", error=str(ee), attempt=tries, symbol=ENV["SYMBOL"])
 
     if not ENV.get("FAILSAFE_FLATTEN", False):
         return
@@ -1311,7 +2106,7 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     first_fail_s = float(pos.get("exits_first_fail_s") or now)
     if max_tries and tries >= max_tries and (now - first_fail_s) >= grace:
         with suppress(Exception):
-            binance_api.flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
+            flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
         _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
 def main() -> None:
     st = load_state()
@@ -1331,7 +2126,7 @@ def main() -> None:
     # Optional: one-shot connectivity/auth check (useful before going live)
     if not ENV["DRY"] and ENV.get("LIVE_VALIDATE_ONLY"):
         try:
-            binance_api.binance_sanity_check()
+            binance_sanity_check()
             log_event("LIVE_VALIDATE_ONLY_DONE")
         except Exception as e:
             log_event("LIVE_VALIDATE_ONLY_FAIL", error=str(e))
@@ -1367,7 +2162,7 @@ def main() -> None:
                 if now_s - last_poll >= float(ENV["LIVE_STATUS_POLL_EVERY"]):
                     oid = int(posi.get("order_id") or 0)
                     if oid:
-                        od = binance_api.check_order_status(ENV["SYMBOL"], oid)
+                        od = check_order_status(ENV["SYMBOL"], oid)
                         posi["last_poll_s"] = now_s
                         st["position"] = posi
                         save_state(st)
@@ -1393,7 +2188,19 @@ def main() -> None:
 
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
-                                exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
+                                try:
+                                    validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
+                                    # Ensure we persist rounded qty/prices for consistency and clearer post-mortem
+                                    posi["qty"] = float(validated["qty_total_r"])
+                                    posi["prices"] = validated["prices"]
+                                    posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
+                                    posi["status"] = "OPEN"
+                                    st["position"] = posi
+                                    save_state(st)
+                                    log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
+                                    send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
+                                except Exception as ee:
+                                    log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"), prices=posi.get("prices"))
 
                         elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
                             _clear_position_slot(st, f"ENTRY_{stt}", order_id=oid, status=stt)
@@ -1418,19 +2225,33 @@ def main() -> None:
 
                     if oid and posi.get("status") == "PENDING":
                         # Plan B: timeout -> cancel LIMIT and fall back to MARKET (unless ENTRY_MODE=LIMIT_ONLY).
-                        od_t = binance_api.check_order_status(ENV["SYMBOL"], oid)
+                        od_t = check_order_status(ENV["SYMBOL"], oid)
                         exq_t = float(od_t.get("executedQty") or 0.0)
 
                         def _try_place_exits_now() -> None:
                             # Best-effort immediate exits placement (reduces naked exposure window).
                             if posi.get("orders") or not posi.get("prices"):
                                 return
-                            exits_flow.ensure_exits(st, posi, reason="try_now", best_effort=True, save_on_fail=True)
+                            try:
+                                validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
+                                posi["qty"] = float(validated["qty_total_r"])
+                                posi["prices"] = validated["prices"]
+                                posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
+                                posi["status"] = "OPEN"
+                                st["position"] = posi
+                                save_state(st)
+                                log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
+                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
+                            except Exception as ee:
+                                # Keep OPEN_FILLED; retry logic in main loop will handle.
+                                st["position"] = posi
+                                save_state(st)
+                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"))
 
                         if exq_t > 0.0:
                             # Order partially/fully filled: keep the filled part and proceed to exits.
                             with suppress(Exception):
-                                binance_api.cancel_order(ENV["SYMBOL"], oid)
+                                cancel_order(ENV["SYMBOL"], oid)
                             posi["status"] = "OPEN_FILLED"
                             posi["filled_at"] = iso_utc()
                             posi["executedQty"] = od_t.get("executedQty")
@@ -1447,12 +2268,12 @@ def main() -> None:
                         else:
                             # Cancel LIMIT (best-effort)
                             with suppress(Exception):
-                                binance_api.cancel_order(ENV["SYMBOL"], oid)
+                                cancel_order(ENV["SYMBOL"], oid)
 
                             # Re-check once after cancel to catch a late fill (avoid double-entry).
                             od_after = None
                             with suppress(Exception):
-                                od_after = binance_api.check_order_status(ENV["SYMBOL"], oid)
+                                od_after = check_order_status(ENV["SYMBOL"], oid)
                             if od_after:
                                 exq_after = float(od_after.get("executedQty") or 0.0)
                                 st_after = str(od_after.get("status", "")).upper()
@@ -1490,7 +2311,7 @@ def main() -> None:
 
                                 px_exec = None
                                 try:
-                                    px_exec = binance_api._planb_exec_price(ENV["SYMBOL"], entry_side)
+                                    px_exec = _planb_exec_price(ENV["SYMBOL"], entry_side)
                                 except Exception as ee:
                                     log_event("PLANB_PRICE_ERROR", error=str(ee), order_id=oid)
 
@@ -1510,7 +2331,7 @@ def main() -> None:
                                         continue
 
                                 try:
-                                    mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
+                                    mkt = place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
                                 except Exception as ee:
                                     log_event("ENTRY_TIMEOUT_MARKET_ERROR", error=str(ee), order_id=oid)
                                     send_webhook({"event": "ENTRY_TIMEOUT_MARKET_ERROR", "order_id": oid, "error": str(ee)})
@@ -1523,7 +2344,7 @@ def main() -> None:
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_MARKET_NO_OID", order_id=oid)
                                     else:
                                         # Market should fill immediately, but confirm once.
-                                        od2 = binance_api.check_order_status(ENV["SYMBOL"], int(oid2))
+                                        od2 = check_order_status(ENV["SYMBOL"], int(oid2))
                                         exq2 = float(od2.get("executedQty") or 0.0)
                                         posi["order_id"] = int(oid2)
                                         posi["client_id"] = f"EX_EN_MKT_{int(time.time())}"
@@ -1556,7 +2377,7 @@ def main() -> None:
         new_events: List[Tuple[str, Dict[str, Any]]] = []
         meta = st.setdefault("meta", {})
         seen_keys = meta.get("seen_keys", [])
-        last_peak_ts_dt = event_dedup._dt_utc(meta.get("last_peak_ts"))
+        last_peak_ts_dt = _dt_utc(meta.get("last_peak_ts"))
 
         changed = False
 
@@ -1576,7 +2397,7 @@ def main() -> None:
             if not k or k in seen_keys:
                 continue
 
-            dt = event_dedup._dt_utc(evt.get("ts"))
+            dt = _dt_utc(evt.get("ts"))
 
             # Watermark filter: if this PEAK is not newer than what we've already seen,
             # mark it as seen but do NOT act on it.
@@ -1639,7 +2460,7 @@ def main() -> None:
             # Safety: ignore very old PEAKs (e.g., after restarts / log replays)
             max_age = float(ENV.get("MAX_PEAK_AGE_SEC") or 0)
             if max_age > 0:
-                dt_evt = event_dedup._dt_utc(evt.get("ts"))
+                dt_evt = _dt_utc(evt.get("ts"))
                 if dt_evt is not None:
                     age = _now_s() - float(dt_evt.timestamp())
                     if age > max_age:
@@ -1742,13 +2563,13 @@ def main() -> None:
                     client_id = f"EX_EN_{int(time.time())}"
                     entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
                     if entry_mode == "MARKET_ONLY":
-                        order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
+                        order = place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
                         exq0 = float(order.get("executedQty") or 0.0)
                         status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
                         avgp0 = _avg_fill_price(order)
                         entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
                     else:
-                        order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
+                        order = place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
                         status0 = "PENDING"
                         entry_actual0 = None
                     st["position"] = {
@@ -1778,7 +2599,17 @@ def main() -> None:
                     if status0 == "OPEN_FILLED":
                         pos0 = st.get("position") or {}
                         if (not pos0.get("orders")) and pos0.get("prices"):
-                            exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
+                            try:
+                                validated = validate_exit_plan(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
+                                pos0["qty"] = float(validated["qty_total_r"])
+                                pos0["prices"] = validated["prices"]
+                                pos0["orders"] = place_exits_v15(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
+                                pos0["status"] = "OPEN"
+                                st["position"] = pos0
+                                log_event("EXITS_PLACED_V15", mode="live", orders=pos0["orders"])
+                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos0["orders"], "prices": pos0["prices"]})
+                            except Exception as ee:
+                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=pos0.get("side"), qty=pos0.get("qty"), prices=pos0.get("prices"))
                     save_state(st)
 
                     log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
