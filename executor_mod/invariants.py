@@ -444,6 +444,69 @@ def _check_i6_feed_freshness_for_trail(st: Dict[str, Any]) -> None:
         )
 
 
+def _check_i7_tp_orders_after_fill(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+    if str(pos.get("status", "")).upper() != "OPEN_FILLED":
+        return
+    if bool(pos.get("trail_active")):
+        return
+
+    orders = pos.get("orders")
+    tp1_id = _as_int(orders.get("tp1"), 0) if isinstance(orders, dict) else 0
+    tp2_id = _as_int(orders.get("tp2"), 0) if isinstance(orders, dict) else 0
+    if isinstance(orders, dict) and tp1_id > 0 and tp2_id > 0:
+        return
+
+    opened_s = _as_float(pos.get("opened_s"), 0.0)
+    age = float(now_s()) - opened_s if (now_s is not None and opened_s > 0) else 0.0
+    sev = "WARN" if age < float(_grace_sec()) else "ERROR"
+    _emit(
+        st,
+        "I7",
+        sev,
+        "OPEN_FILLED without TP orders",
+        {"tp1_id": tp1_id, "tp2_id": tp2_id, "age_s": age},
+    )
+
+
+def _check_i8_state_shape_live_position(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+
+    status = str(pos.get("status", "")).upper()
+    if status not in ("OPEN", "OPEN_FILLED"):
+        return
+
+    orders = pos.get("orders")
+    prices = pos.get("prices")
+    issues = []
+    if not isinstance(orders, dict):
+        issues.append("orders_not_dict")
+    if not isinstance(prices, dict):
+        issues.append("prices_not_dict")
+
+    if not issues:
+        return
+
+    opened_s = _as_float(pos.get("opened_s"), 0.0)
+    age = float(now_s()) - opened_s if (now_s is not None and opened_s > 0) else 0.0
+    sev = "WARN" if age < float(_grace_sec()) else "ERROR"
+    _emit(
+        st,
+        "I8",
+        sev,
+        "Live position missing required state shape",
+        {"issues": issues, "age_s": age},
+    )
+
+
 def run(st: Dict[str, Any]) -> None:
     """
     Run detector-only invariants against current state.
@@ -459,6 +522,8 @@ def run(st: Dict[str, Any]) -> None:
         _check_i4_entry_state_consistency(st)
         _check_i5_trail_state_sane(st)
         _check_i6_feed_freshness_for_trail(st)
+        _check_i7_tp_orders_after_fill(st)
+        _check_i8_state_shape_live_position(st)
     except Exception:
         # Never break executor on invariant checks
         return
