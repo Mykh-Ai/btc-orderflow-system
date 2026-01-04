@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import suppress
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -69,6 +70,13 @@ def _grace_sec() -> float:
         return float(ENV.get("INVAR_GRACE_SEC", 10))
     except Exception:
         return 10.0
+
+
+def _feed_stale_sec() -> float:
+    try:
+        return float(ENV.get("INVAR_FEED_STALE_SEC", 180))
+    except Exception:
+        return 180.0
 
 
 def _tick_size() -> float:
@@ -335,6 +343,107 @@ def _check_i4_entry_state_consistency(st: Dict[str, Any]) -> None:
     )
 
 
+def _check_i5_trail_state_sane(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+    if not bool(pos.get("trail_active")):
+        return
+
+    status = str(pos.get("status", "") or "").upper()
+    trail_qty = _as_float(pos.get("trail_qty"), 0.0)
+    if trail_qty <= 0:
+        _emit(
+            st,
+            "I5",
+            "ERROR",
+            "Trail qty not positive",
+            {"trail_qty": trail_qty},
+        )
+        return
+
+    if status not in ("OPEN", "OPEN_FILLED"):
+        _emit(
+            st,
+            "I5",
+            "WARN",
+            "Trail active with unexpected status",
+            {"status": status},
+        )
+        return
+
+    trail_last_update_s = _as_float(pos.get("trail_last_update_s"), 0.0)
+    if trail_last_update_s <= 0:
+        _emit(
+            st,
+            "I5",
+            "WARN",
+            "Trail last update timestamp missing",
+            {"trail_last_update_s": trail_last_update_s},
+        )
+        return
+
+    pending_cancel_sl = _as_int(pos.get("trail_pending_cancel_sl"), 0)
+    trail_sl_price = _as_float(pos.get("trail_sl_price"), 0.0)
+    if pending_cancel_sl <= 0 and trail_sl_price <= 0:
+        _emit(
+            st,
+            "I5",
+            "WARN",
+            "Trail missing pending cancel and SL price",
+            {"trail_pending_cancel_sl": pending_cancel_sl, "trail_sl_price": trail_sl_price},
+        )
+        return
+
+
+def _check_i6_feed_freshness_for_trail(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+    if not bool(pos.get("trail_active")):
+        return
+    if str(ENV.get("TRAIL_SOURCE", "") or "") != "AGG":
+        return
+
+    agg_csv = str(ENV.get("AGG_CSV", "") or "")
+    if not agg_csv:
+        _emit(
+            st,
+            "I6",
+            "WARN",
+            "AGG feed file path missing",
+            {"agg_csv": agg_csv},
+        )
+        return
+
+    try:
+        mtime = float(os.path.getmtime(agg_csv))
+    except Exception as exc:
+        _emit(
+            st,
+            "I6",
+            "WARN",
+            "AGG feed file not accessible",
+            {"agg_csv": agg_csv, "error": str(exc)},
+        )
+        return
+
+    age_s = float(now_s()) - mtime if now_s is not None else 0.0
+    stale = float(_feed_stale_sec())
+    if age_s > stale:
+        _emit(
+            st,
+            "I6",
+            "WARN",
+            "AGG feed file stale",
+            {"agg_csv": agg_csv, "age_s": age_s, "stale_sec": stale},
+        )
+
+
 def run(st: Dict[str, Any]) -> None:
     """
     Run detector-only invariants against current state.
@@ -348,6 +457,8 @@ def run(st: Dict[str, Any]) -> None:
         _check_i2_exit_price_sanity(st)
         _check_i3_quantity_accounting(st)
         _check_i4_entry_state_consistency(st)
+        _check_i5_trail_state_sane(st)
+        _check_i6_feed_freshness_for_trail(st)
     except Exception:
         # Never break executor on invariant checks
         return
