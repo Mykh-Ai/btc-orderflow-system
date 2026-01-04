@@ -18,7 +18,6 @@ This is a demonstration / research project focused on:
 - designing systems that can survive partial fills, latency, and API failures
 
 ## Important
-- This repository is **not a complete trading bot**
 - No trading strategy or profitability claims are included
 - Production-ready execution logic and integrations are developed
   separately and adapted within individual client projects
