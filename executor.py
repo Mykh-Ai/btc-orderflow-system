@@ -180,7 +180,7 @@ ENV: Dict[str, Any] = {
 # invariants (detector-only)
 "INVAR_ENABLED": _get_bool("INVAR_ENABLED", 1),
 "INVAR_EVERY_SEC": _get_int("INVAR_EVERY_SEC", 20),
-"INVAR_THROTTLE_SEC": _get_int("INVAR_THROTTLE_SEC", 90),
+"INVAR_THROTTLE_SEC": _get_int("INVAR_THROTTLE_SEC", 600),
 "INVAR_GRACE_SEC": _get_int("INVAR_GRACE_SEC", 15),
 "INVAR_PERSIST": _get_bool("INVAR_PERSIST", True),
 }
