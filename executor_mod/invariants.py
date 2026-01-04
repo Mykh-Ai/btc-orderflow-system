@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-+invariants.py
-+Detector-only invariants for executor state. No trading actions by default.
-+Throttles repeated alerts per invariant+position key.
-+"""
+invariants.py
+Detector-only invariants for executor state. No trading actions by default.
+Throttles repeated alerts per invariant+position key.
+"""
 
 from __future__ import annotations
 
