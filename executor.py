@@ -42,6 +42,7 @@ from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootst
 from executor_mod import margin_guard 
 import executor_mod.paper_mode as paper_mode
 import executor_mod.trail as trail
+import executor_mod.invariants as invariants
 import executor_mod.binance_api as binance_api
 import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
@@ -176,6 +177,12 @@ ENV: Dict[str, Any] = {
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
 "TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
+# invariants (detector-only)
+"INVAR_ENABLED": _get_bool("INVAR_ENABLED", 1),
+"INVAR_EVERY_SEC": _get_int("INVAR_EVERY_SEC", 20),
+"INVAR_THROTTLE_SEC": _get_int("INVAR_THROTTLE_SEC", 90),
+"INVAR_GRACE_SEC": _get_int("INVAR_GRACE_SEC", 15),
+"INVAR_PERSIST": _get_bool("INVAR_PERSIST", True),
 }
 
 
@@ -226,6 +233,15 @@ trail.configure(ENV, read_tail_lines)
 def _now_s() -> float:
     return time.time()
 
+# Configure invariants (detector-only; disabled by default)
+with suppress(Exception):
+    invariants.configure(
+        ENV,
+        log_event_fn=log_event,
+        send_webhook_fn=send_webhook,
+        now_fn=_now_s,
+        save_state_fn=save_state,
+    )
 
 # ===================== DeltaScout event normalization / dedup =====================
 # (moved to executor_mod.event_dedup)
@@ -1371,12 +1387,18 @@ def main() -> None:
 
     last_manage_s = 0.0
     agg_ok_prev: Optional[bool] = None
+    next_invar_s = 0.0
 
 
 
     while True:
         time.sleep(ENV["POLL_SEC"])
         st = load_state()  # <-- critical: pick up external state changes
+        loop_now_s = _now_s()
+        if ENV.get("INVAR_ENABLED") and loop_now_s >= float(next_invar_s):
+            with suppress(Exception):
+                invariants.run(st)
+            next_invar_s = loop_now_s + float(ENV.get("INVAR_EVERY_SEC") or 20)
         posi = st.get("position") or {}
         if posi and posi.get("mode") == "live" and (not ENV["DRY"]) and str(posi.get("status", "")).upper() in (
             "ENTRY_TIMEOUT_CANCELED",
