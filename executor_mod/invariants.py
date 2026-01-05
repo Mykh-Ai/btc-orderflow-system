@@ -51,9 +51,26 @@ def _as_int(x: Any, default: int = 0) -> int:
         return default
 
 
+def _as_bool(x: Any, default: bool = False) -> bool:
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, (int, float)):
+        return x != 0
+    if isinstance(x, str):
+        val = x.strip().lower()
+        if val in {"1", "true", "yes", "y", "on"}:
+            return True
+        if val in {"0", "false", "no", "n", "off", ""}:
+            return False
+        return default
+    if x is None:
+        return default
+    return default
+
+
 def _enabled() -> bool:
     try:
-        return bool(ENV.get("INVAR_ENABLED", False))
+        return _as_bool(ENV.get("INVAR_ENABLED", False), False)
     except Exception:
         return False
 
@@ -134,8 +151,20 @@ def _emit(st: Dict[str, Any], inv_id: str, severity: str, message: str, details:
     _last_emit[key] = nowv
     inv_th[key] = nowv
     if isinstance(st, dict):
+        with suppress(Exception):
+            cutoff = nowv - (7 * 24 * 3600)
+            for tkey, tval in list(inv_th.items()):
+                if _as_float(tval, 0.0) < cutoff:
+                    inv_th.pop(tkey, None)
+            if len(inv_th) > 5000:
+                newest = sorted(
+                    inv_th.items(),
+                    key=lambda item: _as_float(item[1], 0.0),
+                    reverse=True,
+                )[:5000]
+                inv_th = {k: v for k, v in newest}
         st["inv_throttle"] = inv_th
-        if save_state is not None and bool(ENV.get("INVAR_PERSIST", True)):
+        if save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
             with suppress(Exception):
                 save_state(st)
 
@@ -602,6 +631,8 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
         changed = True
 
     events = [t for t in events if (nowv - _as_float(t, 0.0)) <= window_sec]
+    if len(events) > 100:
+        events = events[-100:]
     count = len(events)
     state["events"] = events
     i10_state[pkey] = state
@@ -609,7 +640,7 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     if isinstance(st, dict):
         st["inv_runtime"] = inv_runtime
         # Persist counters, otherwise load_state() will wipe them next loop
-        if changed and save_state is not None and bool(ENV.get("INVAR_PERSIST", True)):
+        if changed and save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
             with suppress(Exception):
                 save_state(st)
 
