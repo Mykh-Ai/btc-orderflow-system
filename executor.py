@@ -228,7 +228,7 @@ def read_tail_lines(path: str, n: int) -> List[str]:
 # Configure margin guard hooks (future margin support; safe no-op by default)
 with suppress(Exception):
     margin_guard.configure(ENV, log_event)
-trail.configure(ENV, read_tail_lines)
+trail.configure(ENV, read_tail_lines, log_event)
 
 def _now_s() -> float:
     return time.time()

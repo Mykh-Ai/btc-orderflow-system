@@ -8,15 +8,28 @@ Hard rule: moved functions below are verbatim copies from executor.py.
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable
 ENV: Dict[str, Any] = {}
+_LOG_EVENT: Optional[Callable[..., None]] = None
 
 # injected dependency from executor.py
 read_tail_lines: Optional[Callable[[str, int], List[str]]] = None
 
 
-def configure(env: Dict[str, Any], read_tail_lines_fn: Callable[[str, int], List[str]]) -> None:
-    global ENV, read_tail_lines
+def configure(
+    env: Dict[str, Any],
+    read_tail_lines_fn: Callable[[str, int], List[str]],
+    log_event: Optional[Callable[..., None]] = None,
+) -> None:
+    global ENV, read_tail_lines, _LOG_EVENT
     ENV = env
     read_tail_lines = read_tail_lines_fn
+    _LOG_EVENT = log_event
+    ENV.setdefault("TRAIL_CONFIRM_BUFFER_USD", 0.0)
+
+
+def _log_event(action: str, **fields: Any) -> None:
+    if _LOG_EVENT is None:
+        return
+    _LOG_EVENT(action, **fields)
 
 
 def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
@@ -95,6 +108,44 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """
+    if pos.get("trail_active") and pos.get("trail_wait_confirm") is True:
+        side = pos.get("side")
+        if side not in ("LONG", "SHORT"):
+            pos["trail_wait_confirm"] = False
+            pos["trail_confirmed"] = False
+        else:
+            ref_price = float(pos.get("trail_ref_price") or 0.0)
+            trail_sl_price = float(pos.get("trail_sl_price") or 0.0)
+            if ref_price <= 0 or trail_sl_price <= 0:
+                pos["trail_wait_confirm"] = False
+                pos["trail_confirmed"] = False
+            else:
+                path = ENV.get("AGG_CSV") or ""
+                try:
+                    closes = _read_last_close_prices_from_agg_csv(path, 10) if path else []
+                except Exception:
+                    closes = []
+                if not closes:
+                    _log_event("TRAIL_CONFIRM_SKIPPED_NO_AGG", side=pos.get("side"), ref=ref_price)
+                    return None
+                else:
+                    last_close = closes[-1]
+                    confirm_buf = float(ENV.get("TRAIL_CONFIRM_BUFFER_USD") or 0.0)
+                    if side == "LONG":
+                        confirmed = last_close > ref_price + confirm_buf
+                    else:
+                        confirmed = last_close < ref_price - confirm_buf
+                    if not confirmed:
+                        return None
+                    pos["trail_wait_confirm"] = False
+                    pos["trail_confirmed"] = True
+                    _log_event(
+                        "TRAIL_CONFIRM_BREAK",
+                        side=side,
+                        ref=ref_price,
+                        last_close=last_close,
+                        buffer=confirm_buf,
+                    )
     path = ENV.get("AGG_CSV") or ""
     if not path:
         return None
