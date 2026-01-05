@@ -186,6 +186,86 @@ class TestInvariantsModule(unittest.TestCase):
         self.inv._check_i10_repeated_trail_stop_errors(st)
         self.assertEqual(self._count("I10"), 1)
 
+    def test_env_invar_enabled_string_zero_disables_all_emits(self):
+        self.inv.ENV["INVAR_ENABLED"] = "0"
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "orders": None,
+                "prices": None,
+            }
+        }
+        self.inv._check_i8_state_shape_live_position(st)
+        self.assertEqual(len(self.sent), 0)
+
+    def test_env_invar_enabled_string_false_disables_all_emits(self):
+        self.inv.ENV["INVAR_ENABLED"] = "false"
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "orders": None,
+                "prices": None,
+            }
+        }
+        self.inv._check_i8_state_shape_live_position(st)
+        self.assertEqual(len(self.sent), 0)
+
+    def test_invar_persist_zero_does_not_save_state(self):
+        # Should still emit webhook/log, but must NOT call save_state
+        self.inv.ENV["INVAR_PERSIST"] = "0"
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "orders": None,
+                "prices": None,
+            }
+        }
+        self.inv._check_i8_state_shape_live_position(st)
+        self.assertEqual(self._count("I8"), 1)
+        self.assertEqual(len(self.saved), 0)
+
+    def test_prune_inv_throttle_removes_old_entries(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "orders": None,
+                "prices": None,
+            },
+            "inv_throttle": {
+                "OLD": self.now - (8 * 24 * 3600),
+                "NEW": self.now - 10,
+            },
+        }
+        self.inv._check_i8_state_shape_live_position(st)
+        inv_th = st.get("inv_throttle", {})
+        self.assertIn("NEW", inv_th)
+        self.assertNotIn("OLD", inv_th)
+
+    def test_i10_events_are_capped_to_100(self):
+        # Avoid spamming save_state in a loop
+        self.inv.ENV["INVAR_PERSIST"] = "0"
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "trail_active": True,
+            }
+        }
+
+        base = self.now - 500
+        for i in range(200):
+            st["position"]["trail_last_error_code"] = -2010
+            st["position"]["trail_last_error_s"] = base + i
+            self.inv._check_i10_repeated_trail_stop_errors(st)
+
+        pkey = self.inv._pos_key(st["position"])
+        events = st["inv_runtime"]["I10"][pkey]["events"]
+        self.assertLessEqual(len(events), 100)
+
 
 if __name__ == "__main__":
     unittest.main()
