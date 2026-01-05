@@ -159,7 +159,8 @@ ENV: Dict[str, Any] = {
 # swing detection on ClosePrice from aggregated.csv
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
-"TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
+"TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 50.0),
+"TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
 }
 
 # Binance server time offset (ms). Helps avoid timestamp drift / -1021 errors.
@@ -1267,7 +1268,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     with suppress(Exception):
                         mid = float(get_mid_price(symbol))
                     if mid > 0.0:
-                        off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
+                        off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 50.0)
                         desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
 
                 if desired is not None:
@@ -1307,6 +1308,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             pos["trail_pending_cancel_sl"] = sl_now
                             pos["trail_active"] = True
                             pos["trail_qty"] = open_qty
+                            ref = float(pos.get("last_price") or 0.0)
+                            if ref > 0.0:
+                                pos["trail_ref_price"] = ref
+                                pos["trail_wait_confirm"] = True
+                                pos["trail_confirmed"] = False
+                            else:
+                                pos["trail_ref_price"] = 0.0
+                                pos["trail_wait_confirm"] = False
+                                pos["trail_confirmed"] = False
                             # Force quick retry via trailing maintenance (still rate-limited).
                             pos["trail_last_update_s"] = 0.0
                             st["position"] = pos
@@ -1359,6 +1369,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         # Keep trail flags so we retry on next manage tick
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        ref = float(pos.get("last_price") or 0.0)
+                        if ref > 0.0:
+                            pos["trail_ref_price"] = ref
+                            pos["trail_wait_confirm"] = True
+                            pos["trail_confirmed"] = False
+                        else:
+                            pos["trail_ref_price"] = 0.0
+                            pos["trail_wait_confirm"] = False
+                            pos["trail_confirmed"] = False
                         pos["trail_last_update_s"] = now_s
                         st["position"] = pos
                         save_state(st)
@@ -1367,6 +1386,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        ref = float(pos.get("last_price") or 0.0)
+                        if ref > 0.0:
+                            pos["trail_ref_price"] = ref
+                            pos["trail_wait_confirm"] = True
+                            pos["trail_confirmed"] = False
+                        else:
+                            pos["trail_ref_price"] = 0.0
+                            pos["trail_wait_confirm"] = False
+                            pos["trail_confirmed"] = False
                         pos["trail_sl_price"] = float(fmt_price(stop_p))
                         pos["trail_last_update_s"] = now_s
                         pos["status"] = "OPEN"
@@ -1379,6 +1407,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # No price right now -> mark trailing active and retry next tick
                 pos["trail_active"] = True
                 pos["trail_qty"] = open_qty
+                ref = float(pos.get("last_price") or 0.0)
+                if ref > 0.0:
+                    pos["trail_ref_price"] = ref
+                    pos["trail_wait_confirm"] = True
+                    pos["trail_confirmed"] = False
+                else:
+                    pos["trail_ref_price"] = 0.0
+                    pos["trail_wait_confirm"] = False
+                    pos["trail_confirmed"] = False
                 pos["trail_last_update_s"] = now_s
                 st["position"] = pos
                 save_state(st)
@@ -1432,7 +1469,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 with suppress(Exception):
                     mid = float(get_mid_price(symbol))
                 if mid > 0.0:
-                    off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
+                    off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 50.0)
                     desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
             if desired is not None:
                 step = float(ENV.get("TRAIL_STEP_USD") or 20.0)
@@ -1671,6 +1708,38 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     SHORT: stop = swing_high + buffer
     """
     path = ENV.get("AGG_CSV") or ""
+    if pos.get("trail_active") and pos.get("trail_wait_confirm"):
+        current_trail = float(pos.get("trail_sl_price") or 0.0)
+        if current_trail > 0.0:
+            ref = pos.get("trail_ref_price")
+            if ref is None:
+                return None
+            try:
+                ref_f = float(ref)
+            except Exception:
+                return None
+            if ref_f <= 0.0:
+                return None
+            if path:
+                closes = _read_last_close_prices_from_agg_csv(path, 10)
+            else:
+                closes = []
+            if not closes:
+                pos["trail_wait_confirm"] = False
+                pos["trail_confirmed"] = False
+                log_event("TRAIL_CONFIRM_SKIPPED_NO_AGG", mode="live", side=pos.get("side"), ref=ref_f)
+            else:
+                last_close = closes[-1]
+                confirm_buf = float(ENV.get("TRAIL_CONFIRM_BUFFER_USD") or 0.0)
+                if pos.get("side") == "LONG":
+                    if last_close <= (ref_f + confirm_buf):
+                        return None
+                else:
+                    if last_close >= (ref_f - confirm_buf):
+                        return None
+                pos["trail_wait_confirm"] = False
+                pos["trail_confirmed"] = True
+                log_event("TRAIL_CONFIRM_BREAK", mode="live", side=pos.get("side"), ref=ref_f, last_close=last_close, buffer=confirm_buf)
     if not path:
         return None
     lookback = int(ENV.get("TRAIL_SWING_LOOKBACK") or 0)
