@@ -1046,6 +1046,21 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                                 "newClientOrderId": f"EX_SL_TR_RESTORE_{int(time.time())}",
                             })
                         except Exception as e:
+                            err_msg = str(e)
+                            err_code = None
+                            with suppress(Exception):
+                                if getattr(e, "code", None) is not None:
+                                    err_code = int(getattr(e, "code"))
+                            if err_code is None and ('"code":-2010' in err_msg or '"code": -2010' in err_msg):
+                                err_code = -2010
+                            if err_code is None:
+                                err_code = 0
+                            pos["trail_last_error_code"] = err_code
+                            pos["trail_last_error_s"] = now_s
+                            pos["trail_error_count"] = int(pos.get("trail_error_count") or 0) + 1
+                            st["position"] = pos
+                            with suppress(Exception):
+                                save_state(st)
                             log_event("TRAIL_SL_RESTORE_ERROR", error=str(e), mode="live")
                         else:
                             pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
@@ -1081,6 +1096,21 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                                     "newClientOrderId": f"EX_SL_TR_{int(time.time())}",
                                 })
                             except Exception as e:
+                                err_msg = str(e)
+                                err_code = None
+                                with suppress(Exception):
+                                    if getattr(e, "code", None) is not None:
+                                        err_code = int(getattr(e, "code"))
+                                if err_code is None and ('"code":-2010' in err_msg or '"code": -2010' in err_msg):
+                                    err_code = -2010
+                                if err_code is None:
+                                    err_code = 0
+                                pos["trail_last_error_code"] = err_code
+                                pos["trail_last_error_s"] = now_s
+                                pos["trail_error_count"] = int(pos.get("trail_error_count") or 0) + 1
+                                st["position"] = pos
+                                with suppress(Exception):
+                                    save_state(st)
                                 log_event("TRAIL_SL_UPDATE_ERROR", error=str(e), mode="live")
                             else:
                                 pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
@@ -1369,6 +1399,18 @@ def main() -> None:
     tail = read_tail_lines(ENV["DELTASCOUT_LOG"], ENV["TAIL_LINES"])
     bootstrap_seen_keys_from_tail(st, tail)
 
+    pos = st.get("position") if isinstance(st, dict) else None
+    pos_exists = isinstance(pos, dict) and bool(pos)
+    orders = pos.get("orders") if pos_exists and isinstance(pos.get("orders"), dict) else {}
+    log_event(
+        "BOOT_REHYDRATE",
+        position_exists=pos_exists,
+        status=pos.get("status") if pos_exists else None,
+        trail_active=pos.get("trail_active") if pos_exists else None,
+        order_sl=orders.get("sl") if pos_exists else None,
+        order_tp1=orders.get("tp1") if pos_exists else None,
+        order_tp2=orders.get("tp2") if pos_exists else None,
+    )
 
     log_event("BOOT", dry=ENV["DRY"], symbol=ENV["SYMBOL"])
     if not ENV["DRY"]:

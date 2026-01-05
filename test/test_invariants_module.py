@@ -136,7 +136,56 @@ class TestInvariantsModule(unittest.TestCase):
         payload = next(p for p in self.sent if _payload_inv_id(p) == "I8")
         self.assertEqual(payload.get("severity"), "WARN")
 
+    def test_i9_trail_active_missing_sl_warn_then_error(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "trail_active": True,
+                "orders": {},
+                "prices": {},
+                "opened_s": self.now,
+            }
+        }
+
+        self.inv._check_i9_trail_active_sl_missing(st)
+        self.assertEqual(self._count("I9"), 1)
+        payload = next(p for p in self.sent if _payload_inv_id(p) == "I9")
+        self.assertEqual(payload.get("severity"), "WARN")
+
+        # After grace => ERROR
+        self.now += 601
+        st["position"]["opened_s"] = self.now - 20
+        self.inv._check_i9_trail_active_sl_missing(st)
+        self.assertEqual(self._count("I9"), 2)
+        payload = [p for p in self.sent if _payload_inv_id(p) == "I9"][-1]
+        self.assertEqual(payload.get("severity"), "ERROR")
+
+    def test_i10_repeated_trail_errors_throttled(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "trail_active": True,
+            }
+        }
+
+        for delta in (30, 20, 10):
+            st["position"]["trail_last_error_code"] = -2010
+            st["position"]["trail_last_error_s"] = self.now - delta
+            self.inv._check_i10_repeated_trail_stop_errors(st)
+
+        self.assertEqual(self._count("I10"), 1)
+        payload = next(p for p in self.sent if _payload_inv_id(p) == "I10")
+        self.assertEqual(payload.get("severity"), "WARN")
+
+        # Within throttle, should not emit again
+        self.inv.ENV["INVAR_THROTTLE_SEC"] = 60
+        st["position"]["trail_last_error_code"] = -2010
+        st["position"]["trail_last_error_s"] = self.now - 5
+        self.inv._check_i10_repeated_trail_stop_errors(st)
+        self.assertEqual(self._count("I10"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-
