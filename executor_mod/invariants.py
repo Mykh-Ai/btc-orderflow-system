@@ -519,6 +519,113 @@ def _check_i8_state_shape_live_position(st: Dict[str, Any]) -> None:
     )
 
 
+def _check_i9_trail_active_sl_missing(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+    if not bool(pos.get("trail_active")):
+        return
+
+    status = str(pos.get("status", "") or "").upper()
+    if status not in ("OPEN", "OPEN_FILLED"):
+        return
+
+    orders = pos.get("orders") or {}
+    prices = pos.get("prices") or {}
+    # Avoid double-alert with I8 (shape check)
+    if not isinstance(orders, dict) or not isinstance(prices, dict):
+        return
+    sl_id = _as_int(orders.get("sl"), 0)
+    sl_p = _as_float(prices.get("sl"), 0.0)
+    if sl_id > 0 and sl_p > 0:
+        return
+
+    opened_s = _as_float(pos.get("opened_s"), 0.0)
+    age = float(now_s()) - opened_s if (now_s is not None and opened_s > 0) else 999999.0
+    sev = "WARN" if age < float(_grace_sec()) else "ERROR"
+    _emit(
+        st,
+        "I9",
+        sev,
+        "Trail active but SL missing",
+        {
+            "status": pos.get("status"),
+            "sl_id": sl_id,
+            "sl_price": sl_p,
+            "trail_active": pos.get("trail_active"),
+            "age_s": age,
+        },
+    )
+
+
+def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    if pos.get("mode") != "live":
+        return
+    if not bool(pos.get("trail_active")):
+        return
+
+    last_code = _as_int(pos.get("trail_last_error_code"), 0)
+    last_s = _as_float(pos.get("trail_last_error_s"), 0.0)
+    if last_code != -2010 or last_s <= 0:
+        return
+    if now_s is None:
+        return
+
+    nowv = float(now_s())
+    window_sec = 15 * 60
+
+    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
+    if not isinstance(inv_runtime, dict):
+        inv_runtime = {}
+    i10_state = inv_runtime.get("I10")
+    if not isinstance(i10_state, dict):
+        i10_state = {}
+
+    pkey = _pos_key(pos)
+    state = i10_state.get(pkey)
+    if not isinstance(state, dict):
+        state = {}
+    events = state.get("events")
+    if not isinstance(events, list):
+        events = []
+
+    last_seen = _as_float(state.get("last_seen_s"), 0.0)
+    changed = False
+    if last_s > last_seen:
+        events.append(last_s)
+        state["last_seen_s"] = last_s
+        changed = True
+
+    events = [t for t in events if (nowv - _as_float(t, 0.0)) <= window_sec]
+    count = len(events)
+    state["events"] = events
+    i10_state[pkey] = state
+    inv_runtime["I10"] = i10_state
+    if isinstance(st, dict):
+        st["inv_runtime"] = inv_runtime
+        # Persist counters, otherwise load_state() will wipe them next loop
+        if changed and save_state is not None and bool(ENV.get("INVAR_PERSIST", True)):
+            with suppress(Exception):
+                save_state(st)
+
+    if count < 3:
+        return
+
+    sev = "ERROR" if count >= 6 else "WARN"
+    _emit(
+        st,
+        "I10",
+        sev,
+        "Repeated TRAIL stop errors (-2010)",
+        {"count": count, "window_sec": window_sec, "last_error_s": last_s},
+    )
+
+
 def run(st: Dict[str, Any]) -> None:
     """
     Run detector-only invariants against current state.
@@ -536,6 +643,8 @@ def run(st: Dict[str, Any]) -> None:
         _check_i6_feed_freshness_for_trail(st)
         _check_i7_tp_orders_after_fill(st)
         _check_i8_state_shape_live_position(st)
+        _check_i9_trail_active_sl_missing(st)
+        _check_i10_repeated_trail_stop_errors(st)
     except Exception:
         # Never break executor on invariant checks
         return
