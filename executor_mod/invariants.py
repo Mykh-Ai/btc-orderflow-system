@@ -143,13 +143,25 @@ def _emit(st: Dict[str, Any], inv_id: str, severity: str, message: str, details:
     with suppress(Exception):
         log_event("INVARIANT_FAIL", invariant_id=inv_id, severity=severity, msg=message, **details)
 
+    prices = pos.get("prices") if isinstance(pos, dict) else None
     payload: Dict[str, Any] = {
         "event": "INVARIANT_FAIL",
+        "ts_s": nowv,
+        "pos_key": pkey,
         "mode": (pos.get("mode") if isinstance(pos, dict) else None) or "unknown",
         "symbol": ENV.get("SYMBOL"),
         "invariant_id": inv_id,
+        "inv_id": inv_id,
         "severity": severity,
         "message": message,
+        "side": pos.get("side") if isinstance(pos, dict) else None,
+        "status": pos.get("status") if isinstance(pos, dict) else None,
+        "qty": pos.get("qty") if isinstance(pos, dict) else None,
+        "entry": pos.get("entry") if isinstance(pos, dict) else None,
+        "trail_active": pos.get("trail_active") if isinstance(pos, dict) else None,
+        "sl": prices.get("sl") if isinstance(prices, dict) else None,
+        "tp1": prices.get("tp1") if isinstance(prices, dict) else None,
+        "tp2": prices.get("tp2") if isinstance(prices, dict) else None,
         "position": {
             "side": pos.get("side") if isinstance(pos, dict) else None,
             "status": pos.get("status") if isinstance(pos, dict) else None,
