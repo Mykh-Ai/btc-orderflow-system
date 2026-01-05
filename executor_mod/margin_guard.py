@@ -38,3 +38,14 @@ def on_shutdown(state: Dict[str, Any]) -> None:
         return
     if log_event:
         log_event("MARGIN_HOOK_SHUTDOWN", note="stub")
+
+def on_after_position_closed(st: dict) -> None:
+    """
+    Best-effort hook after the executor considers the position closed.
+    Safe no-op unless TRADE_MODE=margin.
+    """
+    if not is_margin_mode():
+        return
+    # TODO(Task14): repay/cleanup policy (idempotent via trade_key)
+    return
+

@@ -227,7 +227,7 @@ def read_tail_lines(path: str, n: int) -> List[str]:
 # Configure trail helper module (inject ENV and file tail reader)
 # Configure margin guard hooks (future margin support; safe no-op by default)
 with suppress(Exception):
-    margin_guard.configure(ENV, log_event)
+    margin_guard.configure(ENV, log_event, api=binance_api)
 trail.configure(ENV, read_tail_lines, log_event)
 
 def _now_s() -> float:
@@ -698,6 +698,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
         save_state(st)
+        with suppress(Exception):
+            margin_guard.on_after_position_closed(st)
 
     tp1_id = int(pos["orders"].get("tp1") or 0)
     tp2_id = int(pos["orders"].get("tp2") or 0)
@@ -1609,7 +1611,9 @@ def main() -> None:
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
                                         continue
                                 with suppress(Exception):
-                                    margin_guard.on_before_entry(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={})
+                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
+                                        "trade_key": posi.get("client_id") or posi.get("order_id"),
+                                    })
                                 try:
                                     mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
                                 except Exception as ee:
@@ -1846,7 +1850,10 @@ def main() -> None:
                     entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
                     if entry_mode == "MARKET_ONLY":
                         with suppress(Exception):
-                            margin_guard.on_before_entry(ENV["SYMBOL"], side, float(qty), plan={})
+                            margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                                "trade_key": client_id,
+                                "entry_price": entry,
+                            })
                         order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
                         exq0 = float(order.get("executedQty") or 0.0)
                         status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
@@ -1854,7 +1861,10 @@ def main() -> None:
                         entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
                     else:
                         with suppress(Exception):
-                            margin_guard.on_before_entry(ENV["SYMBOL"], side, float(qty), plan={})
+                            margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                                "trade_key": client_id,
+                                "entry_price": entry,
+                            })
                         order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
                         status0 = "PENDING"
                         entry_actual0 = None
