@@ -242,6 +242,8 @@ with suppress(Exception):
         now_fn=_now_s,
         save_state_fn=save_state,
     )
+with suppress(Exception):
+    margin_guard.configure(ENV, log_event, api=binance_api)
 
 # ===================== DeltaScout event normalization / dedup =====================
 # (moved to executor_mod.event_dedup)
@@ -274,6 +276,7 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
 
 risk_math.configure(ENV)
 binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
+
 
 def build_entry_price(kind: str, close_price: float) -> float:
     """Entry price builder used for both paper and live.
@@ -433,6 +436,11 @@ def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None
     # unlock; avoid blocking next PEAK for no reason
     st["lock_until"] = 0.0
     save_state(st)
+        # Margin safety: if borrow happened but entry failed/canceled, repay here best-effort.
+    with suppress(Exception):
+        tk = (pos or {}).get("trade_key") or (pos or {}).get("client_id") or (pos or {}).get("order_id")
+        margin_guard.on_after_position_closed(st, trade_key=tk)
+
 
 def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
     """Validate exits inputs before placing orders.
@@ -1488,7 +1496,7 @@ def main() -> None:
                             log_event("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
                             send_webhook({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
                             with suppress(Exception):
-                                margin_guard.on_after_entry_opened(st)
+                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
                                 exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
@@ -1542,7 +1550,7 @@ def main() -> None:
                             log_event("ENTRY_TIMEOUT_PARTIAL_FILLED", mode="live", order_id=oid, executedQty=exq_t)
                             send_webhook({"event": "ENTRY_TIMEOUT_PARTIAL_FILLED", "mode": "live", "order_id": oid, "executedQty": exq_t})
                             with suppress(Exception):
-                                margin_guard.on_after_entry_opened(st)
+                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                             _try_place_exits_now()
                         else:
                             # Cancel LIMIT (best-effort)
@@ -1570,7 +1578,7 @@ def main() -> None:
                                     log_event("ENTRY_TIMEOUT_LATE_FILL", mode="live", order_id=oid, executedQty=exq_after, status=st_after)
                                     send_webhook({"event": "ENTRY_TIMEOUT_LATE_FILL", "mode": "live", "order_id": oid, "executedQty": exq_after, "status": st_after})
                                     with suppress(Exception):
-                                        margin_guard.on_after_entry_opened(st)
+                                        margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                                     _try_place_exits_now()
                                     continue
                             # Only place MARKET when LIMIT is confirmed canceled/expired/rejected; otherwise wait.
@@ -1612,7 +1620,7 @@ def main() -> None:
                                         continue
                                 with suppress(Exception):
                                     margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
-                                        "trade_key": posi.get("client_id") or posi.get("order_id"),
+                                        "trade_key": posi.get("trade_key") or posi.get("client_id") or posi.get("order_id"),
                                     })
                                 try:
                                     mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
@@ -1645,7 +1653,7 @@ def main() -> None:
                                             st["position"] = posi
                                             save_state(st)
                                             with suppress(Exception):
-                                                margin_guard.on_after_entry_opened(st)
+                                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid2))
                                             _try_place_exits_now()
                                         else:
                                             # Unexpected: market not filled. Keep pending and let poll loop handle it.
@@ -1878,6 +1886,7 @@ def main() -> None:
                         "entry": entry,
                         "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
                         "client_id": client_id,
+                        "trade_key": client_id,
                         "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
                         "entry_actual": entry_actual0,
                         "k_entry": k_entry,
@@ -1895,7 +1904,7 @@ def main() -> None:
                     if status0 == "OPEN_FILLED":
                         pos0 = st.get("position") or {}
                         with suppress(Exception):
-                            margin_guard.on_after_entry_opened(st)
+                            margin_guard.on_after_entry_opened( st,trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
                         if (not pos0.get("orders")) and pos0.get("prices"):
                             exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                     save_state(st)
@@ -1904,11 +1913,11 @@ def main() -> None:
                     send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
                 except Exception as e:
                     log_event("LIVE_OPEN_ERROR", error=str(e))
-
-
+                    
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         log_event("STOP")
         raise
+
