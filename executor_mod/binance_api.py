@@ -67,6 +67,17 @@ def _tf(v: Any) -> str:
         return "FALSE"
     # If the user passed something custom, don't guess – return as-is.
     return str(v)
+
+
+def _margin_borrow_mode(env: Dict[str, Any]) -> str:
+    return str(env.get("MARGIN_BORROW_MODE") or "manual").strip().lower()
+
+
+def _margin_side_effect(env: Dict[str, Any]) -> str:
+    # Avoid double borrow/repay: manual mode forces NO_SIDE_EFFECT.
+    if _margin_borrow_mode(env) == "manual":
+        return "NO_SIDE_EFFECT"
+    return str(env.get("MARGIN_SIDE_EFFECT") or "NO_SIDE_EFFECT").strip().upper()
 # ===================== Signed/Public requests =====================
 
 def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -168,11 +179,11 @@ def place_spot_limit(symbol: str, side: str, qty: float, price: float, client_id
             "quantity": qty_s,
             "price": price_s,
             "newOrderRespType": "FULL",
-            "sideEffectType": env.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"),
+            "sideEffectType": _margin_side_effect(env),
         }
         if client_id:
             params["newClientOrderId"] = client_id
-        if env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
+        if _margin_borrow_mode(env) == "auto" and env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
             params["autoRepayAtCancel"] = _tf(env.get("MARGIN_AUTO_REPAY_AT_CANCEL", False))
         return _binance_signed_request("POST", "/sapi/v1/margin/order", params)
 
@@ -268,10 +279,16 @@ def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
         p = dict(endpoint_params)
         p.setdefault("symbol", env["SYMBOL"])
         p.setdefault("isIsolated", _tf(env.get("MARGIN_ISOLATED", "FALSE")))  # Binance expects "TRUE"/"FALSE"
-        p.setdefault("sideEffectType", env.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"))
-        # Inject auto repay at cancel if configured
-        if "autoRepayAtCancel" not in p and env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
-            p.setdefault("autoRepayAtCancel", _tf(env.get("MARGIN_AUTO_REPAY_AT_CANCEL", False)))
+        if _margin_borrow_mode(env) == "manual":
+            # Manual mode: prevent auto-borrow/repay from order side effects.
+            p["sideEffectType"] = "NO_SIDE_EFFECT"
+            if "autoRepayAtCancel" in p:
+                p["autoRepayAtCancel"] = "FALSE"
+        else:
+            p.setdefault("sideEffectType", _margin_side_effect(env))
+            # Inject auto repay at cancel if configured
+            if "autoRepayAtCancel" not in p and env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
+                p.setdefault("autoRepayAtCancel", _tf(env.get("MARGIN_AUTO_REPAY_AT_CANCEL", False)))
         return _binance_signed_request("POST", "/sapi/v1/margin/order", p)
 
     # spot
