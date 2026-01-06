@@ -10,6 +10,7 @@ def _ensure_margin_state(st: Dict[str, Any]) -> Dict[str, Any]:
     margin.setdefault("borrowed_by_trade", {})
     margin.setdefault("borrowed_trade_keys", [])
     margin.setdefault("repaid_trade_keys", [])
+    margin.setdefault("active_trade_key", None)
     return margin
 
 
@@ -19,6 +20,18 @@ def _account_assets(account: Dict[str, Any]) -> list[Dict[str, Any]]:
         return assets
     assets = account.get("assets")
     if isinstance(assets, list):
+        if assets and isinstance(assets[0], dict) and ("baseAsset" in assets[0] or "quoteAsset" in assets[0]):
+            flattened: list[Dict[str, Any]] = []
+            for row in assets:
+                if not isinstance(row, dict):
+                    continue
+                base_asset = row.get("baseAsset")
+                quote_asset = row.get("quoteAsset")
+                if isinstance(base_asset, dict):
+                    flattened.append(base_asset)
+                if isinstance(quote_asset, dict):
+                    flattened.append(quote_asset)
+            return flattened
         return assets
     return []
 
@@ -111,8 +124,8 @@ def repay_if_any(st: Dict[str, Any], api: Any, symbol: str) -> None:
             outstanding = float(_asset_snapshot(account, asset).get("borrowed") or 0.0)
         except Exception:
             outstanding = 0.0
-        repay_amt = min(float(tracked_amt or 0.0), outstanding)
-        if repay_amt > 0:
+        repay_amt = min(float(tracked_amt or 0.0), float(outstanding or 0.0))
+        if repay_amt > 0.0:
             api.margin_repay(asset, repay_amt, is_isolated=is_isolated, symbol=symbol)
         remaining = max(0.0, float(tracked_amt or 0.0) - repay_amt)
         if tracked_is_global:
