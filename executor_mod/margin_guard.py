@@ -25,6 +25,10 @@ def configure(env: Dict[str, Any], log_event_fn: Callable[..., None], api: Optio
 def is_margin_mode() -> bool:
     return (ENV.get("TRADE_MODE") or "").lower() == "margin"
 
+def _borrow_mode() -> str:
+    # Explicit mutual exclusion to avoid double borrow/repay.
+    return str(ENV.get("MARGIN_BORROW_MODE") or "manual").strip().lower()
+
 
 def _rt(state: Dict[str, Any]) -> Dict[str, Any]:
     return state.setdefault("mg_runtime", {})
@@ -59,16 +63,133 @@ def _extract_trade_key(state: Optional[Dict[str, Any]], plan: Optional[Dict[str,
 def on_startup(state: Dict[str, Any]) -> None:
     if not is_margin_mode():
         return
+    mode = _borrow_mode()
+    if mode == "manual" and str(ENV.get("MARGIN_SIDE_EFFECT") or "").upper() != "NO_SIDE_EFFECT":
+        if log_event:
+            log_event(
+                "MARGIN_CONFIG_WARN",
+                note="manual_mode_requires_no_side_effect",
+                mode=mode,
+                side_effect=ENV.get("MARGIN_SIDE_EFFECT"),
+            )
     if log_event:
         note = "ok" if api_client else "no_api"
         if margin_policy is None:
             note = f"{note},no_policy"
-        log_event("MARGIN_HOOK_STARTUP", note=note)
+        log_event("MARGIN_HOOK_STARTUP", note=note, mode=mode)
 
 
 def on_before_entry(state: Dict[str, Any], symbol: str, side: str, qty: float, plan: Dict[str, Any]) -> None:
     if not is_margin_mode():
         return
-    # TODO: borrow logic here
+    if _borrow_mode() == "auto":
+        if log_event:
+            log_event("MARGIN_HOOK_NOOP", note="auto_mode_noop", hook="before_entry")
+        return
+    if not api_client:
+        if log_event:
+            log_event("MARGIN_HOOK_BEFORE_ENTRY", note="no_api")
+        return
+    if margin_policy is None:
+        if log_event:
+            log_event("MARGIN_HOOK_BEFORE_ENTRY", note="no_policy")
+        return
+    trade_key = _extract_trade_key(state, plan) or "trade-unknown"
+    rt = _rt(state)
+    started = _map(rt, "borrow_started")
+    done = _map(rt, "borrow_done")
+    if trade_key in done or trade_key in started:
+        if log_event:
+            log_event("MARGIN_HOOK_BEFORE_ENTRY", trade_key=trade_key, dedup=True)
+        return
+    started[trade_key] = time.time()
+    try:
+        plan_use = dict(plan)
+        plan_use["trade_key"] = trade_key
+        margin_policy.ensure_borrow_if_needed(state, api_client, symbol, side, qty, plan_use)  # type: ignore[attr-defined]
+        done[trade_key] = time.time()
+        if log_event:
+            log_event("MARGIN_HOOK_BEFORE_ENTRY", trade_key=trade_key, borrowed=True)
+    except Exception as exc:
+        if log_event:
+            log_event("MARGIN_HOOK_BEFORE_ENTRY_ERROR", trade_key=trade_key, error=str(exc))
     return
 
+
+def on_after_entry_opened(state: Dict[str, Any], trade_key: Optional[str] = None) -> None:
+    if not is_margin_mode():
+        return
+    if _borrow_mode() == "auto":
+        if log_event:
+            log_event("MARGIN_HOOK_NOOP", note="auto_mode_noop", hook="after_entry_opened")
+        return
+    tk = trade_key or _extract_trade_key(state, state.get("position") or {})
+    if not tk:
+        if log_event:
+            log_event("MARGIN_HOOK_AFTER_ENTRY", note="no_trade_key")
+        return
+    rt = _rt(state)
+    after_open_done = _map(rt, "after_open_done")
+    if tk in after_open_done:
+        return
+    after_open_done[tk] = time.time()
+    if log_event:
+        log_event("MARGIN_HOOK_AFTER_ENTRY", trade_key=tk)
+    return
+
+
+def on_after_position_closed(state: Dict[str, Any], trade_key: Optional[str] = None) -> None:
+    if not is_margin_mode():
+        return
+    if _borrow_mode() == "auto":
+        if log_event:
+            log_event("MARGIN_HOOK_NOOP", note="auto_mode_noop", hook="after_position_closed")
+        return
+    if not api_client or margin_policy is None:
+        if log_event:
+            log_event("MARGIN_HOOK_AFTER_CLOSE", note="no_api_or_policy")
+        return
+    tk = trade_key or _extract_trade_key(state, state.get("position") or state.get("last_closed") or {})
+    if not tk:
+        try:
+            margin_policy.repay_if_any(state, api_client, ENV.get("SYMBOL", ""))  # type: ignore[attr-defined]
+            if log_event:
+                log_event("MARGIN_HOOK_AFTER_CLOSE", note="no_trade_key_repaid", repaid=True)
+        except Exception as exc:
+            if log_event:
+                log_event("MARGIN_HOOK_AFTER_CLOSE_ERROR", note="no_trade_key", error=str(exc))
+        return
+    rt = _rt(state)
+    repay_started = _map(rt, "repay_started")
+    repay_done = _map(rt, "repay_done")
+    if tk in repay_done or tk in repay_started:
+        if log_event:
+            log_event("MARGIN_HOOK_AFTER_CLOSE", trade_key=tk, dedup=True)
+        return
+    repay_started[tk] = time.time()
+    try:
+        margin_policy.repay_if_any(state, api_client, ENV.get("SYMBOL", ""))  # type: ignore[attr-defined]
+        repay_done[tk] = time.time()
+        if log_event:
+            log_event("MARGIN_HOOK_AFTER_CLOSE", trade_key=tk, repaid=True)
+    except Exception as exc:
+        if log_event:
+            log_event("MARGIN_HOOK_AFTER_CLOSE_ERROR", trade_key=tk, error=str(exc))
+    return
+
+
+def on_shutdown(state: Dict[str, Any]) -> None:
+    if not is_margin_mode():
+        return
+    if _borrow_mode() == "auto":
+        if log_event:
+            log_event("MARGIN_HOOK_NOOP", note="auto_mode_noop", hook="shutdown")
+        return
+    try:
+        on_after_position_closed(state, trade_key=None)
+        if log_event:
+            log_event("MARGIN_HOOK_SHUTDOWN", note="ok")
+    except Exception as exc:
+        if log_event:
+            log_event("MARGIN_HOOK_SHUTDOWN_ERROR", error=str(exc))
+    return

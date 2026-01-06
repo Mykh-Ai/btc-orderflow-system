@@ -152,6 +152,7 @@ ENV: Dict[str, Any] = {
 "MARGIN_ISOLATED": os.getenv("MARGIN_ISOLATED", "FALSE"),  # "TRUE" / "FALSE"
 "MARGIN_SIDE_EFFECT": os.getenv("MARGIN_SIDE_EFFECT", "AUTO_BORROW_REPAY"),
 "MARGIN_AUTO_REPAY_AT_CANCEL": _get_bool("MARGIN_AUTO_REPAY_AT_CANCEL", False),
+"MARGIN_BORROW_MODE": _get_str("MARGIN_BORROW_MODE", "manual"),  # manual | auto
 
 # Live mode helpers
 "LIVE_VALIDATE_ONLY": _get_bool("LIVE_VALIDATE_ONLY", False),
@@ -1920,4 +1921,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log_event("STOP")
         raise
-
