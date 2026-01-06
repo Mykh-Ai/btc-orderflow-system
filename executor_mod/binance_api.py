@@ -54,6 +54,19 @@ def _env() -> Dict[str, Any]:
 def _require_fmt() -> None:
     if _fmt_qty is None or _fmt_price is None or _round_qty is None:
         raise RuntimeError("binance_api missing fmt_* deps: call configure(..., fmt_qty=..., fmt_price=..., round_qty=...)")
+
+
+def _tf(v: Any) -> str:
+    """Normalize bool-ish values to Binance 'TRUE'/'FALSE' strings."""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    s = str(v).strip().upper()
+    if s in ("TRUE", "T", "1", "YES", "Y", "ON"):
+        return "TRUE"
+    if s in ("FALSE", "F", "0", "NO", "N", "OFF", ""):
+        return "FALSE"
+    # If the user passed something custom, don't guess – return as-is.
+    return str(v)
 # ===================== Signed/Public requests =====================
 
 def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -148,18 +161,19 @@ def place_spot_limit(symbol: str, side: str, qty: float, price: float, client_id
     if mode == "margin":
         params: Dict[str, Any] = {
             "symbol": symbol,
-            "isIsolated": env["MARGIN_ISOLATED"],
+            "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE")),
             "side": side,
             "type": "LIMIT",
             "timeInForce": "GTC",
             "quantity": qty_s,
             "price": price_s,
             "newOrderRespType": "FULL",
-            "sideEffectType": env["MARGIN_SIDE_EFFECT"],
+            "sideEffectType": env.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"),
         }
         if client_id:
             params["newClientOrderId"] = client_id
-        params["autoRepayAtCancel"] = "TRUE" if env["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE"
+        if env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
+            params["autoRepayAtCancel"] = _tf(env.get("MARGIN_AUTO_REPAY_AT_CANCEL", False))
         return _binance_signed_request("POST", "/sapi/v1/margin/order", params)
 
     # spot
@@ -207,7 +221,7 @@ def check_order_status(symbol: str, order_id: int) -> Dict[str, Any]:
         return _binance_signed_request(
             "GET",
             "/sapi/v1/margin/order",
-            {"symbol": symbol, "isIsolated": env["MARGIN_ISOLATED"], "orderId": order_id},
+            {"symbol": symbol, "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE")), "orderId": order_id},
         )
     return _binance_signed_request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
 
@@ -219,7 +233,7 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
         return _binance_signed_request(
             "DELETE",
             "/sapi/v1/margin/order",
-            {"symbol": symbol, "isIsolated": env["MARGIN_ISOLATED"], "orderId": order_id},
+            {"symbol": symbol, "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE")), "orderId": order_id},
         )
     return _binance_signed_request("DELETE", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
 
@@ -232,7 +246,7 @@ def open_orders(symbol: str) -> List[Dict[str, Any]]:
         j = _binance_signed_request(
             "GET",
             "/sapi/v1/margin/openOrders",
-            {"symbol": symbol, "isIsolated": env["MARGIN_ISOLATED"]},
+            {"symbol": symbol, "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE"))},
         )
         return list(j) if isinstance(j, list) else []
     j = _binance_signed_request("GET", "/api/v3/openOrders", {"symbol": symbol})
@@ -253,15 +267,74 @@ def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
     if mode == "margin":
         p = dict(endpoint_params)
         p.setdefault("symbol", env["SYMBOL"])
-        p.setdefault("isIsolated", env["MARGIN_ISOLATED"])
-        p.setdefault("sideEffectType", env["MARGIN_SIDE_EFFECT"])
-        p.setdefault("autoRepayAtCancel", "TRUE" if env["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE")
+        p.setdefault("isIsolated", _tf(env.get("MARGIN_ISOLATED", "FALSE")))  # Binance expects "TRUE"/"FALSE"
+        p.setdefault("sideEffectType", env.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"))
+        # Inject auto repay at cancel if configured
+        if "autoRepayAtCancel" not in p and env.get("MARGIN_AUTO_REPAY_AT_CANCEL") is not None:
+            p.setdefault("autoRepayAtCancel", _tf(env.get("MARGIN_AUTO_REPAY_AT_CANCEL", False)))
         return _binance_signed_request("POST", "/sapi/v1/margin/order", p)
 
     # spot
     p = dict(endpoint_params)
     p.setdefault("symbol", env["SYMBOL"])
     return _binance_signed_request("POST", "/api/v3/order", p)
+
+
+def margin_account(*, is_isolated: Optional[bool] = None, symbols: Optional[str] = None) -> Dict[str, Any]:
+    """Return margin account info.
+
+    Cross margin: GET /sapi/v1/margin/account
+    Isolated    : GET /sapi/v1/margin/isolated/account (param: symbols="BTCUSDT,ETHUSDT")
+    """
+    env = _env()
+    if (env.get("TRADE_MODE") or "").lower() != "margin":
+        raise RuntimeError("margin_account() called while TRADE_MODE is not 'margin'")
+
+    iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
+    if iso == "TRUE":
+        p: Dict[str, Any] = {}
+        sym = symbols or env.get("SYMBOL")
+        if sym:
+            p["symbols"] = sym
+        return _binance_signed_request("GET", "/sapi/v1/margin/isolated/account", p)
+
+    return _binance_signed_request("GET", "/sapi/v1/margin/account", {})
+
+
+def margin_borrow(asset: str, amount: Any, *, is_isolated: Optional[bool] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
+    """Manual borrow (if you do NOT rely on sideEffectType auto-borrow)."""
+    env = _env()
+    iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
+    sym = symbol or env.get("SYMBOL")
+    p: Dict[str, Any] = {
+        "asset": asset,
+        "amount": str(amount),
+        "type": "BORROW",
+        "isIsolated": iso,
+    }
+    if iso == "TRUE":
+        if not sym:
+            raise RuntimeError("margin_borrow(): isolated borrow requires symbol")
+        p["symbol"] = sym
+    return _binance_signed_request("POST", "/sapi/v1/margin/borrow-repay", p)
+
+
+def margin_repay(asset: str, amount: Any, *, is_isolated: Optional[bool] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
+    """Manual repay (if you do NOT rely on sideEffectType auto-repay)."""
+    env = _env()
+    iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
+    sym = symbol or env.get("SYMBOL")
+    p: Dict[str, Any] = {
+        "asset": asset,
+        "amount": str(amount),
+        "type": "REPAY",
+        "isIsolated": iso,
+    }
+    if iso == "TRUE":
+        if not sym:
+            raise RuntimeError("margin_repay(): isolated repay requires symbol")
+        p["symbol"] = sym
+    return _binance_signed_request("POST", "/sapi/v1/margin/borrow-repay", p)
 
 # ===================== Sanity/time sync =====================
 
