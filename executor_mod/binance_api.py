@@ -323,7 +323,7 @@ def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optio
     """Exchange-truth debt snapshot for I13.
 
     Returns:
-      {"has_debt": bool, "details": dict, "endpoint": str}
+      {"has_debt": bool, "details": dict, "details_v2": dict, "endpoint": str}
 
     Notes:
     - Cross uses /sapi/v1/margin/account
@@ -355,6 +355,7 @@ def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optio
         return 0.0
 
     debts = []
+    legacy_details: Dict[str, float] = {}
     total = 0.0
     try:
         eps = float(env.get("MARGIN_DEBT_EPS", 0.0))
@@ -374,6 +375,8 @@ def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optio
                 liab = borrowed + interest
                 if liab > eps:
                     debts.append({"asset": asset, "borrowed": borrowed, "interest": interest, "liability": liab})
+                    if asset:
+                        legacy_details[asset] = liab
                     total += liab
     else:
         # Isolated: acc["assets"] is list; each element has baseAsset/quoteAsset dicts.
@@ -405,16 +408,24 @@ def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optio
                                 "liability": liab,
                             }
                         )
+                        sym_key = a.get("symbol") or sym
+                        if sym_key and asset:
+                            legacy_details[f"{sym_key}:{asset}"] = liab
                         total += liab
 
-    details = {
+    details_v2 = {
         "is_isolated": iso_bool,
         "symbol": sym if iso_bool else None,
         "params": {"symbols": sym} if iso_bool else {},
         "debts": debts,
         "total_liability": total,
     }
-    return {"has_debt": bool(debts), "details": details, "endpoint": endpoint}
+    return {
+        "has_debt": bool(legacy_details),
+        "details": legacy_details,
+        "details_v2": details_v2,
+        "endpoint": endpoint,
+    }
 
 
 def margin_borrow(asset: str, amount: Any, *, is_isolated: Optional[bool] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
