@@ -318,6 +318,88 @@ def margin_account(*, is_isolated: Optional[bool] = None, symbols: Optional[str]
     return _binance_signed_request("GET", "/sapi/v1/margin/account", {})
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _debt_eps() -> float:
+    try:
+        return float(_env().get("MARGIN_DEBT_EPS", 1e-12))
+    except Exception:
+        return 1e-12
+
+
+def get_margin_debt_snapshot(
+    symbol: Optional[str] = None,
+    is_isolated: Optional[bool] = None,
+) -> Dict[str, Any]:
+    env = _env()
+    if (env.get("TRADE_MODE") or "").lower() != "margin":
+        raise RuntimeError("get_margin_debt_snapshot() called while TRADE_MODE is not 'margin'")
+    sym = symbol or env.get("SYMBOL")
+    iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
+    endpoint = "/sapi/v1/margin/account"
+    params: Dict[str, Any] = {}
+    if iso == "TRUE":
+        if not sym:
+            raise RuntimeError("get_margin_debt_snapshot(): isolated requires symbol")
+        endpoint = "/sapi/v1/margin/isolated/account"
+        params = {"symbols": sym}
+    data = _binance_signed_request("GET", endpoint, params)
+
+    details: Dict[str, Any] = {}
+    has_debt = False
+    eps = _debt_eps()
+    if endpoint == "/sapi/v1/margin/isolated/account":
+        assets = []
+        if isinstance(data, dict):
+            assets = data.get("assets", []) or []
+        elif isinstance(data, list):
+            assets = data
+        if isinstance(assets, list):
+            for item in assets:
+                if not isinstance(item, dict):
+                    continue
+                symbol_key = item.get("symbol") or sym or "unknown"
+                for side in ("baseAsset", "quoteAsset"):
+                    asset_info = item.get(side)
+                    if not isinstance(asset_info, dict):
+                        continue
+                    asset_name = asset_info.get("asset") or side
+                    borrowed = _as_float(asset_info.get("borrowed"), 0.0)
+                    interest = _as_float(asset_info.get("interest"), 0.0)
+                    debt = borrowed + interest
+                    if debt > eps:
+                        details[f"{symbol_key}:{asset_name}"] = debt
+                        has_debt = True
+    else:
+        assets = []
+        if isinstance(data, dict):
+            assets = data.get("userAssets", []) or []
+        elif isinstance(data, list):
+            assets = data
+        if isinstance(assets, list):
+            for item in assets:
+                if not isinstance(item, dict):
+                    continue
+                asset = item.get("asset") or "unknown"
+                borrowed = _as_float(item.get("borrowed"), 0.0)
+                interest = _as_float(item.get("interest"), 0.0)
+                debt = borrowed + interest
+                if debt > eps:
+                    details[asset] = debt
+                    has_debt = True
+
+    return {
+        "has_debt": has_debt,
+        "details": details,
+        "endpoint": endpoint,
+    }
+
+
 def margin_borrow(asset: str, amount: Any, *, is_isolated: Optional[bool] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
     """Manual borrow (if you do NOT rely on sideEffectType auto-borrow)."""
     env = _env()

@@ -30,6 +30,7 @@ class TestInvariantsMargin(unittest.TestCase):
         self.logged = []
         self.saved = []
         self.now = 1_000_000.0
+        self.inv._i13_exchange_check_fn = None
 
         def now_fn():
             return self.now
@@ -52,18 +53,21 @@ class TestInvariantsMargin(unittest.TestCase):
 
         cfg = self.inv.configure
         sig = inspect.signature(cfg)
-        kwargs = {
+        self.configure_kwargs = {
             "env": env,
             "log_event_fn": log_event,
             "send_webhook_fn": send_webhook,
             "save_state_fn": save_state,
             "now_fn": now_fn,
         }
-        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        kwargs = {k: v for k, v in self.configure_kwargs.items() if k in sig.parameters}
         cfg(**kwargs)
 
     def _count(self, inv_id: str) -> int:
         return sum(1 for p in self.sent if _payload_inv_id(p) == inv_id)
+
+    def _payloads(self, inv_id: str):
+        return [p for p in self.sent if _payload_inv_id(p) == inv_id]
 
     def test_spot_mode_noop_for_margin_invariants(self):
         self.inv.ENV["TRADE_MODE"] = "spot"
@@ -137,8 +141,23 @@ class TestInvariantsMargin(unittest.TestCase):
         self.inv.run(st)
         self.assertEqual(self._count("I12"), 1)
 
-    def test_i13_borrow_tracking_left_after_close(self):
+    def test_i13_exchange_truth_cross_clears_when_no_debt(self):
         self.inv.ENV["TRADE_MODE"] = "margin"
+        self.inv.ENV["I13_GRACE_SEC"] = 10
+        self.inv.ENV["I13_EXCHANGE_CHECK"] = True
+        self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
+
+        def exchange_snapshot(symbol, is_isolated):
+            self.assertIsNone(symbol)
+            self.assertFalse(is_isolated)
+            return {"has_debt": False, "details": {}, "endpoint": "mock"}
+
+        cfg = self.inv.configure
+        sig = inspect.signature(cfg)
+        kwargs = dict(self.configure_kwargs)
+        kwargs["i13_exchange_check_fn"] = exchange_snapshot
+        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        cfg(**kwargs)
 
         st = {
             "position": {
@@ -146,36 +165,101 @@ class TestInvariantsMargin(unittest.TestCase):
                 "status": "CLOSED",
             },
             "margin": {
-                "active_trade_key": "t1",
                 "borrowed_assets": {"USDT": 1.0},
-            },
-            "mg_runtime": {
-                "repay_done": {},
             },
         }
 
-        self.inv.run(st)
-        self.assertEqual(self._count("I13"), 1)
-
-    def test_i13_no_emit_when_repay_done_present(self):
-        self.inv.ENV["TRADE_MODE"] = "margin"
-
-        st = {
-            "position": {
-                "mode": "backtest",
-                "status": "CLOSED",
-            },
-            "margin": {
-                "active_trade_key": "t1",
-                "borrowed_assets": {"USDT": 1.0},
-            },
-            "mg_runtime": {
-                "repay_done": {"t1": True},
-            },
-        }
-
+        self.now = 0.0
         self.inv.run(st)
         self.assertEqual(self._count("I13"), 0)
+
+        self.now = 11.0
+        self.inv.run(st)
+        self.assertEqual(self._count("I13"), 0)
+        self.assertNotIn("I13", st.get("inv_runtime", {}))
+
+    def test_i13_exchange_truth_cross_warns_and_errors(self):
+        self.inv.ENV["TRADE_MODE"] = "margin"
+        self.inv.ENV["I13_GRACE_SEC"] = 10
+        self.inv.ENV["I13_ESCALATE_SEC"] = 20
+        self.inv.ENV["I13_EXCHANGE_CHECK"] = True
+        self.inv.ENV["I13_EXCHANGE_MIN_INTERVAL_SEC"] = 0
+        self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
+
+        def exchange_snapshot(symbol, is_isolated):
+            self.assertIsNone(symbol)
+            self.assertFalse(is_isolated)
+            return {"has_debt": True, "details": {"USDC": 1.0}, "endpoint": "mock"}
+
+        cfg = self.inv.configure
+        sig = inspect.signature(cfg)
+        kwargs = dict(self.configure_kwargs)
+        kwargs["i13_exchange_check_fn"] = exchange_snapshot
+        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        cfg(**kwargs)
+
+        st = {
+            "position": {
+                "mode": "backtest",
+                "status": "CLOSED",
+            },
+            "margin": {
+                "borrowed_assets": {"USDT": 1.0},
+            },
+        }
+
+        self.now = 0.0
+        self.inv.run(st)
+        self.assertEqual(self._count("I13"), 0)
+
+        self.now = 11.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(payloads[-1]["severity"], "WARN")
+
+        self.now = 31.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(payloads[-1]["severity"], "ERROR")
+
+    def test_i13_exchange_truth_isolated_uses_symbol(self):
+        self.inv.ENV["TRADE_MODE"] = "margin"
+        self.inv.ENV["I13_GRACE_SEC"] = 10
+        self.inv.ENV["I13_EXCHANGE_CHECK"] = True
+        self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
+        self.inv.ENV["MARGIN_ISOLATED"] = True
+        self.inv.ENV["SYMBOL"] = "BTCUSDC"
+
+        def exchange_snapshot(symbol, is_isolated):
+            self.assertEqual(symbol, "BTCUSDC")
+            self.assertTrue(is_isolated)
+            return {"has_debt": True, "details": {"BTCUSDC:USDC": 1.0}, "endpoint": "mock"}
+
+        cfg = self.inv.configure
+        sig = inspect.signature(cfg)
+        kwargs = dict(self.configure_kwargs)
+        kwargs["i13_exchange_check_fn"] = exchange_snapshot
+        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        cfg(**kwargs)
+
+        st = {
+            "position": {
+                "mode": "backtest",
+                "status": "CLOSED",
+            },
+            "margin": {
+                "borrowed_assets": {"USDC": 1.0},
+            },
+        }
+
+        self.now = 0.0
+        self.inv.run(st)
+        self.assertEqual(self._count("I13"), 0)
+
+        self.now = 11.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(payloads[-1]["severity"], "WARN")
 
 
 if __name__ == "__main__":

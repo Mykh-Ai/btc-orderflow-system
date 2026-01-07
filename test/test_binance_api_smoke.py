@@ -169,6 +169,73 @@ class TestBinanceApiSmoke(unittest.TestCase):
             self.assertTrue(any(c.args and c.args[0] == "BINANCE_PUBLIC_OK" for c in log_event.call_args_list))
             self.assertTrue(any(c.args and c.args[0] == "BINANCE_SIGNED_OK" for c in log_event.call_args_list))
 
+    def test_margin_debt_snapshot_spot_mode_guard(self):
+        binance_api.configure(_spot_env())
+        with self.assertRaises(RuntimeError):
+            binance_api.get_margin_debt_snapshot()
+
+    def test_margin_debt_snapshot_isolated_defaults_env_symbol(self):
+        env = _margin_env()
+        env["MARGIN_ISOLATED"] = "TRUE"
+        env["SYMBOL"] = "BTCUSDC"
+        binance_api.configure(env)
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = {"assets": []}
+            _ = binance_api.get_margin_debt_snapshot()
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual(method, "GET")
+            self.assertEqual(endpoint, "/sapi/v1/margin/isolated/account")
+            self.assertEqual(params.get("symbols"), "BTCUSDC")
+
+    def test_margin_debt_snapshot_isolated_requires_symbol(self):
+        env = _margin_env()
+        env["MARGIN_ISOLATED"] = "TRUE"
+        env["SYMBOL"] = ""
+        binance_api.configure(env)
+        with self.assertRaises(RuntimeError):
+            binance_api.get_margin_debt_snapshot()
+
+    def test_margin_debt_snapshot_isolated_asset_keys(self):
+        env = _margin_env()
+        env["MARGIN_ISOLATED"] = "TRUE"
+        env["SYMBOL"] = "BTCUSDC"
+        binance_api.configure(env)
+        payload = {
+            "assets": [
+                {
+                    "symbol": "BTCUSDC",
+                    "baseAsset": {"asset": "BTC", "borrowed": "0.1", "interest": "0.0"},
+                    "quoteAsset": {"asset": "USDC", "borrowed": "0", "interest": "0"},
+                }
+            ]
+        }
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = payload
+            snapshot = binance_api.get_margin_debt_snapshot()
+        self.assertIn("BTCUSDC:BTC", snapshot["details"])
+        self.assertNotIn("BTCUSDC:baseAsset", snapshot["details"])
+
+    def test_margin_debt_snapshot_epsilon_filters_dust(self):
+        env = _margin_env()
+        env["MARGIN_ISOLATED"] = "TRUE"
+        env["SYMBOL"] = "BTCUSDC"
+        env["MARGIN_DEBT_EPS"] = 1e-12
+        binance_api.configure(env)
+        payload = {
+            "assets": [
+                {
+                    "symbol": "BTCUSDC",
+                    "baseAsset": {"asset": "BTC", "borrowed": "1e-18", "interest": "0"},
+                    "quoteAsset": {"asset": "USDC", "borrowed": "0", "interest": "0"},
+                }
+            ]
+        }
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = payload
+            snapshot = binance_api.get_margin_debt_snapshot()
+        self.assertFalse(snapshot["has_debt"])
+        self.assertEqual(snapshot["details"], {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
