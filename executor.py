@@ -174,6 +174,7 @@ ENV: Dict[str, Any] = {
 "SL_LIMIT_GAP_TICKS": _get_int("SL_LIMIT_GAP_TICKS", 2),  # gap ticks for STOP_LOSS_LIMIT limit price vs stopPrice
 # trailing source: "AGG" (aggregated.csv) or "BINANCE" (bookTicker mid)
 "TRAIL_SOURCE": os.getenv("TRAIL_SOURCE", "AGG").strip().upper(),
+"TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
 # swing detection on ClosePrice from aggregated.csv
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
@@ -183,7 +184,17 @@ ENV: Dict[str, Any] = {
 "INVAR_EVERY_SEC": _get_int("INVAR_EVERY_SEC", 20),
 "INVAR_THROTTLE_SEC": _get_int("INVAR_THROTTLE_SEC", 600),
 "INVAR_GRACE_SEC": _get_int("INVAR_GRACE_SEC", 15),
+"INVAR_FEED_STALE_SEC": _get_int("INVAR_FEED_STALE_SEC", 180),
+"INVAR_KILL_ON_DEBT": _get_bool("INVAR_KILL_ON_DEBT", False),
 "INVAR_PERSIST": _get_bool("INVAR_PERSIST", True),
+"I13_GRACE_SEC": _get_int("I13_GRACE_SEC", 300),
+"I13_ESCALATE_SEC": _get_int("I13_ESCALATE_SEC", 180),
+"I13_EXCHANGE_CHECK": _get_bool("I13_EXCHANGE_CHECK", True),
+"I13_EXCHANGE_MIN_INTERVAL_SEC": _get_int("I13_EXCHANGE_MIN_INTERVAL_SEC", 60),
+"I13_CLEAR_STATE_ON_EXCHANGE_CLEAR": _get_bool("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", False),
+"MARGIN_DEBT_EPS": _get_float("MARGIN_DEBT_EPS", 0.0),
+"ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
+"SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 }
 
 
