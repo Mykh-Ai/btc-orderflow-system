@@ -35,6 +35,8 @@ def _margin_env():
     e["MARGIN_ISOLATED"] = "TRUE"
     e["MARGIN_SIDE_EFFECT"] = "AUTO_BORROW_REPAY"
     e["MARGIN_AUTO_REPAY_AT_CANCEL"] = True
+    e["MARGIN_BORROW_MODE"] = "auto"
+
     return e
 
 
