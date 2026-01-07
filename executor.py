@@ -193,6 +193,7 @@ ENV: Dict[str, Any] = {
 "I13_EXCHANGE_MIN_INTERVAL_SEC": _get_int("I13_EXCHANGE_MIN_INTERVAL_SEC", 60),
 "I13_CLEAR_STATE_ON_EXCHANGE_CLEAR": _get_bool("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", False),
 "MARGIN_DEBT_EPS": _get_float("MARGIN_DEBT_EPS", 0.0),
+"PREFLIGHT_EXPECT_QUOTE": os.getenv("PREFLIGHT_EXPECT_QUOTE", "").strip().upper(),
 "ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 }
@@ -206,6 +207,43 @@ def now_utc() -> datetime:
 
 def iso_utc(dt: Optional[datetime] = None) -> str:
     return (dt or now_utc()).isoformat()
+
+def _as_env_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if val is None:
+        return False
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def _preflight_margin_cross_usdc() -> None:
+    trade_mode = str(ENV.get("TRADE_MODE", "") or "").strip().lower()
+    is_isolated = _as_env_bool(ENV.get("MARGIN_ISOLATED"))
+    symbol = str(ENV.get("SYMBOL", "") or "").strip().upper()
+    expect_quote = str(ENV.get("PREFLIGHT_EXPECT_QUOTE", "") or "").strip().upper()
+
+    issues = []
+    if trade_mode != "margin":
+        issues.append("TRADE_MODE must be 'margin'")
+    if is_isolated:
+        issues.append("MARGIN_ISOLATED must be FALSE (cross)")
+    if expect_quote and not symbol.endswith(expect_quote):
+        issues.append(f"SYMBOL must end with {expect_quote} (quote asset)")
+
+    if not issues:
+        return
+
+    details = {
+        "issues": issues,
+        "trade_mode": trade_mode,
+        "margin_isolated": ENV.get("MARGIN_ISOLATED"),
+        "symbol": symbol,
+        "expect_quote": expect_quote,
+    }
+    log_event("PREFLIGHT_WARN", **details)
+    with suppress(Exception):
+        send_webhook({"event": "PREFLIGHT_WARN", **details})
 
 # Wire runtime dependencies for event_dedup (keeps call sites unchanged).
 event_dedup.configure(ENV, iso_utc=iso_utc, save_state=save_state, log_event=log_event)
@@ -1435,6 +1473,8 @@ def main() -> None:
     )
 
     log_event("BOOT", dry=ENV["DRY"], symbol=ENV["SYMBOL"])
+    with suppress(Exception):
+        _preflight_margin_cross_usdc()
     if not ENV["DRY"]:
         with suppress(Exception):
             sync_from_binance(st)
