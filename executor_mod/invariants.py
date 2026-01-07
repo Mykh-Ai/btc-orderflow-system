@@ -657,6 +657,142 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     )
 
 
+def _is_margin_mode() -> bool:
+    return str(ENV.get("TRADE_MODE", "") or "").lower() == "margin"
+
+
+def _check_i11_margin_config_sanity(st: Dict[str, Any]) -> None:
+    if not _is_margin_mode():
+        return
+
+    borrow_mode = str(ENV.get("MARGIN_BORROW_MODE", "") or "")
+    side_effect = str(ENV.get("MARGIN_SIDE_EFFECT", "") or "")
+
+    if borrow_mode == "manual" and side_effect != "NO_SIDE_EFFECT":
+        _emit(
+            st,
+            "I11",
+            "WARN",
+            "Manual margin mode must use NO_SIDE_EFFECT",
+            {"borrow_mode": borrow_mode, "side_effect": side_effect},
+        )
+        return
+
+    if borrow_mode == "auto" and side_effect != "AUTO_BORROW_REPAY":
+        _emit(
+            st,
+            "I11",
+            "WARN",
+            "Auto margin mode must use AUTO_BORROW_REPAY",
+            {"borrow_mode": borrow_mode, "side_effect": side_effect},
+        )
+
+
+def _collect_trade_keys(val: Any) -> Tuple[str, ...]:
+    if val is None:
+        return ()
+    if isinstance(val, dict):
+        return tuple(str(k) for k in val.keys() if k is not None and str(k) != "")
+    if isinstance(val, (list, tuple, set)):
+        return tuple(str(k) for k in val if k is not None and str(k) != "")
+    if isinstance(val, str):
+        return (val,) if val else ()
+    return ()
+
+
+def _check_i12_trade_key_consistency(st: Dict[str, Any]) -> None:
+    if not _is_margin_mode():
+        return
+
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        return
+    status = str(pos.get("status", "") or "").upper()
+    if status not in ("OPEN", "OPEN_FILLED"):
+        return
+
+    margin = st.get("margin") or {}
+    if not isinstance(margin, dict):
+        margin = {}
+    active_trade_key = margin.get("active_trade_key")
+
+    rt = st.get("rt") or {}
+    if not isinstance(rt, dict):
+        rt = {}
+
+    keys = []
+    for hook_name in ("borrow_started", "borrow_done", "after_open_done"):
+        keys.extend(_collect_trade_keys(rt.get(hook_name)))
+
+    if not keys:
+        return
+
+    unique_keys = {k for k in keys if k}
+    active_key = str(active_trade_key) if active_trade_key not in (None, "") else ""
+    if len(unique_keys) > 1 or (unique_keys and (len(unique_keys) != 1 or active_key not in unique_keys)):
+        _emit(
+            st,
+            "I12",
+            "WARN",
+            "Trade key mismatch across margin hooks",
+            {"active_trade_key": active_trade_key, "hook_keys": sorted(unique_keys)},
+        )
+
+
+def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
+    if not _is_margin_mode():
+        return
+
+    pos = st.get("position") or {}
+    if not isinstance(pos, dict):
+        pos = {}
+    status = str(pos.get("status", "") or "").upper()
+    closed = bool(st.get("last_closed")) or status not in ("OPEN", "OPEN_FILLED") or _as_float(
+        pos.get("closed_s"), 0.0
+    ) > 0
+    if not closed:
+        return
+
+    margin = st.get("margin") or {}
+    if not isinstance(margin, dict):
+        margin = {}
+
+    borrowed_assets = margin.get("borrowed_assets") or {}
+    if not isinstance(borrowed_assets, dict):
+        borrowed_assets = {}
+    borrowed_by_trade = margin.get("borrowed_by_trade") or {}
+    if not isinstance(borrowed_by_trade, dict):
+        borrowed_by_trade = {}
+
+    has_debt = any(_as_float(v, 0.0) > 0 for v in borrowed_assets.values()) or bool(borrowed_by_trade)
+    if not has_debt:
+        return
+
+    active_trade_key = margin.get("active_trade_key")
+    rt = st.get("rt") or {}
+    if not isinstance(rt, dict):
+        rt = {}
+    repay_done = rt.get("repay_done") or {}
+    if not isinstance(repay_done, dict):
+        repay_done = {}
+
+    active_key = str(active_trade_key) if active_trade_key not in (None, "") else ""
+    if active_key and repay_done.get(active_key):
+        return
+
+    _emit(
+        st,
+        "I13",
+        "WARN",
+        "Borrow tracking still present after close",
+        {
+            "active_trade_key": active_trade_key,
+            "borrowed_assets": borrowed_assets,
+            "borrowed_by_trade_keys": list(borrowed_by_trade.keys()),
+        },
+    )
+
+
 def run(st: Dict[str, Any]) -> None:
     """
     Run detector-only invariants against current state.
@@ -676,6 +812,9 @@ def run(st: Dict[str, Any]) -> None:
         _check_i8_state_shape_live_position(st)
         _check_i9_trail_active_sl_missing(st)
         _check_i10_repeated_trail_stop_errors(st)
+        _check_i11_margin_config_sanity(st)
+        _check_i12_trade_key_consistency(st)
+        _check_i13_no_debt_after_close(st)
     except Exception:
         # Never break executor on invariant checks
         return
