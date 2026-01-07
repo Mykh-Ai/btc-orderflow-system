@@ -141,16 +141,21 @@ class TestInvariantsMargin(unittest.TestCase):
         self.inv.run(st)
         self.assertEqual(self._count("I12"), 1)
 
-    def test_i13_exchange_truth_cross_clears_when_no_debt(self):
+    def test_i13_cross_debt_true_warn_then_error_once(self):
         self.inv.ENV["TRADE_MODE"] = "margin"
-        self.inv.ENV["I13_GRACE_SEC"] = 10
+        self.inv.ENV["I13_GRACE_SEC"] = 300
+        self.inv.ENV["I13_ESCALATE_SEC"] = 180
+        self.inv.ENV["I13_EXCHANGE_MIN_INTERVAL_SEC"] = 60
         self.inv.ENV["I13_EXCHANGE_CHECK"] = True
         self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
 
+        calls = []
+
         def exchange_snapshot(symbol, is_isolated):
+            calls.append((symbol, is_isolated))
             self.assertIsNone(symbol)
             self.assertFalse(is_isolated)
-            return {"has_debt": False, "details": {}, "endpoint": "mock"}
+            return {"has_debt": True, "details": {"debts": [{"asset": "USDC"}]}, "endpoint": "mock"}
 
         cfg = self.inv.configure
         sig = inspect.signature(cfg)
@@ -164,76 +169,94 @@ class TestInvariantsMargin(unittest.TestCase):
                 "mode": "backtest",
                 "status": "CLOSED",
             },
-            "margin": {
-                "borrowed_assets": {"USDT": 1.0},
+            "last_closed": True,
+        }
+
+        self.now = 0.0
+        self.inv.run(st)
+        self.assertEqual(self._count("I13"), 0)
+        self.assertEqual(calls, [])
+
+        self.now = 299.0
+        self.inv.run(st)
+        self.assertEqual(self._count("I13"), 0)
+        self.assertEqual(calls, [])
+
+        self.now = 300.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[-1]["severity"], "WARN")
+
+        self.now = 360.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[-1]["severity"], "WARN")
+
+        self.now = 480.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(payloads[-1]["severity"], "ERROR")
+
+        self.now = 540.0
+        self.inv.run(st)
+        payloads = self._payloads("I13")
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(payloads[-1]["severity"], "ERROR")
+
+    def test_i13_cross_debt_false_clears_runtime_no_webhook(self):
+        self.inv.ENV["TRADE_MODE"] = "margin"
+        self.inv.ENV["I13_GRACE_SEC"] = 300
+        self.inv.ENV["I13_EXCHANGE_MIN_INTERVAL_SEC"] = 60
+        self.inv.ENV["I13_EXCHANGE_CHECK"] = True
+        self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
+
+        def exchange_snapshot(symbol, is_isolated):
+            self.assertIsNone(symbol)
+            self.assertFalse(is_isolated)
+            return {"has_debt": False, "details": {"debts": []}, "endpoint": "mock"}
+
+        cfg = self.inv.configure
+        sig = inspect.signature(cfg)
+        kwargs = dict(self.configure_kwargs)
+        kwargs["i13_exchange_check_fn"] = exchange_snapshot
+        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        cfg(**kwargs)
+
+        st = {
+            "position": {
+                "mode": "backtest",
+                "status": "CLOSED",
             },
+            "last_closed": True,
         }
 
         self.now = 0.0
         self.inv.run(st)
         self.assertEqual(self._count("I13"), 0)
 
-        self.now = 11.0
+        self.now = 300.0
         self.inv.run(st)
         self.assertEqual(self._count("I13"), 0)
         self.assertNotIn("I13", st.get("inv_runtime", {}))
 
-    def test_i13_exchange_truth_cross_warns_and_errors(self):
+    def test_i13_isolated_calls_with_symbol(self):
         self.inv.ENV["TRADE_MODE"] = "margin"
-        self.inv.ENV["I13_GRACE_SEC"] = 10
-        self.inv.ENV["I13_ESCALATE_SEC"] = 20
-        self.inv.ENV["I13_EXCHANGE_CHECK"] = True
-        self.inv.ENV["I13_EXCHANGE_MIN_INTERVAL_SEC"] = 0
-        self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
-
-        def exchange_snapshot(symbol, is_isolated):
-            self.assertIsNone(symbol)
-            self.assertFalse(is_isolated)
-            return {"has_debt": True, "details": {"USDC": 1.0}, "endpoint": "mock"}
-
-        cfg = self.inv.configure
-        sig = inspect.signature(cfg)
-        kwargs = dict(self.configure_kwargs)
-        kwargs["i13_exchange_check_fn"] = exchange_snapshot
-        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-        cfg(**kwargs)
-
-        st = {
-            "position": {
-                "mode": "backtest",
-                "status": "CLOSED",
-            },
-            "margin": {
-                "borrowed_assets": {"USDT": 1.0},
-            },
-        }
-
-        self.now = 0.0
-        self.inv.run(st)
-        self.assertEqual(self._count("I13"), 0)
-
-        self.now = 11.0
-        self.inv.run(st)
-        payloads = self._payloads("I13")
-        self.assertEqual(payloads[-1]["severity"], "WARN")
-
-        self.now = 31.0
-        self.inv.run(st)
-        payloads = self._payloads("I13")
-        self.assertEqual(payloads[-1]["severity"], "ERROR")
-
-    def test_i13_exchange_truth_isolated_uses_symbol(self):
-        self.inv.ENV["TRADE_MODE"] = "margin"
-        self.inv.ENV["I13_GRACE_SEC"] = 10
+        self.inv.ENV["I13_GRACE_SEC"] = 300
         self.inv.ENV["I13_EXCHANGE_CHECK"] = True
         self.inv.ENV["INVAR_THROTTLE_SEC"] = 0
         self.inv.ENV["MARGIN_ISOLATED"] = True
         self.inv.ENV["SYMBOL"] = "BTCUSDC"
 
+        calls = []
+
         def exchange_snapshot(symbol, is_isolated):
+            calls.append((symbol, is_isolated))
             self.assertEqual(symbol, "BTCUSDC")
             self.assertTrue(is_isolated)
-            return {"has_debt": True, "details": {"BTCUSDC:USDC": 1.0}, "endpoint": "mock"}
+            return {"has_debt": False, "details": {"debts": []}, "endpoint": "mock"}
 
         cfg = self.inv.configure
         sig = inspect.signature(cfg)
@@ -247,19 +270,16 @@ class TestInvariantsMargin(unittest.TestCase):
                 "mode": "backtest",
                 "status": "CLOSED",
             },
-            "margin": {
-                "borrowed_assets": {"USDC": 1.0},
-            },
+            "last_closed": True,
         }
 
         self.now = 0.0
         self.inv.run(st)
-        self.assertEqual(self._count("I13"), 0)
+        self.assertEqual(calls, [])
 
-        self.now = 11.0
+        self.now = 300.0
         self.inv.run(st)
-        payloads = self._payloads("I13")
-        self.assertEqual(payloads[-1]["severity"], "WARN")
+        self.assertEqual(calls, [("BTCUSDC", True)])
 
 
 if __name__ == "__main__":

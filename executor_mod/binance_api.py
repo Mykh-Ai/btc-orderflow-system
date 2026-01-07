@@ -11,6 +11,7 @@ Design:
 from __future__ import annotations
 
 import time
+from contextlib import suppress
 import math
 import hmac
 import hashlib
@@ -318,86 +319,102 @@ def margin_account(*, is_isolated: Optional[bool] = None, symbols: Optional[str]
     return _binance_signed_request("GET", "/sapi/v1/margin/account", {})
 
 
-def _as_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
+def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optional[bool] = None) -> Dict[str, Any]:
+    """Exchange-truth debt snapshot for I13.
 
+    Returns:
+      {"has_debt": bool, "details": dict, "endpoint": str}
 
-def _debt_eps() -> float:
-    try:
-        return float(_env().get("MARGIN_DEBT_EPS", 1e-12))
-    except Exception:
-        return 1e-12
-
-
-def get_margin_debt_snapshot(
-    symbol: Optional[str] = None,
-    is_isolated: Optional[bool] = None,
-) -> Dict[str, Any]:
+    Notes:
+    - Cross uses /sapi/v1/margin/account
+    - Isolated uses /sapi/v1/margin/isolated/account?symbols=SYMBOL
+    - We treat (borrowed + interest) > 0 as "debt".
+    """
     env = _env()
     if (env.get("TRADE_MODE") or "").lower() != "margin":
         raise RuntimeError("get_margin_debt_snapshot() called while TRADE_MODE is not 'margin'")
-    sym = symbol or env.get("SYMBOL")
-    iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
-    endpoint = "/sapi/v1/margin/account"
-    params: Dict[str, Any] = {}
-    if iso == "TRUE":
-        if not sym:
-            raise RuntimeError("get_margin_debt_snapshot(): isolated requires symbol")
-        endpoint = "/sapi/v1/margin/isolated/account"
-        params = {"symbols": sym}
-    data = _binance_signed_request("GET", endpoint, params)
 
-    details: Dict[str, Any] = {}
-    has_debt = False
-    eps = _debt_eps()
-    if endpoint == "/sapi/v1/margin/isolated/account":
-        assets = []
-        if isinstance(data, dict):
-            assets = data.get("assets", []) or []
-        elif isinstance(data, list):
-            assets = data
-        if isinstance(assets, list):
-            for item in assets:
-                if not isinstance(item, dict):
-                    continue
-                symbol_key = item.get("symbol") or sym or "unknown"
-                for side in ("baseAsset", "quoteAsset"):
-                    asset_info = item.get(side)
-                    if not isinstance(asset_info, dict):
-                        continue
-                    asset_name = asset_info.get("asset") or side
-                    borrowed = _as_float(asset_info.get("borrowed"), 0.0)
-                    interest = _as_float(asset_info.get("interest"), 0.0)
-                    debt = borrowed + interest
-                    if debt > eps:
-                        details[f"{symbol_key}:{asset_name}"] = debt
-                        has_debt = True
+    if is_isolated is None:
+        iso_bool = (_tf(env.get("MARGIN_ISOLATED", "FALSE")) == "TRUE")
+    elif isinstance(is_isolated, bool):
+        iso_bool = is_isolated
     else:
-        assets = []
-        if isinstance(data, dict):
-            assets = data.get("userAssets", []) or []
-        elif isinstance(data, list):
-            assets = data
-        if isinstance(assets, list):
-            for item in assets:
-                if not isinstance(item, dict):
-                    continue
-                asset = item.get("asset") or "unknown"
-                borrowed = _as_float(item.get("borrowed"), 0.0)
-                interest = _as_float(item.get("interest"), 0.0)
-                debt = borrowed + interest
-                if debt > eps:
-                    details[asset] = debt
-                    has_debt = True
+        # tolerate string/int inputs defensively
+        iso_bool = (_tf(is_isolated) == "TRUE")
+    sym = symbol if symbol is not None else (env.get("SYMBOL") if iso_bool else None)
+    if iso_bool and not sym:
+        raise RuntimeError("get_margin_debt_snapshot(): isolated requires symbol")
 
-    return {
-        "has_debt": has_debt,
-        "details": details,
-        "endpoint": endpoint,
+    endpoint = "/sapi/v1/margin/isolated/account" if iso_bool else "/sapi/v1/margin/account"
+
+    acc = margin_account(is_isolated=iso_bool, symbols=sym if iso_bool else None)
+
+    def _f(x: Any) -> float:
+        with suppress(Exception):
+            return float(x)
+        return 0.0
+
+    debts = []
+    total = 0.0
+    try:
+        eps = float(env.get("MARGIN_DEBT_EPS", 0.0))
+    except Exception:
+        eps = 0.0
+
+    if not iso_bool:
+        # Cross: acc["userAssets"] is a list of dicts with borrowed/interest.
+        uas = acc.get("userAssets", []) if isinstance(acc, dict) else []
+        if isinstance(uas, list):
+            for row in uas:
+                if not isinstance(row, dict):
+                    continue
+                asset = row.get("asset")
+                borrowed = _f(row.get("borrowed", 0.0))
+                interest = _f(row.get("interest", 0.0))
+                liab = borrowed + interest
+                if liab > eps:
+                    debts.append({"asset": asset, "borrowed": borrowed, "interest": interest, "liability": liab})
+                    total += liab
+    else:
+        # Isolated: acc["assets"] is list; each element has baseAsset/quoteAsset dicts.
+        if isinstance(acc, list):
+            assets = acc
+        elif isinstance(acc, dict):
+            assets = acc.get("assets", [])
+        else:
+            assets = []
+        if isinstance(assets, list):
+            for a in assets:
+                if not isinstance(a, dict):
+                    continue
+                for leg_name in ("baseAsset", "quoteAsset"):
+                    leg = a.get(leg_name)
+                    if not isinstance(leg, dict):
+                        continue
+                    asset = leg.get("asset")
+                    borrowed = _f(leg.get("borrowed", 0.0))
+                    interest = _f(leg.get("interest", 0.0))
+                    liab = borrowed + interest
+                    if liab > eps:
+                        debts.append(
+                            {
+                                "symbol": a.get("symbol") or sym,
+                                "asset": asset,
+                                "borrowed": borrowed,
+                                "interest": interest,
+                                "liability": liab,
+                            }
+                        )
+                        total += liab
+
+    details = {
+        "is_isolated": iso_bool,
+        "symbol": sym if iso_bool else None,
+        "params": {"symbols": sym} if iso_bool else {},
+        "debts": debts,
+        "total_liability": total,
     }
+    return {"has_debt": bool(debts), "details": details, "endpoint": endpoint}
 
 
 def margin_borrow(asset: str, amount: Any, *, is_isolated: Optional[bool] = None, symbol: Optional[str] = None) -> Dict[str, Any]:
