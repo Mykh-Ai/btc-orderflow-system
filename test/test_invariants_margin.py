@@ -80,8 +80,8 @@ class TestInvariantsMargin(unittest.TestCase):
                 "borrowed_assets": {"USDT": 1.0},
                 "borrowed_by_trade": {"t1": {"USDT": 1.0}},
             },
-            "rt": {
-                "borrow_done": {"t2": True},
+            "mg_runtime": {
+                "borrow_done": {"tA": True},
             },
         }
 
@@ -129,7 +129,7 @@ class TestInvariantsMargin(unittest.TestCase):
             "margin": {
                 "active_trade_key": "t1",
             },
-            "rt": {
+            "mg_runtime": {
                 "borrow_done": {"t2": True},
             },
         }
@@ -149,7 +149,7 @@ class TestInvariantsMargin(unittest.TestCase):
                 "active_trade_key": "t1",
                 "borrowed_assets": {"USDT": 1.0},
             },
-            "rt": {
+            "mg_runtime": {
                 "repay_done": {},
             },
         }
@@ -169,7 +169,7 @@ class TestInvariantsMargin(unittest.TestCase):
                 "active_trade_key": "t1",
                 "borrowed_assets": {"USDT": 1.0},
             },
-            "rt": {
+            "mg_runtime": {
                 "repay_done": {"t1": True},
             },
         }

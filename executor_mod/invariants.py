@@ -700,6 +700,20 @@ def _collect_trade_keys(val: Any) -> Tuple[str, ...]:
     return ()
 
 
+def _mg_rt(st: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Margin guard runtime bucket.
+    In production margin_guard writes into st["mg_runtime"].
+    Keep fallback to legacy st["rt"] for backward compatibility.
+    """
+    if not isinstance(st, dict):
+        return {}
+    rt = st.get("mg_runtime")
+    if not isinstance(rt, dict):
+        rt = st.get("rt")
+    return rt if isinstance(rt, dict) else {}
+
+
 def _check_i12_trade_key_consistency(st: Dict[str, Any]) -> None:
     if not _is_margin_mode():
         return
@@ -716,9 +730,7 @@ def _check_i12_trade_key_consistency(st: Dict[str, Any]) -> None:
         margin = {}
     active_trade_key = margin.get("active_trade_key")
 
-    rt = st.get("rt") or {}
-    if not isinstance(rt, dict):
-        rt = {}
+    rt = _mg_rt(st)
 
     keys = []
     for hook_name in ("borrow_started", "borrow_done", "after_open_done"):
@@ -769,9 +781,7 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         return
 
     active_trade_key = margin.get("active_trade_key")
-    rt = st.get("rt") or {}
-    if not isinstance(rt, dict):
-        rt = {}
+    rt = _mg_rt(st)
     repay_done = rt.get("repay_done") or {}
     if not isinstance(repay_done, dict):
         repay_done = {}
