@@ -99,11 +99,13 @@ def _feed_stale_sec() -> float:
         return 180.0
 
 
-def _i13_escalate_sec() -> float:
-    try:
-        return float(ENV.get("I13_ESCALATE_SEC", 180))
-    except Exception:
-        return 180.0
+def _persist_runtime(st: Dict[str, Any]) -> None:
+    if save_state is None:
+        return
+    if not _as_bool(ENV.get("INVAR_PERSIST", True), True):
+        return
+    with suppress(Exception):
+        save_state(st)
 
 
 def _i13_grace_sec() -> float:
@@ -113,32 +115,34 @@ def _i13_grace_sec() -> float:
         return 300.0
 
 
-def _i13_exchange_check_enabled() -> bool:
+def _i13_escalate_sec() -> float:
     try:
-        return _as_bool(ENV.get("I13_EXCHANGE_CHECK", True), True)
+        return float(ENV.get("I13_ESCALATE_SEC", 180))
     except Exception:
-        return True
+        return 180.0
 
 
-def _i13_exchange_min_interval_sec() -> float:
+def _i13_exchange_check_enabled() -> bool:
+    return _as_bool(ENV.get("I13_EXCHANGE_CHECK", True), True)
+
+
+def _i13_min_interval_sec() -> float:
     try:
         return float(ENV.get("I13_EXCHANGE_MIN_INTERVAL_SEC", 60))
     except Exception:
         return 60.0
 
 
+def _i13_kill_on_debt() -> bool:
+    return _as_bool(ENV.get("INVAR_KILL_ON_DEBT", False), False)
+
+
 def _i13_clear_state_on_exchange_clear() -> bool:
-    try:
-        return _as_bool(ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", False), False)
-    except Exception:
-        return False
+    return _as_bool(ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", False), False)
 
 
-def _invar_kill_on_debt() -> bool:
-    try:
-        return _as_bool(ENV.get("INVAR_KILL_ON_DEBT", False), False)
-    except Exception:
-        return False
+def _i13_is_isolated() -> bool:
+    return _as_bool(ENV.get("MARGIN_ISOLATED", False), False)
 
 
 def _tick_size() -> float:
@@ -759,24 +763,6 @@ def _mg_rt(st: Dict[str, Any]) -> Dict[str, Any]:
     return rt if isinstance(rt, dict) else {}
 
 
-def _i13_exchange_snapshot(symbol: Optional[str], is_isolated: Optional[bool]) -> Tuple[Optional[bool], Dict[str, Any]]:
-    snapshot: Optional[Dict[str, Any]] = None
-    if _i13_exchange_check_fn is not None:
-        with suppress(Exception):
-            snapshot = _i13_exchange_check_fn(symbol, is_isolated)
-    else:
-        with suppress(Exception):
-            from executor_mod import binance_api
-
-            snapshot = binance_api.get_margin_debt_snapshot(symbol=symbol, is_isolated=is_isolated)
-    if not isinstance(snapshot, dict):
-        return None, {}
-    has_debt = snapshot.get("has_debt")
-    if isinstance(has_debt, bool):
-        return has_debt, snapshot
-    return None, snapshot
-
-
 def _check_i12_trade_key_consistency(st: Dict[str, Any]) -> None:
     if not _is_margin_mode():
         return
@@ -817,204 +803,211 @@ def _check_i12_trade_key_consistency(st: Dict[str, Any]) -> None:
 def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     if not _is_margin_mode():
         return
-
-    changed = False
-
     pos = st.get("position") or {}
     if not isinstance(pos, dict):
         pos = {}
     status = str(pos.get("status", "") or "").upper()
-    closed = bool(st.get("last_closed")) or status not in ("OPEN", "OPEN_FILLED") or _as_float(
-        pos.get("closed_s"), 0.0
-    ) > 0
-    if not closed:
-        return
-
-    margin = st.get("margin") or {}
-    if not isinstance(margin, dict):
-        margin = {}
-    borrowed_assets = margin.get("borrowed_assets") or {}
-    if not isinstance(borrowed_assets, dict):
-        borrowed_assets = {}
-    borrowed_by_trade = margin.get("borrowed_by_trade") or {}
-    if not isinstance(borrowed_by_trade, dict):
-        borrowed_by_trade = {}
-    has_debt = any(_as_float(v, 0.0) > 0 for v in borrowed_assets.values()) or bool(borrowed_by_trade)
-
-    inv_rt = st.get("inv_runtime") if isinstance(st, dict) else None
-    if not isinstance(inv_rt, dict):
-        inv_rt = {}
-    if not has_debt:
-        if "I13" in inv_rt:
-            inv_rt.pop("I13", None)
-            st["inv_runtime"] = inv_rt
-            _persist_i13_runtime(st, True)
-        return
-    entry = inv_rt.get("I13")
-    if not isinstance(entry, dict):
-        entry = {}
-
-    nowv = float(now_s()) if now_s is not None else 0.0
-    close_seen_s = entry.get("close_seen_s")
-    if close_seen_s is None:
-        close_seen_s = nowv
-        entry["close_seen_s"] = close_seen_s
-        changed = True
-
     closed_s = _as_float(pos.get("closed_s"), 0.0)
-    symbol = str(ENV.get("SYMBOL", "") or "")
-    episode_id = f"{symbol}:{closed_s}" if closed_s > 0 else f"{symbol}:{close_seen_s}"
-    if entry.get("episode_id") != episode_id:
-        entry = {
+    closed = bool(st.get("last_closed")) or status not in ("OPEN", "OPEN_FILLED") or closed_s > 0
+
+    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
+    if not isinstance(inv_runtime, dict):
+        inv_runtime = {}
+    rt = inv_runtime.get("I13")
+    if rt is not None and not isinstance(rt, dict):
+        rt = None
+
+    # If no close condition, clear any stale I13 episode (new position started).
+    if not closed:
+        if rt is not None:
+            inv_runtime.pop("I13", None)
+            st["inv_runtime"] = inv_runtime
+            _persist_runtime(st)
+        return
+
+    if now_s is None:
+        return
+    nowv = float(now_s())
+
+    sym = str(ENV.get("SYMBOL", "") or "")
+
+    # Episode id: prefer closed_s if present; else keep existing; else assign.
+    if closed_s > 0:
+        episode_id = f"{sym}:{closed_s}"
+    elif rt and rt.get("episode_id"):
+        episode_id = str(rt.get("episode_id"))
+    else:
+        episode_id = f"{sym}:{nowv}"
+
+    # Start or rotate episode
+    if rt is None or str(rt.get("episode_id", "")) != episode_id:
+        rt = {
             "episode_id": episode_id,
-            "close_seen_s": close_seen_s,
+            "close_seen_s": nowv,
             "warn_emitted": False,
             "error_emitted": False,
-            "next_exchange_check_s": close_seen_s + _i13_grace_sec(),
-            "last_exchange_check_s": None,
+            "next_exchange_check_s": nowv + _i13_grace_sec(),
+            "last_exchange_check_s": 0.0,
             "last_exchange_has_debt": None,
             "exchange_unavailable_emitted": False,
         }
-        changed = True
+        inv_runtime["I13"] = rt
+        st["inv_runtime"] = inv_runtime
+        _persist_runtime(st)
 
-    age = nowv - _as_float(entry.get("close_seen_s"), nowv)
-    if nowv < (_as_float(entry.get("close_seen_s"), nowv) + _i13_grace_sec()):
-        inv_rt["I13"] = entry
-        st["inv_runtime"] = inv_rt
-        _persist_i13_runtime(st, changed)
+    close_seen_s = _as_float(rt.get("close_seen_s"), nowv)
+    age_s = nowv - close_seen_s
+
+    # Grace window: no exchange calls.
+    if nowv < _as_float(rt.get("next_exchange_check_s"), 0.0):
         return
 
+    # Exchange check disabled: warn once, no escalation.
     if not _i13_exchange_check_enabled():
-        entry["last_exchange_has_debt"] = None
-        inv_rt["I13"] = entry
-        st["inv_runtime"] = inv_rt
-        _persist_i13_runtime(st, changed)
+        if not bool(rt.get("exchange_unavailable_emitted")):
+            _emit(
+                st,
+                "I13",
+                "WARN",
+                "I13 exchange check disabled",
+                {
+                    "symbol": sym,
+                    "trade_mode": ENV.get("TRADE_MODE"),
+                    "is_isolated": _i13_is_isolated(),
+                    "close_seen_s": close_seen_s,
+                    "age_s": age_s,
+                },
+            )
+            rt["exchange_unavailable_emitted"] = True
+            inv_runtime["I13"] = rt
+            st["inv_runtime"] = inv_runtime
+            _persist_runtime(st)
         return
 
-    next_check = _as_float(entry.get("next_exchange_check_s"), 0.0)
-    if nowv < next_check:
-        inv_rt["I13"] = entry
-        st["inv_runtime"] = inv_rt
-        _persist_i13_runtime(st, changed)
+    # Rate-limit exchange checks
+    if nowv < _as_float(rt.get("next_exchange_check_s"), 0.0):
         return
 
-    is_isolated = _as_bool(ENV.get("MARGIN_ISOLATED", False), False)
-    check_symbol = symbol if is_isolated else None
-    exchange_has_debt, exchange_snapshot = _i13_exchange_snapshot(check_symbol, is_isolated)
-    entry["last_exchange_check_s"] = nowv
-    entry["next_exchange_check_s"] = nowv + _i13_exchange_min_interval_sec()
-    entry["last_exchange_has_debt"] = exchange_has_debt
-    changed = True
+    is_iso = _i13_is_isolated()
+    symbol_arg = sym if is_iso else None
 
-    if exchange_has_debt is None:
-        if not entry.get("exchange_unavailable_emitted"):
+    # Call snapshot provider: injected callback (tests) or binance_api.get_margin_debt_snapshot
+    if _i13_exchange_check_fn is None:
+        from executor_mod import binance_api as _bapi
+
+    try:
+        if _i13_exchange_check_fn is not None:
+            # Call positionally to support simple lambdas/mocks without kwarg names
+            snap = _i13_exchange_check_fn(symbol_arg, is_iso)
+        else:
+            snap = _bapi.get_margin_debt_snapshot(symbol=symbol_arg, is_isolated=is_iso)
+    except Exception as exc:
+        rt["last_exchange_check_s"] = nowv
+        rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
+        rt["last_exchange_has_debt"] = None
+        inv_runtime["I13"] = rt
+        st["inv_runtime"] = inv_runtime
+        _persist_runtime(st)
+        if not bool(rt.get("exchange_unavailable_emitted")):
             _emit(
                 st,
                 "I13",
                 "WARN",
                 "I13 exchange check unavailable",
-                {"symbol": symbol, "is_isolated": is_isolated, "exchange_snapshot": exchange_snapshot},
+                {
+                    "symbol": sym,
+                    "trade_mode": ENV.get("TRADE_MODE"),
+                    "is_isolated": is_iso,
+                    "close_seen_s": close_seen_s,
+                    "age_s": age_s,
+                    "error": str(exc),
+                },
             )
-            entry["exchange_unavailable_emitted"] = True
-            changed = True
-        inv_rt["I13"] = entry
-        st["inv_runtime"] = inv_rt
-        _persist_i13_runtime(st, changed)
+            rt["exchange_unavailable_emitted"] = True
+            inv_runtime["I13"] = rt
+            st["inv_runtime"] = inv_runtime
+            _persist_runtime(st)
         return
 
-    if exchange_has_debt is False:
-        if _i13_clear_state_on_exchange_clear() and isinstance(st.get("margin"), dict):
-            margin = st["margin"]
-            margin["borrowed_assets"] = {}
-            margin["borrowed_by_trade"] = {}
-            st["margin"] = margin
-        inv_rt.pop("I13", None)
-        st["inv_runtime"] = inv_rt
-        _persist_i13_runtime(st, True)
+    has_debt = bool(snap.get("has_debt"))
+    rt["last_exchange_check_s"] = nowv
+    rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
+    rt["last_exchange_has_debt"] = has_debt
+    inv_runtime["I13"] = rt
+    st["inv_runtime"] = inv_runtime
+    _persist_runtime(st)
+
+    # Exchange says "clear" -> finish episode, optional local state clear
+    if not has_debt:
+        if _i13_clear_state_on_exchange_clear():
+            margin = st.get("margin")
+            if isinstance(margin, dict):
+                with suppress(Exception):
+                    margin.pop("borrowed_assets", None)
+                    margin.pop("borrowed_by_trade", None)
+                st["margin"] = margin
+        inv_runtime.pop("I13", None)
+        st["inv_runtime"] = inv_runtime
+        _persist_runtime(st)
         return
 
-    if not entry.get("warn_emitted"):
+    # Exchange says debt exists
+    if not bool(rt.get("warn_emitted")):
         _emit(
             st,
             "I13",
             "WARN",
             "Margin debt still present after close (exchange-truth)",
             {
-                "symbol": symbol,
-                "is_isolated": is_isolated,
-                "exchange_snapshot": exchange_snapshot,
-                "close_seen_s": entry.get("close_seen_s"),
-                "age_s": age,
+                "symbol": sym,
+                "trade_mode": ENV.get("TRADE_MODE"),
+                "is_isolated": is_iso,
+                "exchange_endpoint": snap.get("endpoint"),
+                "exchange_details": snap.get("details"),
+                "close_seen_s": close_seen_s,
+                "age_s": age_s,
             },
         )
-        entry["warn_emitted"] = True
-        changed = True
+        rt["warn_emitted"] = True
+        inv_runtime["I13"] = rt
+        st["inv_runtime"] = inv_runtime
+        _persist_runtime(st)
 
-    if age >= (_i13_grace_sec() + _i13_escalate_sec()) and not entry.get("error_emitted"):
+    if (age_s >= (_i13_grace_sec() + _i13_escalate_sec())) and not bool(rt.get("error_emitted")):
         _emit(
             st,
             "I13",
             "ERROR",
             "Margin debt stuck after close (exchange-truth escalated)",
             {
-                "symbol": symbol,
-                "is_isolated": is_isolated,
-                "exchange_snapshot": exchange_snapshot,
-                "close_seen_s": entry.get("close_seen_s"),
-                "age_s": age,
+                "symbol": sym,
+                "trade_mode": ENV.get("TRADE_MODE"),
+                "is_isolated": is_iso,
+                "exchange_endpoint": snap.get("endpoint"),
+                "exchange_details": snap.get("details"),
+                "close_seen_s": close_seen_s,
+                "age_s": age_s,
             },
         )
-        entry["error_emitted"] = True
-        changed = True
-        if _invar_kill_on_debt() and isinstance(st, dict):
+        rt["error_emitted"] = True
+        inv_runtime["I13"] = rt
+        st["inv_runtime"] = inv_runtime
+        if _i13_kill_on_debt() and isinstance(st, dict):
             halt = st.get("halt")
             if not isinstance(halt, dict):
                 halt = {}
-            if "reason" not in halt:
-                halt["reason"] = "I13_DEBT_STUCK"
+            # backward-compatible halt shape
+            halt.setdefault("reason", "I13_MARGIN_DEBT_STUCK")
             reasons = halt.get("reasons")
             if not isinstance(reasons, list):
                 reasons = []
-            if "I13_DEBT_STUCK" not in reasons:
-                reasons.append("I13_DEBT_STUCK")
+            if "I13_MARGIN_DEBT_STUCK" not in reasons:
+                reasons.append("I13_MARGIN_DEBT_STUCK")
             halt["reasons"] = reasons
             halt["ts"] = nowv
-            halt["symbol"] = symbol
+            halt["symbol"] = sym
             st["halt"] = halt
-
-    inv_rt["I13"] = entry
-    st["inv_runtime"] = inv_rt
-    _persist_i13_runtime(st, changed)
-
-
-def _clear_i13_runtime(st: Dict[str, Any], active_key: Optional[str]) -> bool:
-    if not isinstance(st, dict):
-        return False
-    inv_rt = st.get("inv_runtime")
-    if not isinstance(inv_rt, dict):
-        return False
-    i13_rt = inv_rt.get("I13")
-    if not isinstance(i13_rt, dict):
-        return False
-    before = dict(i13_rt)
-    if active_key:
-        i13_rt.pop(active_key, None)
-    else:
-        i13_rt.clear()
-    inv_rt["I13"] = i13_rt
-    st["inv_runtime"] = inv_rt
-    return before != i13_rt
-
-
-def _persist_i13_runtime(st: Dict[str, Any], changed: bool) -> None:
-    if not changed:
-        return
-    if save_state is None:
-        return
-    if not _as_bool(ENV.get("INVAR_PERSIST", True), True):
-        return
-    with suppress(Exception):
-        save_state(st)
+        _persist_runtime(st)
 
 
 def run(st: Dict[str, Any]) -> None:
