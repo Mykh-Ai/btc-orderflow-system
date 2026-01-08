@@ -247,6 +247,7 @@ def _preflight_margin_cross_usdc() -> None:
 
 # Wire runtime dependencies for event_dedup (keeps call sites unchanged).
 event_dedup.configure(ENV, iso_utc=iso_utc, save_state=save_state, log_event=log_event)
+market_data.configure(ENV)
 
 def read_tail_lines(path: str, n: int) -> List[str]:
     """Read only the last N lines from a potentially large file.
