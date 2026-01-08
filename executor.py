@@ -196,6 +196,7 @@ ENV: Dict[str, Any] = {
 "PREFLIGHT_EXPECT_QUOTE": os.getenv("PREFLIGHT_EXPECT_QUOTE", "").strip().upper(),
 "ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
+"RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
 }
 
 
@@ -1308,6 +1309,26 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                 open_ids.add(int(o.get("orderId")))
         orders = pos.get("orders") or {}
         updated = False
+        recon = pos.setdefault("recon", {})
+        last_emit = recon.setdefault("last_emit", {})
+        throttle_sec = int(ENV.get("RECON_THROTTLE_SEC") or ENV.get("INVAR_THROTTLE_SEC", 600) or 600)
+        now_s = time.time()
+
+        def _should_emit(event_key: str) -> bool:
+            last_ts = float(last_emit.get(event_key) or 0.0)
+            if now_s - last_ts < throttle_sec:
+                return False
+            last_emit[event_key] = now_s
+            return True
+
+        def _emit(event: str, payload: Dict[str, Any], emit_key: str) -> None:
+            nonlocal updated
+            if not _should_emit(emit_key):
+                return
+            updated = True
+            log_event(event, **payload)
+            with suppress(Exception):
+                send_webhook(payload)
 
         for key in ("tp1", "tp2", "sl"):
             oid = orders.get(key)
@@ -1318,40 +1339,120 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
             if oid in open_ids:
                 continue
 
-            status = "UNKNOWN"
+            status = ""
             executed_qty = 0.0
-            order_missing = False
             try:
-                od = binance_api.check_order_status(ENV["SYMBOL"], oid)
-                status = str((od or {}).get("status", "")).upper() or "UNKNOWN"
+                od = binance_api.get_order(ENV["SYMBOL"], oid)
+                status = str((od or {}).get("status", "")).upper()
                 with suppress(Exception):
                     executed_qty = float((od or {}).get("executedQty") or 0.0)
             except Exception as e:
                 err = str(e)
                 err_l = err.lower()
-                # Binance often returns -2013 "Order does not exist."
-                if ("order does not exist" in err_l) or ("unknown order" in err_l) or ("-2013" in err_l):
-                    status = "NOT_FOUND"
-                    order_missing = True
-                else:
-                    status = f"ERROR:{err}"
 
-            if status == "FILLED":
-                if key == "tp1" and not pos.get("tp1_done"):
-                    pos["tp1_done"] = True
+                # Binance often returns -2013 "Order does not exist." / "Unknown order"
+                if ("-2013" in err_l) or ("order does not exist" in err_l) or ("unknown order" in err_l):
+                    orders.pop(key, None)
+                    recon.setdefault(f"{key}_missing_ts", iso_utc())
+                    recon[f"{key}_missing_reason"] = "NOT_FOUND"
                     updated = True
-                elif key == "tp2" and not pos.get("tp2_done"):
-                    pos["tp2_done"] = True
-                    updated = True
+                    _emit(
+                        "RECON_ORDER_MISSING",
+                        {
+                            "event": "RECON_ORDER_MISSING",
+                            "which": key,
+                            "order_id": oid,
+                            "status": "NOT_FOUND",
+                            "error": err,
+                            "symbol": ENV["SYMBOL"],
+                        },
+                        f"recon:{key}:{oid}:not_found",
+                    )
+                    continue
+
+                recon.setdefault(f"{key}_unknown_ts", iso_utc())
+                updated = True
+                _emit(
+                    "RECON_ORDER_UNKNOWN",
+                    {
+                        "event": "RECON_ORDER_UNKNOWN",
+                        "which": key,
+                        "order_id": oid,
+                        "error": err,
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
                 continue
 
-            if order_missing or (status in ("CANCELED", "EXPIRED", "REJECTED") and executed_qty == 0.0):
-                orders[key] = None
+            if status == "FILLED":
+                recon.setdefault(f"{key}_filled_seen_ts", iso_utc())
                 updated = True
-                log_event("RECON_EXIT_MISSING", which=key, old_order_id=oid, status=status, symbol=ENV["SYMBOL"])
-                # never let reconciliation crash because n8n/webhook is down
-                with suppress(Exception):
-                    send_webhook({"event": "RECON_EXIT_MISSING", "which": key, "old_order_id": oid, "status": status, "symbol": ENV["SYMBOL"]})
+                _emit(
+                    "RECON_ORDER_FILLED_SEEN",
+                    {
+                        "event": "RECON_ORDER_FILLED_SEEN",
+                        "which": key,
+                        "order_id": oid,
+                        "status": "FILLED",
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            if status in ("CANCELED", "EXPIRED", "REJECTED"):
+                orders.pop(key, None)
+                recon.setdefault(f"{key}_missing_ts", iso_utc())
+                recon[f"{key}_missing_reason"] = status
+                updated = True
+                _emit(
+                    "RECON_ORDER_MISSING",
+                    {
+                        "event": "RECON_ORDER_MISSING",
+                        "which": key,
+                        "order_id": oid,
+                        "status": status,
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            if not status:
+                recon.setdefault(f"{key}_unknown_ts", iso_utc())
+                updated = True
+                _emit(
+                    "RECON_ORDER_UNKNOWN",
+                    {
+                        "event": "RECON_ORDER_UNKNOWN",
+                        "which": key,
+                        "order_id": oid,
+                        "error": "status_missing",
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            # Not in open_orders, but exchange says it's still "active-ish"
+            # => visibility for operator, but no auto-repair.
+            recon.setdefault(f"{key}_not_in_open_active_ts", iso_utc())
+            recon[f"{key}_not_in_open_active_status"] = status
+            updated = True
+            _emit(
+                "RECON_EXIT_NOT_IN_OPEN_BUT_ACTIVE",
+                {
+                    "event": "RECON_EXIT_NOT_IN_OPEN_BUT_ACTIVE",
+                    "which": key,
+                    "order_id": oid,
+                    "status": status,
+                    "executedQty": executed_qty,
+                    "symbol": ENV["SYMBOL"],
+                },
+                f"recon:{key}:{oid}:active:{status}",
+            )
+            continue
 
         if updated:
             pos["orders"] = orders

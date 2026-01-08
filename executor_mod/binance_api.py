@@ -238,6 +238,10 @@ def check_order_status(symbol: str, order_id: int) -> Dict[str, Any]:
     return _binance_signed_request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
 
 
+def get_order(symbol: str, order_id: int) -> Dict[str, Any]:
+    return check_order_status(symbol, order_id)
+
+
 def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     env = _env()
     mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
