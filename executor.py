@@ -1300,8 +1300,62 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
             save_state(st)
         return
 
-    # We have tagged orders. If we already have a live position, keep it (but you can extend later).
+    # We have tagged orders. If we already have a live position, reconcile exits.
     if pos.get("mode") == "live" and pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED"):
+        open_ids = set()
+        for o in tagged:
+            with suppress(Exception):
+                open_ids.add(int(o.get("orderId")))
+        orders = pos.get("orders") or {}
+        updated = False
+
+        for key in ("tp1", "tp2", "sl"):
+            oid = orders.get(key)
+            if not oid:
+                continue
+            with suppress(Exception):
+                oid = int(oid)
+            if oid in open_ids:
+                continue
+
+            status = "UNKNOWN"
+            executed_qty = 0.0
+            order_missing = False
+            try:
+                od = binance_api.check_order_status(ENV["SYMBOL"], oid)
+                status = str((od or {}).get("status", "")).upper() or "UNKNOWN"
+                with suppress(Exception):
+                    executed_qty = float((od or {}).get("executedQty") or 0.0)
+            except Exception as e:
+                err = str(e)
+                err_l = err.lower()
+                # Binance often returns -2013 "Order does not exist."
+                if ("order does not exist" in err_l) or ("unknown order" in err_l) or ("-2013" in err_l):
+                    status = "NOT_FOUND"
+                    order_missing = True
+                else:
+                    status = f"ERROR:{err}"
+
+            if status == "FILLED":
+                if key == "tp1" and not pos.get("tp1_done"):
+                    pos["tp1_done"] = True
+                    updated = True
+                elif key == "tp2" and not pos.get("tp2_done"):
+                    pos["tp2_done"] = True
+                    updated = True
+                continue
+
+            if order_missing or (status in ("CANCELED", "EXPIRED", "REJECTED") and executed_qty == 0.0):
+                orders[key] = None
+                updated = True
+                log_event("RECON_EXIT_MISSING", which=key, old_order_id=oid, status=status, symbol=ENV["SYMBOL"])
+                # never let reconciliation crash because n8n/webhook is down
+                with suppress(Exception):
+                    send_webhook({"event": "RECON_EXIT_MISSING", "which": key, "old_order_id": oid, "status": status, "symbol": ENV["SYMBOL"]})
+
+        if updated:
+            pos["orders"] = orders
+            save_state(st)
         return
 
     # Rebuild a minimal position shell from open orders
