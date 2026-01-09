@@ -209,6 +209,120 @@ def now_utc() -> datetime:
 def iso_utc(dt: Optional[datetime] = None) -> str:
     return (dt or now_utc()).isoformat()
 
+def _split_symbol_guess(symbol: str) -> Tuple[str, str]:
+    """
+    Best-effort split like BTCUSDC -> (BTC, USDC).
+    Uses PREFLIGHT_EXPECT_QUOTE if set, otherwise common quote suffixes.
+    """
+    s = (symbol or "").strip().upper()
+    if not s:
+        return ("", "")
+    exp = (ENV.get("PREFLIGHT_EXPECT_QUOTE") or "").strip().upper()
+    if exp and s.endswith(exp) and len(s) > len(exp):
+        return (s[:-len(exp)], exp)
+    for q in ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"):
+        if s.endswith(q) and len(s) > len(q):
+            return (s[:-len(q)], q)
+    # fallback: unknown quote
+    return (s, "")
+
+def _as_f(x: Any, default: float = 0.0) -> float:
+    try:
+        if x is None:
+            return default
+        if isinstance(x, (int, float)):
+            return float(x)
+        xs = str(x).strip()
+        if xs == "":
+            return default
+        return float(xs)
+    except Exception:
+        return default
+
+def _exchange_position_exists(symbol: str) -> Optional[bool]:
+    """
+    Return:
+      True  -> exchange shows a non-zero base exposure OR margin borrowed/interest
+      False -> exchange shows clearly no exposure and no debt
+      None  -> cannot determine (missing API function / unexpected payload)
+    """
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    base, _quote = _split_symbol_guess(symbol)
+    if not base:
+        return None
+    eps_qty = max(float(ENV.get("MIN_QTY", 0.0) or 0.0), 0.0)
+    # for safety, treat tiny dust as "no position"
+    eps_qty = max(eps_qty, 1e-12)
+    debt_eps = float(ENV.get("MARGIN_DEBT_EPS") or 0.0)
+
+    def _asset_has_exposure_margin(a: Dict[str, Any]) -> bool:
+        # Binance margin payload often contains: free, locked, borrowed, interest, netAsset
+        free = _as_f(a.get("free"), 0.0)
+        locked = _as_f(a.get("locked"), 0.0)
+        borrowed = _as_f(a.get("borrowed"), 0.0)
+        interest = _as_f(a.get("interest"), 0.0)
+        net = _as_f(a.get("netAsset"), 0.0)
+        if abs(net) > eps_qty:
+            return True
+        if (free + locked) > eps_qty:
+            return True
+        if (borrowed + interest) > max(debt_eps, 0.0):
+            return True
+        return False
+
+    def _asset_has_exposure_spot(a: Dict[str, Any]) -> bool:
+        free = _as_f(a.get("free"), 0.0)
+        locked = _as_f(a.get("locked"), 0.0)
+        return (free + locked) > eps_qty
+
+    # --- margin mode ---
+    if mode == "margin":
+        # try common function names in our wrapper
+        for fn_name in ("margin_account", "get_margin_account", "get_margin_account_info", "get_margin_account_details"):
+            fn = getattr(binance_api, fn_name, None)
+            if not callable(fn):
+                continue
+            try:
+                j = fn()
+                assets = None
+                if isinstance(j, dict):
+                    assets = j.get("userAssets") or j.get("assets") or j.get("balances")
+                if not isinstance(assets, list):
+                    return None
+                # check base exposure and/or debt on base
+                for a in assets:
+                    if not isinstance(a, dict):
+                        continue
+                    if str(a.get("asset", "")).upper() == base:
+                        return True if _asset_has_exposure_margin(a) else False
+                # base not present -> can't be sure
+                return None
+            except Exception:
+                return None
+        return None
+
+    # --- spot mode ---
+    for fn_name in ("account", "get_account", "spot_account", "get_spot_account"):
+        fn = getattr(binance_api, fn_name, None)
+        if not callable(fn):
+            continue
+        try:
+            j = fn()
+            bals = None
+            if isinstance(j, dict):
+                bals = j.get("balances") or j.get("userAssets")
+            if not isinstance(bals, list):
+                return None
+            for a in bals:
+                if not isinstance(a, dict):
+                    continue
+                if str(a.get("asset", "")).upper() == base:
+                    return True if _asset_has_exposure_spot(a) else False
+            return None
+        except Exception:
+            return None
+    return None
+
 def _as_env_bool(val: Any) -> bool:
     if isinstance(val, bool):
         return val
@@ -1272,6 +1386,60 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     pos = st.get("position") or {}
 
     if not tagged:
+        # EXCHANGE-TRUTH CLEANUP:
+        # If state says we are OPEN, but the exchange has:
+        #   - no open orders for this symbol
+        #   - no position / no margin exposure for base asset
+        # then clear state + alert, instead of keeping a ghost OPEN.
+        if ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR") and pos and pos.get("mode") == "live" and pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED"):
+            symbol = str(ENV.get("SYMBOL", "") or "").strip().upper()
+            if symbol:
+                # throttle the alert via pos["recon"]["last_emit"]
+                recon = (pos.setdefault("recon", {}) if isinstance(pos, dict) else {})
+                last_emit = recon.setdefault("last_emit", {}) if isinstance(recon, dict) else {}
+                throttle_sec = int(ENV.get("RECON_THROTTLE_SEC") or ENV.get("INVAR_THROTTLE_SEC", 600) or 600)
+                now_s = time.time()
+
+                def _should_emit(event_key: str) -> bool:
+                    try:
+                        last_ts = float(last_emit.get(event_key) or 0.0)
+                    except Exception:
+                        last_ts = 0.0
+                    if now_s - last_ts < throttle_sec:
+                        return False
+                    last_emit[event_key] = now_s
+                    return True
+
+                try:
+                    all_open = binance_api.open_orders(symbol)
+                except Exception as e:
+                    all_open = None
+                    # we don't clear state if we can't confirm exchange empty
+                    if _should_emit("pos_clear:open_orders_error"):
+                        log_event("POSITION_CLEAR_CHECK_FAILED", mode="live", symbol=symbol, error=str(e))
+                if isinstance(all_open, list) and len(all_open) == 0:
+                    ex_pos = _exchange_position_exists(symbol)
+                    if ex_pos is False:
+                        # confirmed empty -> clear state + alert
+                        if _should_emit("pos_clear:confirmed"):
+                            log_event("POSITION_CLEARED_BY_EXCHANGE", mode="live", symbol=symbol, prev_status=pos.get("status"))
+                            with suppress(Exception):
+                                send_webhook({"event": "POSITION_CLEARED_BY_EXCHANGE", "mode": "live", "symbol": symbol, "prev_status": pos.get("status")})
+                        if str(ENV.get("TRADE_MODE", "")).strip().lower() == "margin":
+                            margin = st.get("margin", {})
+                            if (margin.get("borrowed_assets") or margin.get("borrowed_by_trade")):
+                                tk = pos.get("trade_key") or margin.get("active_trade_key") or (st.get("last_closed") or {}).get("trade_key")
+                                with suppress(Exception):
+                                    margin_guard.on_after_position_closed(st, trade_key=tk)
+                        st["position"] = None
+                        st["lock_until"] = 0.0
+                        save_state(st)
+                        return
+                    elif ex_pos is None:
+                        # unknown -> do nothing, but leave trace (throttled)
+                        if _should_emit("pos_clear:unknown"):
+                            log_event("POSITION_CLEAR_EXCHANGE_UNKNOWN", mode="live", symbol=symbol)
+
         # IMPORTANT: OPEN_FILLED може легітимно мати 0 openOrders:
         # entry вже FILLED, а exits ще не поставились/впали і чекають retry.
         # Не можна чистити слот лише через openOrders==0, інакше "забудемо" реальну позицію.

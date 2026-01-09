@@ -169,6 +169,17 @@ def on_before_entry(state: Dict[str, Any], symbol: str, side: str, qty: float, p
     rt = _rt(state)
     started = _map(rt, "borrow_started")
     done = _map(rt, "borrow_done")
+    after_open_done = _map(rt, "after_open_done")
+    if trade_key:
+        started = started if isinstance(started, dict) else {}
+        done = done if isinstance(done, dict) else {}
+        after_open_done = after_open_done if isinstance(after_open_done, dict) else {}
+        started = {trade_key: started[trade_key]} if trade_key in started else {}
+        done = {trade_key: done[trade_key]} if trade_key in done else {}
+        after_open_done = {trade_key: after_open_done[trade_key]} if trade_key in after_open_done else {}
+        rt["borrow_started"] = started
+        rt["borrow_done"] = done
+        rt["after_open_done"] = after_open_done
     if trade_key in done or trade_key in started:
         if log_event:
             log_event("MARGIN_HOOK_BEFORE_ENTRY", trade_key=trade_key, dedup=True)
@@ -249,6 +260,13 @@ def on_after_position_closed(state: Dict[str, Any], trade_key: Optional[str] = N
     except Exception as exc:
         if log_event:
             log_event("MARGIN_HOOK_AFTER_CLOSE_ERROR", trade_key=tk, error=str(exc))
+    rt["borrow_started"] = {}
+    rt["borrow_done"] = {}
+    rt["after_open_done"] = {}
+    margin = state.get("margin")
+    if isinstance(margin, dict):
+        margin["active_trade_key"] = None
+        state["margin"] = margin
     return
 
 
