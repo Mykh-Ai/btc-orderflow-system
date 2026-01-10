@@ -186,7 +186,7 @@ ENV: Dict[str, Any] = {
 "INVAR_GRACE_SEC": _get_int("INVAR_GRACE_SEC", 15),
 "INVAR_FEED_STALE_SEC": _get_int("INVAR_FEED_STALE_SEC", 180),
 "INVAR_KILL_ON_DEBT": _get_bool("INVAR_KILL_ON_DEBT", False),
-"INVAR_PERSIST": _get_bool("INVAR_PERSIST", True),
+"INVAR_PERSIST": _get_bool("INVAR_PERSIST", False),
 "I13_GRACE_SEC": _get_int("I13_GRACE_SEC", 300),
 "I13_ESCALATE_SEC": _get_int("I13_ESCALATE_SEC", 180),
 "I13_EXCHANGE_CHECK": _get_bool("I13_EXCHANGE_CHECK", True),

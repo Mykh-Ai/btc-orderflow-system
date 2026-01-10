@@ -9,6 +9,7 @@ Throttles repeated alerts per invariant+position key.
 from __future__ import annotations
 
 import os
+import json
 from contextlib import suppress
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -20,8 +21,15 @@ save_state: Optional[Callable[[Dict[str, Any]], None]] = None
 now_s: Optional[Callable[[], float]] = None
 _i13_exchange_check_fn: Optional[Callable[[Optional[str], Optional[bool]], Dict[str, Any]]] = None
 
-# In-process throttle cache (paired with persisted st["inv_throttle"])
+# In-process caches to avoid writing invariant metadata into executor state.
 _last_emit: Dict[str, float] = {}
+_inv_runtime_cache: Dict[str, Any] = {}
+
+# Persisted invariant metadata (throttle/runtime) lives in a separate file (NOT executor_state.json).
+_meta_loaded: bool = False
+_meta: Dict[str, Any] = {"throttle": {}, "runtime": {}}
+_meta_dirty: bool = False
+_meta_last_save_s: float = 0.0
 
 def configure(
     env: Dict[str, Any],
@@ -38,6 +46,9 @@ def configure(
     save_state = save_state_fn
     now_s = now_fn
     _i13_exchange_check_fn = i13_exchange_check_fn
+    # Best-effort load invariant metadata (throttle/runtime) from separate file.
+    with suppress(Exception):
+        _meta_load()
 
 
 def _as_float(x: Any, default: float = 0.0) -> float:
@@ -78,6 +89,145 @@ def _enabled() -> bool:
         return False
 
 
+def _meta_state_fn() -> str:
+    # Separate from executor_state.json on purpose.
+    return str(ENV.get("INVAR_STATE_FN", "/data/state/invariants_state.json") or "/data/state/invariants_state.json")
+
+
+def _meta_ttl_sec() -> float:
+    # How long to keep throttle keys (seconds)
+    try:
+        return float(ENV.get("INVAR_META_TTL_SEC", 7 * 24 * 3600))
+    except Exception:
+        return float(7 * 24 * 3600)
+
+
+def _meta_max_keys() -> int:
+    # Max throttle keys kept after GC/trim
+    try:
+        return int(ENV.get("INVAR_META_MAX_KEYS", 5000))
+    except Exception:
+        return 5000
+
+
+def _i10_max_keys() -> int:
+    # Max distinct position keys tracked for I10 runtime.
+    try:
+        return int(ENV.get("INVAR_I10_MAX_KEYS", 2000))
+    except Exception:
+        return 2000
+
+
+def _runtime_gc_i10(nowv: float) -> None:
+    """GC runtime['I10'] by TTL + max keys to avoid unbounded growth."""
+    rt = _meta.get("runtime")
+    if not isinstance(rt, dict):
+        return
+    i10 = rt.get("I10")
+    if not isinstance(i10, dict) or not i10:
+        return
+    ttl = float(_meta_ttl_sec())
+    if ttl > 0:
+        cutoff = nowv - ttl
+        for pkey, state in list(i10.items()):
+            if not isinstance(state, dict):
+                i10.pop(pkey, None)
+                continue
+            last_seen = _as_float(state.get("last_seen_s"), 0.0)
+            if last_seen > 0 and last_seen < cutoff:
+                i10.pop(pkey, None)
+    maxk = int(_i10_max_keys())
+    if maxk > 0 and len(i10) > maxk:
+        newest = sorted(
+            i10.items(),
+            key=lambda it: _as_float(it[1].get("last_seen_s"), 0.0) if isinstance(it[1], dict) else 0.0,
+            reverse=True,
+        )[:maxk]
+        rt["I10"] = {k: v for k, v in newest}
+    else:
+        rt["I10"] = i10
+    _meta["runtime"] = rt
+
+
+def _meta_save_min_interval_sec() -> float:
+    # IO rate limit for metadata file writes
+    try:
+        return float(ENV.get("INVAR_META_SAVE_MIN_INTERVAL_SEC", 2))
+    except Exception:
+        return 2.0
+
+
+def _meta_load() -> None:
+    global _meta_loaded, _meta
+    if _meta_loaded:
+        return
+    fn = _meta_state_fn()
+    try:
+        with open(fn, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            th = data.get("throttle")
+            rt = data.get("runtime")
+            if isinstance(th, dict):
+                _meta["throttle"] = th
+            if isinstance(rt, dict):
+                _meta["runtime"] = rt
+    except FileNotFoundError:
+        pass
+    except Exception:
+        # Corrupt file? Ignore and start fresh (best-effort).
+        pass
+    _meta_loaded = True
+
+
+def _meta_gc(nowv: float) -> None:
+    """GC throttle keys by TTL and max size."""
+    th = _meta.get("throttle")
+    if not isinstance(th, dict):
+        th = {}
+        _meta["throttle"] = th
+
+    ttl = float(_meta_ttl_sec())
+    if ttl > 0:
+        cutoff = nowv - ttl
+        for k, v in list(th.items()):
+            if _as_float(v, 0.0) < cutoff:
+                th.pop(k, None)
+
+    maxk = int(_meta_max_keys())
+    if maxk > 0 and len(th) > maxk:
+        newest = sorted(th.items(), key=lambda it: _as_float(it[1], 0.0), reverse=True)[:maxk]
+        _meta["throttle"] = {k: v for k, v in newest}
+
+
+def _meta_mark_dirty() -> None:
+    global _meta_dirty
+    _meta_dirty = True
+
+
+def _meta_save(nowv: float, force: bool = False) -> None:
+    """Atomic best-effort save with rate limit."""
+    global _meta_dirty, _meta_last_save_s
+    if not _meta_dirty and not force:
+        return
+    min_iv = float(_meta_save_min_interval_sec())
+    if not force and min_iv > 0 and (nowv - float(_meta_last_save_s)) < min_iv:
+        return
+
+    fn = _meta_state_fn()
+    os.makedirs(os.path.dirname(fn), exist_ok=True)
+    tmp = fn + ".tmp"
+    # Keep file small/clean before save
+    _meta_gc(nowv)
+    # Also GC runtime I10 map (can grow with many positions)
+    _runtime_gc_i10(nowv)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(_meta, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, fn)
+    _meta_last_save_s = nowv
+    _meta_dirty = False
+
+
 def _throttle_sec() -> float:
     try:
         return float(ENV.get("INVAR_THROTTLE_SEC", 60))
@@ -99,13 +249,13 @@ def _feed_stale_sec() -> float:
         return 180.0
 
 
-def _persist_runtime(st: Dict[str, Any]) -> None:
-    if save_state is None:
-        return
-    if not _as_bool(ENV.get("INVAR_PERSIST", True), True):
-        return
-    with suppress(Exception):
-        save_state(st)
+def _inv_runtime() -> Dict[str, Any]:
+    # Prefer persisted runtime bucket (separate file) to survive restarts.
+    _meta_load()
+    rt = _meta.get("runtime")
+    if isinstance(rt, dict):
+        return rt
+    return _inv_runtime_cache
 
 
 def _i13_grace_sec() -> float:
@@ -189,33 +339,23 @@ def _emit(st: Dict[str, Any], inv_id: str, severity: str, message: str, details:
     nowv = float(now_s())
     thr = float(_throttle_sec())
 
-    # Persist throttle in state (best-effort).
     key = f"{inv_id}:{pkey}"
-    inv_th = st.get("inv_throttle") if isinstance(st, dict) else None
-    if not isinstance(inv_th, dict):
-        inv_th = {}
-    last = max(_last_emit.get(key, 0.0), _as_float(inv_th.get(key), 0.0))
+    # Persisted throttle to survive restarts and avoid unbounded RAM growth.
+    _meta_load()
+    th = _meta.get("throttle")
+    if not isinstance(th, dict):
+        th = {}
+        _meta["throttle"] = th
+
+    last = max(_as_float(_last_emit.get(key, 0.0), 0.0), _as_float(th.get(key), 0.0))
     if thr > 0 and (nowv - last) < thr:
         return
     _last_emit[key] = nowv
-    inv_th[key] = nowv
-    if isinstance(st, dict):
-        with suppress(Exception):
-            cutoff = nowv - (7 * 24 * 3600)
-            for tkey, tval in list(inv_th.items()):
-                if _as_float(tval, 0.0) < cutoff:
-                    inv_th.pop(tkey, None)
-            if len(inv_th) > 5000:
-                newest = sorted(
-                    inv_th.items(),
-                    key=lambda item: _as_float(item[1], 0.0),
-                    reverse=True,
-                )[:5000]
-                inv_th = {k: v for k, v in newest}
-        st["inv_throttle"] = inv_th
-        if save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
-            with suppress(Exception):
-                save_state(st)
+    th[key] = nowv
+    _meta["throttle"] = th
+    _meta_mark_dirty()
+    with suppress(Exception):
+        _meta_save(nowv)
 
     # Log + webhook (detector-only)
     with suppress(Exception):
@@ -657,9 +797,7 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     nowv = float(now_s())
     window_sec = 15 * 60
 
-    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
-    if not isinstance(inv_runtime, dict):
-        inv_runtime = {}
+    inv_runtime = _inv_runtime()
     i10_state = inv_runtime.get("I10")
     if not isinstance(i10_state, dict):
         i10_state = {}
@@ -686,12 +824,14 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     state["events"] = events
     i10_state[pkey] = state
     inv_runtime["I10"] = i10_state
-    if isinstance(st, dict):
-        st["inv_runtime"] = inv_runtime
-        # Persist counters, otherwise load_state() will wipe them next loop
-        if changed and save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
-            with suppress(Exception):
-                save_state(st)
+    # Persist runtime best-effort when it changes
+    if changed:
+        _meta_mark_dirty()
+        # Keep runtime["I10"] bounded
+        with suppress(Exception):
+            _runtime_gc_i10(nowv)
+        with suppress(Exception):
+            _meta_save(nowv)
 
     if count < 3:
         return
@@ -810,9 +950,7 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     closed_s = _as_float(pos.get("closed_s"), 0.0)
     closed = bool(st.get("last_closed")) or status not in ("OPEN", "OPEN_FILLED") or closed_s > 0
 
-    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
-    if not isinstance(inv_runtime, dict):
-        inv_runtime = {}
+    inv_runtime = _inv_runtime()
     rt = inv_runtime.get("I13")
     if rt is not None and not isinstance(rt, dict):
         rt = None
@@ -821,8 +959,10 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     if not closed:
         if rt is not None:
             inv_runtime.pop("I13", None)
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
+            _meta_mark_dirty()
+            if now_s is not None:
+                with suppress(Exception):
+                    _meta_save(float(now_s()))
         return
 
     if now_s is None:
@@ -852,8 +992,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             "exchange_unavailable_emitted": False,
         }
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
 
     close_seen_s = _as_float(rt.get("close_seen_s"), nowv)
     age_s = nowv - close_seen_s
@@ -880,8 +1021,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             )
             rt["exchange_unavailable_emitted"] = True
             inv_runtime["I13"] = rt
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
+            _meta_mark_dirty()
+            with suppress(Exception):
+                _meta_save(nowv)
         return
 
     # Rate-limit exchange checks
@@ -906,8 +1048,11 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
         rt["last_exchange_has_debt"] = None
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
+        # Persist rate-limit state even if we've already emitted an "unavailable" alert
+        # so restarts don't reset exchange-check backoff.
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
         if not bool(rt.get("exchange_unavailable_emitted")):
             _emit(
                 st,
@@ -925,8 +1070,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             )
             rt["exchange_unavailable_emitted"] = True
             inv_runtime["I13"] = rt
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
+            _meta_mark_dirty()
+            with suppress(Exception):
+                _meta_save(nowv)
         return
 
     has_debt = bool(snap.get("has_debt"))
@@ -934,8 +1080,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
     rt["last_exchange_has_debt"] = has_debt
     inv_runtime["I13"] = rt
-    st["inv_runtime"] = inv_runtime
-    _persist_runtime(st)
 
     # Exchange says "clear" -> finish episode, optional local state clear
     if not has_debt:
@@ -947,8 +1091,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
                     margin.pop("borrowed_by_trade", None)
                 st["margin"] = margin
         inv_runtime.pop("I13", None)
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
         return
 
     # Exchange says debt exists
@@ -970,8 +1115,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         )
         rt["warn_emitted"] = True
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
 
     if (age_s >= (_i13_grace_sec() + _i13_escalate_sec())) and not bool(rt.get("error_emitted")):
         _emit(
@@ -991,7 +1137,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         )
         rt["error_emitted"] = True
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
         if _i13_kill_on_debt() and isinstance(st, dict):
             halt = st.get("halt")
             if not isinstance(halt, dict):
@@ -1007,7 +1155,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             halt["ts"] = nowv
             halt["symbol"] = sym
             st["halt"] = halt
-        _persist_runtime(st)
 
 
 def run(st: Dict[str, Any]) -> None:
