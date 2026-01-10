@@ -20,8 +20,9 @@ save_state: Optional[Callable[[Dict[str, Any]], None]] = None
 now_s: Optional[Callable[[], float]] = None
 _i13_exchange_check_fn: Optional[Callable[[Optional[str], Optional[bool]], Dict[str, Any]]] = None
 
-# In-process throttle cache (paired with persisted st["inv_throttle"])
+# In-process caches to avoid writing invariant metadata into executor state.
 _last_emit: Dict[str, float] = {}
+_inv_runtime_cache: Dict[str, Any] = {}
 
 def configure(
     env: Dict[str, Any],
@@ -99,13 +100,8 @@ def _feed_stale_sec() -> float:
         return 180.0
 
 
-def _persist_runtime(st: Dict[str, Any]) -> None:
-    if save_state is None:
-        return
-    if not _as_bool(ENV.get("INVAR_PERSIST", True), True):
-        return
-    with suppress(Exception):
-        save_state(st)
+def _inv_runtime() -> Dict[str, Any]:
+    return _inv_runtime_cache
 
 
 def _i13_grace_sec() -> float:
@@ -189,33 +185,11 @@ def _emit(st: Dict[str, Any], inv_id: str, severity: str, message: str, details:
     nowv = float(now_s())
     thr = float(_throttle_sec())
 
-    # Persist throttle in state (best-effort).
     key = f"{inv_id}:{pkey}"
-    inv_th = st.get("inv_throttle") if isinstance(st, dict) else None
-    if not isinstance(inv_th, dict):
-        inv_th = {}
-    last = max(_last_emit.get(key, 0.0), _as_float(inv_th.get(key), 0.0))
+    last = _as_float(_last_emit.get(key, 0.0), 0.0)
     if thr > 0 and (nowv - last) < thr:
         return
     _last_emit[key] = nowv
-    inv_th[key] = nowv
-    if isinstance(st, dict):
-        with suppress(Exception):
-            cutoff = nowv - (7 * 24 * 3600)
-            for tkey, tval in list(inv_th.items()):
-                if _as_float(tval, 0.0) < cutoff:
-                    inv_th.pop(tkey, None)
-            if len(inv_th) > 5000:
-                newest = sorted(
-                    inv_th.items(),
-                    key=lambda item: _as_float(item[1], 0.0),
-                    reverse=True,
-                )[:5000]
-                inv_th = {k: v for k, v in newest}
-        st["inv_throttle"] = inv_th
-        if save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
-            with suppress(Exception):
-                save_state(st)
 
     # Log + webhook (detector-only)
     with suppress(Exception):
@@ -657,9 +631,7 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     nowv = float(now_s())
     window_sec = 15 * 60
 
-    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
-    if not isinstance(inv_runtime, dict):
-        inv_runtime = {}
+    inv_runtime = _inv_runtime()
     i10_state = inv_runtime.get("I10")
     if not isinstance(i10_state, dict):
         i10_state = {}
@@ -686,12 +658,6 @@ def _check_i10_repeated_trail_stop_errors(st: Dict[str, Any]) -> None:
     state["events"] = events
     i10_state[pkey] = state
     inv_runtime["I10"] = i10_state
-    if isinstance(st, dict):
-        st["inv_runtime"] = inv_runtime
-        # Persist counters, otherwise load_state() will wipe them next loop
-        if changed and save_state is not None and _as_bool(ENV.get("INVAR_PERSIST", True), True):
-            with suppress(Exception):
-                save_state(st)
 
     if count < 3:
         return
@@ -810,9 +776,7 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     closed_s = _as_float(pos.get("closed_s"), 0.0)
     closed = bool(st.get("last_closed")) or status not in ("OPEN", "OPEN_FILLED") or closed_s > 0
 
-    inv_runtime = st.setdefault("inv_runtime", {}) if isinstance(st, dict) else {}
-    if not isinstance(inv_runtime, dict):
-        inv_runtime = {}
+    inv_runtime = _inv_runtime()
     rt = inv_runtime.get("I13")
     if rt is not None and not isinstance(rt, dict):
         rt = None
@@ -821,8 +785,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     if not closed:
         if rt is not None:
             inv_runtime.pop("I13", None)
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
         return
 
     if now_s is None:
@@ -852,8 +814,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             "exchange_unavailable_emitted": False,
         }
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
 
     close_seen_s = _as_float(rt.get("close_seen_s"), nowv)
     age_s = nowv - close_seen_s
@@ -880,8 +840,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             )
             rt["exchange_unavailable_emitted"] = True
             inv_runtime["I13"] = rt
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
         return
 
     # Rate-limit exchange checks
@@ -906,8 +864,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
         rt["last_exchange_has_debt"] = None
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
         if not bool(rt.get("exchange_unavailable_emitted")):
             _emit(
                 st,
@@ -925,8 +881,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             )
             rt["exchange_unavailable_emitted"] = True
             inv_runtime["I13"] = rt
-            st["inv_runtime"] = inv_runtime
-            _persist_runtime(st)
         return
 
     has_debt = bool(snap.get("has_debt"))
@@ -934,8 +888,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
     rt["last_exchange_has_debt"] = has_debt
     inv_runtime["I13"] = rt
-    st["inv_runtime"] = inv_runtime
-    _persist_runtime(st)
 
     # Exchange says "clear" -> finish episode, optional local state clear
     if not has_debt:
@@ -947,8 +899,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
                     margin.pop("borrowed_by_trade", None)
                 st["margin"] = margin
         inv_runtime.pop("I13", None)
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
         return
 
     # Exchange says debt exists
@@ -970,8 +920,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         )
         rt["warn_emitted"] = True
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
-        _persist_runtime(st)
 
     if (age_s >= (_i13_grace_sec() + _i13_escalate_sec())) and not bool(rt.get("error_emitted")):
         _emit(
@@ -991,7 +939,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         )
         rt["error_emitted"] = True
         inv_runtime["I13"] = rt
-        st["inv_runtime"] = inv_runtime
         if _i13_kill_on_debt() and isinstance(st, dict):
             halt = st.get("halt")
             if not isinstance(halt, dict):
@@ -1007,7 +954,6 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
             halt["ts"] = nowv
             halt["symbol"] = sym
             st["halt"] = halt
-        _persist_runtime(st)
 
 
 def run(st: Dict[str, Any]) -> None:
