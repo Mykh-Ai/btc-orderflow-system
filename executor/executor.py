@@ -1688,40 +1688,55 @@ def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
         return []
     if not os.path.exists(path):
         return []
-    closes = deque(maxlen=n_rows)
-    bad_rows = 0
+    # 1) Validate header (cheap, 1st line only)
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            rdr = csv.reader(f)
-            header = next(rdr, None)
-            _validate_agg_header(header, path)
-            header_n = [_norm_col(h) for h in (header or [])]
-            idx = {h: i for i, h in enumerate(header_n)}
-
-            for parts in rdr:
-                if not parts:
-                    continue
-                if len(parts) != len(header_n):
-                    bad_rows += 1
-                    if bad_rows % 200 == 0:
-                        print(
-                            f"[CSV WARN] bad row width in {path}: got {len(parts)} expected {len(header_n)}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                    continue
-                try:
-                    v = parts[idx["ClosePrice"]].strip()
-                    if v == "":
-                        v = parts[idx["AvgPrice"]].strip()
-                    closes.append(float(v))
-                except Exception:
-                    continue
+            head = f.readline().strip()
+        header = next(csv.reader([head]), None)
+        _validate_agg_header(header, path)
     except SystemExit:
         raise
     except Exception:
         return []
-    return list(closes)
+
+    # 2) Tail-read last lines only (avoid O(file_size) scans)
+    # Buffer is important because some lines may be malformed and get skipped.
+    buf_lines = max(n_rows + 50, 200)
+    lines = read_tail_lines(path, buf_lines)
+    if not lines:
+        return []
+
+    closes_rev: list[float] = []
+    bad_rows = 0
+    for ln in reversed(lines):
+        ln = (ln or "").strip()
+        if not ln or ln.startswith("Timestamp"):
+            continue
+        try:
+            parts = next(csv.reader([ln]))
+        except Exception:
+            continue
+        if len(parts) != len(EXPECTED_AGG_HEADER):
+            bad_rows += 1
+            if bad_rows % 200 == 0:
+                print(
+                    f"[CSV WARN] bad row width in {path}: got {len(parts)} expected {len(EXPECTED_AGG_HEADER)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            continue
+        try:
+            v = (parts[7] or "").strip()  # ClosePrice
+            if v == "":
+                v = (parts[6] or "").strip()  # AvgPrice fallback
+            closes_rev.append(float(v))
+        except Exception:
+            continue
+        if len(closes_rev) >= n_rows:
+            break
+
+    closes_rev.reverse()  # restore chronological order
+    return closes_rev
 
 
 def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
