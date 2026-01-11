@@ -24,6 +24,10 @@ _i13_exchange_check_fn: Optional[Callable[[Optional[str], Optional[bool]], Dict[
 # In-process caches to avoid writing invariant metadata into executor state.
 _last_emit: Dict[str, float] = {}
 _inv_runtime_cache: Dict[str, Any] = {}
+_meta_loaded: bool = False
+_meta: Dict[str, Any] = {"throttle": {}, "runtime": {}}
+_meta_dirty: bool = False
+_meta_last_save_s: float = 0.0
 
 def configure(
     env: Dict[str, Any],
@@ -254,7 +258,10 @@ def _inv_runtime() -> Dict[str, Any]:
 
 def _i13_grace_sec() -> float:
     try:
-        return float(ENV.get("I13_GRACE_SEC", 300))
+        val = ENV.get("I13_GRACE_SEC")
+        if val is None:
+            val = ENV.get("INVAR_GRACE_SEC")
+        return float(300 if val is None else val)
     except Exception:
         return 300.0
 
@@ -1075,10 +1082,11 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
     rt["last_exchange_has_debt"] = has_debt
     inv_runtime["I13"] = rt
-    # Persist exchange-check backoff even when no WARN/ERROR is emitted.
-    _meta_mark_dirty()
-    with suppress(Exception):
-        _meta_save(nowv)
+    if has_debt:
+        # Persist exchange-check backoff even when no WARN/ERROR is emitted.
+        _meta_mark_dirty()
+        with suppress(Exception):
+            _meta_save(nowv)
 
     # Exchange says "clear" -> finish episode, optional local state clear
     if not has_debt:
@@ -1095,7 +1103,7 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         inv_runtime.pop("I13", None)
         _meta_mark_dirty()
         with suppress(Exception):
-            _meta_save(nowv)
+            _meta_save(nowv, force=True)
         return
 
     # Exchange says debt exists
