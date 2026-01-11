@@ -60,6 +60,7 @@ class TestInvariantsModule(unittest.TestCase):
             # keep optional fields safe:
             "TRAIL_SOURCE": "AGG",
             "AGG_CSV": "X:/nonexistent/agg.csv",
+            "INVAR_STATE_FN": str(Path(__file__).resolve().parent / ".tmp_invariants_state.json"),
         }
 
         # Configure with only the args that exist in current signature
@@ -243,7 +244,7 @@ class TestInvariantsModule(unittest.TestCase):
             self.inv._check_i10_repeated_trail_stop_errors(st)
 
         pkey = self.inv._pos_key(st["position"])
-        events = self.inv._inv_runtime_cache["I10"][pkey]["events"]
+        events = self.inv._meta["runtime"]["I10"][pkey]["events"]
         self.assertLessEqual(len(events), 100)
 
 
