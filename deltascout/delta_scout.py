@@ -24,7 +24,8 @@ import pandas as pd
 import numpy as np
 
 # ===== ENV =====
-FILE_PATH       = os.getenv("FILE_PATH", "/data/feed/aggregated.csv")
+FEED_DIR        = os.getenv("FEED_DIR", "/data/feed")
+FILE_PATH       = os.getenv("FILE_PATH", os.path.join(FEED_DIR, "aggregated.csv"))
 POLL_SECS       = float(os.getenv("POLL_SECS", "20"))
 WEBHOOK_URL     = os.getenv("WEBHOOK_URL", "")
 ROLL_WINDOW_MIN = int(os.getenv("ROLL_WINDOW_MIN", "180"))
@@ -73,6 +74,38 @@ ENV = {
 }
 
 # ===== UTILS =====
+EXPECTED_HEADER = [
+    "Timestamp",
+    "Trades",
+    "TotalQty",
+    "AvgSize",
+    "BuyQty",
+    "SellQty",
+    "AvgPrice",
+    "ClosePrice",
+    "HiPrice",
+    "LowPrice",
+]
+
+def _normalize_header(header: list[str] | None) -> list[str] | None:
+    if header is None:
+        return None
+    return [h.strip() for h in header]
+
+def _validate_header(header: list[str] | None, path: str):
+    if header is None:
+        print(f"[CSV HEADER ERROR] empty header in {path}", file=sys.stderr, flush=True)
+        sys.exit(2)
+    if header != EXPECTED_HEADER:
+        print(
+            "[CSV HEADER ERROR] header mismatch.\n"
+            f"Expected: {EXPECTED_HEADER}\n"
+            f"Got:      {header}\n"
+            f"Path:     {path}",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(2)
 
 def fmt_dt_iso_min(ts_str: str) -> str:
     return ts_str.split(".")[0][:16]
@@ -89,7 +122,11 @@ def sign_delta(v: float) -> str:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    df = pd.read_csv(ENV["AGG_CSV"])  # Очікуємо: Timestamp, BuyQty, SellQty, ClosePrice/AvgPrice
+    with open(ENV["AGG_CSV"], "r", encoding="utf-8-sig") as f:
+        rdr = csv.reader(f)
+        header = _normalize_header(next(rdr, None))
+        _validate_header(header, ENV["AGG_CSV"])
+    df = pd.read_csv(ENV["AGG_CSV"], encoding="utf-8-sig")  # Очікуємо: Timestamp, BuyQty, SellQty, ClosePrice/AvgPrice
     df.columns = [c.strip() for c in df.columns]
     df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.floor("min")
     price = df["ClosePrice"] if "ClosePrice" in df.columns else df.get("AvgPrice")
@@ -517,11 +554,13 @@ def tail_csv(path: str):
     last_ts = None
     header = None
     ts_idx = None
+    bad_rows = 0
     while True:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 rdr = csv.reader(f)
-                header = next(rdr, None)
+                header = _normalize_header(next(rdr, None))
+                _validate_header(header, path)
                 if not header:
                     time.sleep(POLL_SECS); continue
 
@@ -533,6 +572,15 @@ def tail_csv(path: str):
 
                 last = None
                 for parts in rdr:
+                    if len(parts) != len(header):
+                        bad_rows += 1
+                        if bad_rows % 100 == 0:
+                            print(
+                                f"[CSV WARN] bad row length ({len(parts)} != {len(header)}) in {path}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        continue
                     last = parts
 
                 if last:
@@ -548,12 +596,21 @@ def tail_csv(path: str):
 def read_last_rows(path: str, n: int):
     if n <= 0: return []
     tail = deque(maxlen=n)
-    with open(path, "r", encoding="utf-8") as f:
+    bad_rows = 0
+    with open(path, "r", encoding="utf-8-sig") as f:
         rdr = csv.reader(f)
-        header = next(rdr, None)
+        header = _normalize_header(next(rdr, None))
+        _validate_header(header, path)
         idx = {h:i for i,h in enumerate(header or [])}
         for parts in rdr:
             if not header or len(parts) != len(header):
+                bad_rows += 1
+                if bad_rows % 100 == 0:
+                    print(
+                        f"[CSV WARN] bad row length ({len(parts)} != {len(header)}) in {path}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 continue
             row = {h: parts[idx[h]] for h in header}
             tail.append(row)
@@ -630,13 +687,10 @@ if __name__ == "__main__":
     print(f"    roll={ROLL_WINDOW_MIN}m, vwap={VWAP_WINDOW_MIN}m(lazy), zero_qty<{ZERO_QTY_TH}, avg9<{AVG9_MAX}")
 
     # Перевірка колонок
-    need = {"Timestamp","Trades","TotalQty","BuyQty","SellQty","AvgPrice"}
-    with open(FILE_PATH, "r", encoding="utf-8") as f:
-        head = f.readline().strip()
-        cols = set(next(csv.reader([head]))) if head else set()
-        miss = need - cols
-        if miss:
-            print("Missing columns:", miss); sys.exit(1)
+    with open(FILE_PATH, "r", encoding="utf-8-sig") as f:
+        rdr = csv.reader(f)
+        header = _normalize_header(next(rdr, None))
+        _validate_header(header, FILE_PATH)
 
     s = Scout()
     try:
@@ -652,4 +706,3 @@ if __name__ == "__main__":
             s.handle_row(row)
         except Exception as e:
             print("row err:", e, row, file=sys.stderr)
-
