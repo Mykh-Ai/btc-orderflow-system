@@ -258,10 +258,10 @@ def _inv_runtime() -> Dict[str, Any]:
 
 def _i13_grace_sec() -> float:
     try:
-        val = ENV.get("I13_GRACE_SEC")
-        if val is None:
-            val = ENV.get("INVAR_GRACE_SEC")
-        return float(300 if val is None else val)
+        val = ENV.get("I13_GRACE_SEC", None)
+        if val is None or str(val).strip() == "":
+            return 300.0
+        return float(val)
     except Exception:
         return 300.0
 
