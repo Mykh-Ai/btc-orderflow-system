@@ -49,6 +49,9 @@ class TestInvariantsMargin(unittest.TestCase):
             "INVAR_THROTTLE_SEC": 0,
             "INVAR_GRACE_SEC": 10,
             "SYMBOL": "BTCUSDT",
+            "INVAR_STATE_FN": str(
+                Path(__file__).resolve().parent / f".tmp_invariants_state_{time.time_ns()}.json"
+            ),
         }
 
         cfg = self.inv.configure
