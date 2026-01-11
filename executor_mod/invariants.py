@@ -25,12 +25,6 @@ _i13_exchange_check_fn: Optional[Callable[[Optional[str], Optional[bool]], Dict[
 _last_emit: Dict[str, float] = {}
 _inv_runtime_cache: Dict[str, Any] = {}
 
-# Persisted invariant metadata (throttle/runtime) lives in a separate file (NOT executor_state.json).
-_meta_loaded: bool = False
-_meta: Dict[str, Any] = {"throttle": {}, "runtime": {}}
-_meta_dirty: bool = False
-_meta_last_save_s: float = 0.0
-
 def configure(
     env: Dict[str, Any],
     log_event_fn: Callable[..., None],
@@ -1053,6 +1047,7 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
         _meta_mark_dirty()
         with suppress(Exception):
             _meta_save(nowv)
+
         if not bool(rt.get("exchange_unavailable_emitted")):
             _emit(
                 st,
