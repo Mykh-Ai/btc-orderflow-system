@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 DeltaScout — SIMPLE window triggers (lazy VWAP/POC, 1-line log)
- Writes JSONL events in the format expected by buyer.py and executor.py
-This version restores:
-- INIT warmup (INIT_MAX / INIT_MIN) at startup using a lookback window;
-- the base processing pipeline:
-  emit (debug/telegram) → baseline checks (sign / IMB / VWAP) → 3-of-3 confirmation →
-  gates (EMA50 / CHOP / COH) → JSON events for Buyer and Executor;
-- consistent updates of self.prev_peak at the end of each MAX/MIN branch;
-- invocation of _ingest_buyer_events() at the beginning of handle_row;
-- avoidance of pandas FutureWarning (floor('min'), .ffill());
-- a single, consistent set of methods within the Scout class (no duplicates);
-- ZERO events routed through _emit again (matching the baseline behavior);
-- _emit sending the base payload to the webhook (not {"text": ...}).
+Пише текстові рядки у форматі, який очікує buyer.py
 
-Verified against the long baseline file structure (500+ lines).
+Ця версія відновлює:
+- INIT warmup (INIT_MAX / INIT_MIN) на старті з вікна lookback;
+- базову архітектуру: emit(debug/telegram) → базові перевірки (sign/IMB/VWAP) → 3/3 → ворота (EMA50/CHOP/COH) → JSON для Buyer;
+- завжди оновлює self.prev_peak наприкінці гілки MAX/MIN;
+- виклик _ingest_buyer_events() на початку handle_row;
+- уникнення FutureWarning від pandas (floor('min'), .ffill());
+- єдиний набір методів у класі Scout (без дублів);
+- ZERO-події знову проходять через _emit (як у базі);
+- _emit відправляє «базовий» payload у webhook (не {"text": ...}).
+
+Перевірено на відповідність «довгій» базовій структурі файлу (500+ рядків).
 """
 
 import os, sys, csv, json, time, math, urllib.request
@@ -24,12 +22,6 @@ from collections import deque, defaultdict
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
-def require_env(name: str) -> str:
-    v = os.getenv(name)
-    if v is None or str(v).strip() == "":
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return v
-
 
 # ===== ENV =====
 FILE_PATH       = os.getenv("FILE_PATH", "/data/feed/aggregated.csv")
@@ -39,23 +31,24 @@ ROLL_WINDOW_MIN = int(os.getenv("ROLL_WINDOW_MIN", "180"))
 VWAP_WINDOW_MIN = int(os.getenv("VWAP_WINDOW_MIN", "180"))
 POC_STEP_USD    = float(os.getenv("POC_STEP_USD", "10"))
 ZERO_QTY_TH     = float(os.getenv("ZERO_QTY_TH", "0.24"))
-AVG9_MAX = float(require_env("AVG9_MAX"))
+AVG9_MAX        = float(os.getenv("AVG9_MAX", "1"))
 PRINT_EVERY     = int(os.getenv("PRINT_EVERY", "1"))
 STARTUP_LOOKBACK_MIN = int(os.getenv("STARTUP_LOOKBACK_MIN", "180"))
-CHOP30_MAX = float(require_env("CHOP30_MAX"))
-COH10_MIN = float(require_env("COH10_MIN"))
-IMB_MIN = float(require_env("IMB_MIN"))
-IMB_MAX = float(require_env("IMB_MAX"))
+CHOP30_MAX = float(os.getenv("CHOP30_MAX", "2.6"))
+
+COH10_MIN  = float(os.getenv("COH10_MIN", "0.30"))
+IMB_MIN    = float(os.getenv("IMB_MIN", "0.55"))
+IMB_MAX    = float(os.getenv("IMB_MAX", "0.65"))
 INIT_EMIT  = os.getenv("INIT_EMIT", "true").lower() in {"1","true","yes"}
 
 # --- Tier params ---
-TIER_WINDOW_MIN = int(require_env("TIER_WINDOW_MIN"))
-TIER_A_VOL_PCTL = int(require_env("TIER_A_VOL_PCTL"))
-TIER_B_VOL_PCTL = int(require_env("TIER_B_VOL_PCTL"))
-TIER_A_IMB_MAX = float(require_env("TIER_A_IMB_MAX"))
-TIER_B_IMB_MIN = float(require_env("TIER_B_IMB_MIN"))
+TIER_WINDOW_MIN  = int(os.getenv("TIER_WINDOW_MIN", "180"))
+TIER_A_VOL_PCTL  = float(os.getenv("TIER_A_VOL_PCTL", "95"))
+TIER_B_VOL_PCTL  = float(os.getenv("TIER_B_VOL_PCTL", "99"))
+TIER_A_IMB_MAX   = float(os.getenv("TIER_A_IMB_MAX", "0.15"))
+TIER_B_IMB_MIN   = float(os.getenv("TIER_B_IMB_MIN", "0.15"))
 
-# Log is created next to aggregated.csv, unless overridden by DELTASCOUT_LOG
+# Лог створюємо в тій самій теці, де aggregated.csv, або в DELTASCOUT_LOG
 DEFAULT_LOG_PATH = "/data/logs/deltascout.log"
 LOG_PATH        = os.getenv("DELTASCOUT_LOG") or DEFAULT_LOG_PATH
 try:
@@ -96,7 +89,7 @@ def sign_delta(v: float) -> str:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    df = pd.read_csv(ENV["AGG_CSV"])  # Expected: Timestamp, BuyQty, SellQty, ClosePrice/AvgPrice
+    df = pd.read_csv(ENV["AGG_CSV"])  # Очікуємо: Timestamp, BuyQty, SellQty, ClosePrice/AvgPrice
     df.columns = [c.strip() for c in df.columns]
     df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.floor("min")
     price = df["ClosePrice"] if "ClosePrice" in df.columns else df.get("AvgPrice")
@@ -114,7 +107,7 @@ def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
         m = df.index[df["Timestamp"].dt.floor("min") == ts]
     return int(m[0]) if len(m) else len(df)-1
 
-# anti-chop filter
+# антібоковик
 
 def chop30_idx(df: pd.DataFrame, i: int) -> float:
     lo = max(0, i-29)
@@ -157,7 +150,7 @@ class Scout:
         self.last_owner = {"max": None, "min": None}
         self._print_i = 0
         self.log_path = LOG_PATH
-        self.prev_peak = None   # baseline for comparisons between peaks
+        self.prev_peak = None   # нова база для порівнянь між піками
         self._init_state()
 
     # ---- time helpers ----
@@ -169,7 +162,7 @@ class Scout:
 
     # ---- JSON SIGNAL ----
     def _emit_json(self, payload: dict):
-        """Append an event to deltascout.log in JSONL format (1 event = 1 line)."""
+        """Запис сигналу у deltascout.log у форматі JSONL (1 подія = 1 рядок)."""
         try:
             os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
             with open(self.log_path, "a", encoding="utf-8") as f:
@@ -180,7 +173,7 @@ class Scout:
             print(f"[LOG JSON WRITE ERROR] {e} -> {self.log_path}", file=sys.stderr, flush=True)
 
     def _truncate_log(self, max_lines: int = 500, keep_tail: int = 30):
-        """Trim a file if it exceeds max_lines, keeping the last keep_tail lines."""
+        """Обрізає файл, якщо перевищено max_lines, залишає останні keep_tail."""
         try:
             with open(self.log_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -259,7 +252,7 @@ class Scout:
         self._reconstruct_state_from_log()
 
     def _reconstruct_state_from_log(self):
-        """Restore state at startup by reading the tail of deltascout.log."""
+        """Відновлення стану при старті з останніх рядків deltascout.log"""
         try:
             if not os.path.exists(self.log_path):
                 return
@@ -275,7 +268,7 @@ class Scout:
             print(f"[STATE RECONSTRUCT ERROR] {e}", file=sys.stderr, flush=True)
 
     def _ingest_buyer_events(self):
-        """Read Buyer events from the log tail (reacts to CLOSE/STOPPED)."""
+        """Читання подій Buyer із хвоста логу (реагує на CLOSE/STOPPED)"""
         try:
             if not os.path.exists(self.log_path):
                 return
@@ -291,7 +284,7 @@ class Scout:
             print(f"[STATE INGEST ERROR] {e}", file=sys.stderr, flush=True)
 
     def _absorb_event(self, evt: dict, startup: bool):
-        """Update internal state based on Buyer events."""
+        """Оновлення стану за подіями Buyer"""
         if evt.get("source") != "Buyer":
             return
         act = evt.get("action")
@@ -361,7 +354,7 @@ class Scout:
 
     # ---- main row handler ----
     def handle_row(self, row: dict):
-        # react to Buyer events (COOLDOWN after CLOSE/STOPPED)
+        # реагуємо на Buyer-події (COOLDOWN після CLOSE/STOPPED)
         self._ingest_buyer_events()
 
         ts     = row["Timestamp"]
@@ -378,7 +371,7 @@ class Scout:
         # lazy context buffers
         self.vbuf.append((ap, tq))
 
-        # ZERO event (baseline behavior: goes through _emit)
+        # ZERO event (як у базі — через _emit)
         if not hasattr(self, "_tail9"):
             self._tail9 = deque(maxlen=9)
         self._tail9.append(tq)
@@ -406,10 +399,10 @@ class Scout:
         if last_ts_max == ts and self.last_owner.get("max") != ts:
             self.last_owner["max"] = ts
 
-            # debug/telegram — always
+            # debug/telegram — завжди
             self._emit("max", ts, delta, imba, ap, trades, tq)
 
-            # context
+            # контекст
             df = load_df_sorted()
             ts_dt = pd.to_datetime(ts)
             i = locate_index_by_ts(df, ts_dt)
@@ -421,7 +414,8 @@ class Scout:
 
             curr = {"kind":"long","price":ap,"vol":vol,"vwap":vwap_now,"imb":imba}
 
-           # --- baseline checks ---
+            # --- базові перевірки ---
+           # --- базові перевірки ---
             if not self.prev_peak:
                 self.prev_peak = curr; return
             if curr["kind"] != self.prev_peak["kind"]:
@@ -431,10 +425,10 @@ class Scout:
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
 
-            # always update baseline
+            # завжди оновлюємо базу
             self.prev_peak = curr
 
-            # --- gates ---
+            # --- ворота ---
             if not (price_now > ema50_now and (vwap_now is None or price_now > vwap_now)):
                 return
             if not (chop <= CHOP30_MAX and coh >= COH10_MIN):
@@ -443,7 +437,7 @@ class Scout:
                 return
 
 
-            # --- signal to log (for Buyer and Executor) ---
+            # --- сигнал у лог (для Buyer) ---
             self._emit_json({
                 "ts": str(ts),
                 "source": "DeltaScout",
@@ -457,17 +451,17 @@ class Scout:
                 "poc": poc_now,
             })
 
-            # baseline update
+            # оновлення бази
             self.prev_peak = curr
 
         # === MIN peak ===
         if last_ts_min == ts and self.last_owner.get("min") != ts:
             self.last_owner["min"] = ts
 
-            # debug/telegram — always
+            # debug/telegram — завжди
             self._emit("min", ts, delta, imba, ap, trades, tq)
 
-            # context
+            # контекст
             df = load_df_sorted()
             ts_dt = pd.to_datetime(ts)
             i = locate_index_by_ts(df, ts_dt)
@@ -479,7 +473,7 @@ class Scout:
 
             curr = {"kind":"short","price":ap,"vol":vol,"vwap":vwap_now,"imb":imba}
 
-            # --- baseline checks---
+            # --- базові перевірки ---
             if not self.prev_peak:
                 self.prev_peak = curr; return
             if curr["kind"] != self.prev_peak["kind"]:
@@ -489,10 +483,10 @@ class Scout:
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
 
-            # always update baseline
+            # завжди оновлюємо базу
             self.prev_peak = curr
 
-            # --- gates ---
+            # --- ворота ---
             if not (price_now < ema50_now and (vwap_now is None or price_now < vwap_now)):
                 return
             if not (chop <= CHOP30_MAX and coh >= COH10_MIN):
@@ -501,7 +495,7 @@ class Scout:
                 return
 
 
-            # --- signal to log (for Buyer and Executor) ---
+            # --- сигнал у лог (для Buyer) ---
             self._emit_json({
                 "ts": str(ts),
                 "source": "DeltaScout",
@@ -515,7 +509,7 @@ class Scout:
                 "poc": poc_now,
             })
 
-            # baseline update
+            # оновлення бази
             self.prev_peak = curr
 
 # ===== CSV tail =====
@@ -635,7 +629,7 @@ if __name__ == "__main__":
     print(f"🚀 DeltaScout SIMPLE started. Watching {FILE_PATH}")
     print(f"    roll={ROLL_WINDOW_MIN}m, vwap={VWAP_WINDOW_MIN}m(lazy), zero_qty<{ZERO_QTY_TH}, avg9<{AVG9_MAX}")
 
-    # Column check
+    # Перевірка колонок
     need = {"Timestamp","Trades","TotalQty","BuyQty","SellQty","AvgPrice"}
     with open(FILE_PATH, "r", encoding="utf-8") as f:
         head = f.readline().strip()
@@ -648,7 +642,7 @@ if __name__ == "__main__":
     try:
         want = max(STARTUP_LOOKBACK_MIN, ROLL_WINDOW_MIN, VWAP_WINDOW_MIN, 9)
         last_rows = read_last_rows(FILE_PATH, want)
-        warmup_init(s, last_rows)       #  seeds last_owner and emits INIT_*
+        warmup_init(s, last_rows)       # засіває last_owner і шле INIT_*
         print(f"🟢 init done: scanned {len(last_rows)} rows")
     except Exception as e:
         print("init err:", e, file=sys.stderr)
