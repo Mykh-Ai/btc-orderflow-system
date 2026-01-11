@@ -1075,6 +1075,10 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
     rt["next_exchange_check_s"] = nowv + _i13_min_interval_sec()
     rt["last_exchange_has_debt"] = has_debt
     inv_runtime["I13"] = rt
+    # Persist exchange-check backoff even when no WARN/ERROR is emitted.
+    _meta_mark_dirty()
+    with suppress(Exception):
+        _meta_save(nowv)
 
     # Exchange says "clear" -> finish episode, optional local state clear
     if not has_debt:
@@ -1085,6 +1089,9 @@ def _check_i13_no_debt_after_close(st: Dict[str, Any]) -> None:
                     margin.pop("borrowed_assets", None)
                     margin.pop("borrowed_by_trade", None)
                 st["margin"] = margin
+                if save_state is not None:
+                    with suppress(Exception):
+                        save_state(st)
         inv_runtime.pop("I13", None)
         _meta_mark_dirty()
         with suppress(Exception):
