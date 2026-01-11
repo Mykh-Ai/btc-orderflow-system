@@ -1,15 +1,45 @@
 import pandas as pd
 import numpy as np
 import os
+import sys
 import requests
 from typing import Tuple
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-feed_dir = os.getenv("FEED_DIR", os.path.join(script_dir, "feed"))
-csv_file = os.path.join(feed_dir, "aggregated.csv")
+# Feed path: prefer explicit AGG_CSV, else FEED_DIR, else container default if present, else local ./feed
+AGG_CSV = os.getenv("AGG_CSV", "").strip()
+if AGG_CSV:
+    csv_file = AGG_CSV
+else:
+    feed_dir = os.getenv("FEED_DIR", "").strip()
+    if not feed_dir:
+        feed_dir = "/data/feed" if os.path.isdir("/data/feed") else os.path.join(script_dir, "feed")
+    csv_file = os.path.join(feed_dir, "aggregated.csv")
 
 N8N_URL = "http://n8n:5678/webhook/volume-alert"  # Production URL
 NIGHT_LOG_PATH = "/night_volume_spikes.log"
+
+# Strict 10-col schema for aggregated.csv (ordered)
+EXPECTED_HEADER = [
+    "Timestamp","Trades","TotalQty","AvgSize","BuyQty","SellQty",
+    "AvgPrice","ClosePrice","HiPrice","LowPrice"
+]
+
+def _norm_col(c: str) -> str:
+    return (str(c) if c is not None else "").lstrip("\ufeff").strip()
+
+def _validate_header(cols: list[str], path: str) -> None:
+    got = [_norm_col(c) for c in cols]
+    if got != EXPECTED_HEADER:
+        print(
+            "CSV schema mismatch for aggregated.csv.\n"
+            f"Expected: {EXPECTED_HEADER}\n"
+            f"Got:      {got}\n"
+            f"Path:     {path}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(2)
 
 # =============================
 # Helpers
@@ -107,20 +137,12 @@ def analyze_last_10():
         return
 
     df = pd.read_csv(csv_file, header=0, encoding="utf-8-sig")
-    df.rename(columns=lambda x: x.replace('\ufeff', ''), inplace=True)
-    # Backward/forward compatible CSV schema:
-    # - Old schema: ... AvgPrice,ClosePrice
-    # - New schema: ... AvgPrice,ClosePrice,HiPrice,LowPrice
-    # Ensure price columns are numeric, and provide Hi/Lo fallbacks for old CSVs.
-    for _c in ("AvgPrice", "ClosePrice", "HiPrice", "LowPrice"):
-        if _c in df.columns:
-            df[_c] = pd.to_numeric(df[_c], errors="coerce")
+    df.columns = [_norm_col(c) for c in df.columns]
+    _validate_header(list(df.columns), csv_file)
 
-    if "ClosePrice" in df.columns:
-        if "HiPrice" not in df.columns:
-            df["HiPrice"] = df["ClosePrice"]
-        if "LowPrice" not in df.columns:
-            df["LowPrice"] = df["ClosePrice"]
+    # Ensure price columns are numeric (schema гарантовано містить ці колонки)
+    for _c in ("AvgPrice", "ClosePrice", "HiPrice", "LowPrice"):
+        df[_c] = pd.to_numeric(df[_c], errors="coerce")
     df = _prepare_df_for_session_calc(df)
 
     if len(df) < 10:
