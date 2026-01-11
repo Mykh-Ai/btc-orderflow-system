@@ -27,12 +27,14 @@ Paper mode behavior (DRY=1)
 from __future__ import annotations
 
 import os
+import sys
 import json
 import time
 import math
 import hmac
 import hashlib
 import inspect
+import csv
 from collections import deque
 from contextlib import suppress
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
@@ -81,7 +83,9 @@ ENV: Dict[str, Any] = {
 
 # inputs
 "DELTASCOUT_LOG": os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log"),
-"AGG_CSV": os.getenv("AGG_CSV", "/data/feed/aggregated.csv"),
+# Feed path: keep AGG_CSV override, but allow FEED_DIR default like other services
+"FEED_DIR": os.getenv("FEED_DIR", "/data/feed"),
+"AGG_CSV": os.getenv("AGG_CSV") or os.path.join(os.getenv("FEED_DIR", "/data/feed"), "aggregated.csv"),
 
 # outputs
 "STATE_FN": os.getenv("STATE_FN", "/data/state/executor_state.json"),
@@ -162,6 +166,41 @@ ENV: Dict[str, Any] = {
 "TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 50.0),
 "TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
 }
+
+# ===== aggregated.csv strict schema (10 columns, ordered) =====
+EXPECTED_AGG_HEADER = [
+    "Timestamp",
+    "Trades",
+    "TotalQty",
+    "AvgSize",
+    "BuyQty",
+    "SellQty",
+    "AvgPrice",
+    "ClosePrice",
+    "HiPrice",
+    "LowPrice",
+]
+
+
+def _norm_col(c: str) -> str:
+    return (str(c) if c is not None else "").lstrip("\ufeff").strip()
+
+
+def _validate_agg_header(header: list[str] | None, path: str) -> None:
+    if not header:
+        print(f"[CSV HEADER ERROR] empty header in {path}", file=sys.stderr, flush=True)
+        raise SystemExit(2)
+    header_n = [_norm_col(h) for h in header]
+    if header_n != EXPECTED_AGG_HEADER:
+        print(
+            "[CSV HEADER ERROR] aggregated.csv schema mismatch.\n"
+            f"Expected: {EXPECTED_AGG_HEADER}\n"
+            f"Got:      {header_n}\n"
+            f"Path:     {path}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(2)
 
 # Binance server time offset (ms). Helps avoid timestamp drift / -1021 errors.
 BINANCE_TIME_OFFSET_MS = 0
@@ -502,8 +541,14 @@ def load_df_sorted() -> pd.DataFrame:
     if not os.path.exists(ENV["AGG_CSV"]):
         return pd.DataFrame()
 
-    df = pd.read_csv(ENV["AGG_CSV"])
-    df.columns = [c.strip() for c in df.columns]
+    # Validate header first (BOM-safe) to fail loud on schema drift
+    with open(ENV["AGG_CSV"], "r", encoding="utf-8-sig", newline="") as f:
+        rdr = csv.reader(f)
+        header = next(rdr, None)
+        _validate_agg_header(header, ENV["AGG_CSV"])
+
+    df = pd.read_csv(ENV["AGG_CSV"], encoding="utf-8-sig")
+    df.columns = [_norm_col(c) for c in df.columns]
 
     if "Timestamp" not in df.columns:
         return pd.DataFrame()
@@ -1636,41 +1681,47 @@ def get_mid_price(symbol: str) -> float:
 def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
     """
     Read last N rows from aggregated.csv and extract ClosePrice (fallback to AvgPrice).
-    CSV header expected (example): Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice
+    CSV header expected (strict, 10 cols):
+    Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice
     """
-    if n_rows <= 0:
+    if not path or n_rows <= 0:
         return []
-    # Read tail lines (avoid loading full file)
-    lines = read_tail_lines(path, n_rows + 5)  # header + a few extra
-    if not lines:
+    if not os.path.exists(path):
         return []
-    # Find header
-    header_idx = None
-    for i, ln in enumerate(lines):
-        if "Timestamp" in ln and "ClosePrice" in ln:
-            header_idx = i
-            break
-    # If no header in tail, assume fixed order and parse from all lines
-    data_lines = lines[header_idx + 1:] if header_idx is not None else lines
-    closes: list[float] = []
-    for ln in data_lines:
-        ln = ln.strip()
-        if not ln or ln.startswith("Timestamp"):
-            continue
-        parts = [p.strip() for p in ln.split(",")]
-        if len(parts) < 7:
-            continue
-        # try ClosePrice last col (idx 7) if present
-        v = None
-        if len(parts) >= 8:
-            v = parts[7]
-        else:
-            v = parts[6]  # AvgPrice
-        try:
-            closes.append(float(v))
-        except Exception:
-            continue
-    return closes
+    closes = deque(maxlen=n_rows)
+    bad_rows = 0
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            rdr = csv.reader(f)
+            header = next(rdr, None)
+            _validate_agg_header(header, path)
+            header_n = [_norm_col(h) for h in (header or [])]
+            idx = {h: i for i, h in enumerate(header_n)}
+
+            for parts in rdr:
+                if not parts:
+                    continue
+                if len(parts) != len(header_n):
+                    bad_rows += 1
+                    if bad_rows % 200 == 0:
+                        print(
+                            f"[CSV WARN] bad row width in {path}: got {len(parts)} expected {len(header_n)}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    continue
+                try:
+                    v = parts[idx["ClosePrice"]].strip()
+                    if v == "":
+                        v = parts[idx["AvgPrice"]].strip()
+                    closes.append(float(v))
+                except Exception:
+                    continue
+    except SystemExit:
+        raise
+    except Exception:
+        return []
+    return list(closes)
 
 
 def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
