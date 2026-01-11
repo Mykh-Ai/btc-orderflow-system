@@ -13,7 +13,7 @@ It also does NOT place real exchange orders in the public repository version.
 DeltaScout writes JSON events, therefore legacy text/CSV parsing is removed.
 """
 from __future__ import annotations
-import os, json, time, hashlib
+import os, sys, json, time, hashlib
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
@@ -26,6 +26,12 @@ import requests
 # The original internal version may contain execution (Binance REST) and stop-limit nuances.
 # Those parts are intentionally excluded from the public repo version to avoid strategy leakage.
 
+# Strict 10-col schema for aggregated.csv
+EXPECTED_HEADER = ["Timestamp","Trades","TotalQty","AvgSize","BuyQty","SellQty","AvgPrice","ClosePrice","HiPrice","LowPrice"]
+
+# Default feed dir (compatible with docker volume layout); AGG_CSV can still override.
+FEED_DIR = os.getenv("FEED_DIR", "/data/feed")
+
 # ===================== ENV =====================
 def require_env(name: str) -> str:
     v = os.getenv(name)
@@ -35,7 +41,7 @@ def require_env(name: str) -> str:
 ENV = {
     # files
     "DELTASCOUT_LOG": os.getenv("DELTASCOUT_LOG", "/root/volume-alert/data/logs/deltascout.log"),
-    "AGG_CSV":        os.getenv("AGG_CSV",        "/root/volume-alert/data/feed/aggregated.csv"),
+    "AGG_CSV":        os.getenv("AGG_CSV") or os.path.join(FEED_DIR, "aggregated.csv"),
     "STATE_FN":       os.getenv("STATE_FN",       "/root/volume-alert/buyer_state.json"),
 
     # base parameters
@@ -130,8 +136,22 @@ def notional_to_qty(entry: float, usd: float) -> float:
 
 # ===================== Market context =====================
 def load_df_sorted() -> pd.DataFrame:
-    df = pd.read_csv(ENV["AGG_CSV"])
-    df.columns = [c.strip() for c in df.columns]
+    df = pd.read_csv(ENV["AGG_CSV"], encoding="utf-8-sig")
+    # Normalize header: strip UTF-8 BOM and whitespace
+    df.columns = [str(c).lstrip("\ufeff").strip() for c in df.columns]
+
+    # Enforce strict schema (ordered, 10 columns)
+    got = list(df.columns)
+    if got != EXPECTED_HEADER:
+        print(
+            "CSV schema mismatch for aggregated.csv.\n"
+            f"Expected: {EXPECTED_HEADER}\n"
+            f"Got:      {got}\n"
+            f"Path:     {ENV['AGG_CSV']}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(2)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.floor("min")
     price = df["ClosePrice"] if "ClosePrice" in df.columns else df.get("AvgPrice")
     df["price"] = pd.to_numeric(price, errors="coerce").ffill()
