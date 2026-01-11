@@ -13,7 +13,8 @@ Repository-ready changes:
 - English-only comments/messages.
 - External process trigger removed (aggregator only produces aggregated.csv).
 
-NOTE: Aggregation logic is intentionally unchanged.
+NOTE: Core aggregation metrics are unchanged.
+HiPrice/LowPrice were added as extra columns computed per interval.
 """
 
 import json, time, datetime, socket
@@ -33,6 +34,65 @@ os.makedirs(logs_dir, exist_ok=True)
 
 aggregated_file_path = os.path.join(feed_dir, "aggregated.csv")
 log_file_path = os.path.join(logs_dir, "trades_log.txt")
+
+# ===========================
+# CSV schema (backward-safe)
+# ===========================
+OLD_HEADER = "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n"
+NEW_HEADER = "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice\n"
+
+def ensure_csv_schema() -> None:
+    """Prevent mixed-width CSV rows.
+
+    If aggregated.csv exists with the old 8-col header, migrate it in-place:
+      - replace header with NEW_HEADER
+      - pad existing 8-col rows with two empty columns
+    """
+    if not os.path.isfile(aggregated_file_path):
+        return
+
+    try:
+        with open(aggregated_file_path, "r", encoding="utf-8") as f:
+            rows = f.readlines()
+
+        if not rows:
+            return
+
+        def _norm(s: str) -> str:
+            # handle UTF-8 BOM and Windows newlines; compare logical header content
+            return s.lstrip("\ufeff").strip("\r\n")
+
+        hdr = rows[0]
+        if _norm(hdr) == _norm(NEW_HEADER):
+            return
+
+        # Only migrate if we exactly recognize the old header.
+        if _norm(hdr) != _norm(OLD_HEADER):
+            return
+
+        migrated = [NEW_HEADER]
+        for ln in rows[1:]:
+            line = ln.rstrip("\r\n")
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) == 8:
+                parts += ["", ""]
+                migrated.append(",".join(parts) + "\n")
+            elif len(parts) == 10:
+                migrated.append(line + "\n")
+            else:
+                # Unexpected width — keep as-is to avoid destroying data.
+                migrated.append(line + "\n")
+
+        tmp = aggregated_file_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(migrated)
+        os.replace(tmp, aggregated_file_path)
+        print("🛠️ aggregated.csv migrated to include HiPrice/LowPrice", flush=True)
+
+    except Exception as e:
+        print(f"CSV schema migration error: {e}", flush=True)
 
 # Settings
 AGG_INTERVAL = int(os.getenv("AGG_INTERVAL", "60"))
@@ -134,12 +194,17 @@ def aggregate_and_clear():
         print("Trades log is empty; waiting for the next interval...", flush=True)
         return
 
+    # Ensure we never mix 8-col and 10-col rows in aggregated.csv
+    ensure_csv_schema()
+
     num_trades = len(lines)
     total_qty = 0.0
     total_price = 0.0
     buy_qty = 0.0
     sell_qty = 0.0
     close_price = None
+    high_price = None
+    low_price = None
 
     for line in lines:
         try:
@@ -157,16 +222,28 @@ def aggregate_and_clear():
                 sell_qty += qty
 
             close_price = price
+            if high_price is None or price > high_price:
+                high_price = price
+            if low_price is None or price < low_price:
+                low_price = price
         except Exception as e:
             print("Line parse error:", line, e, flush=True)
 
     avg_size = total_qty / num_trades if num_trades > 0 else 0.0
     avg_price = total_price / total_qty if total_qty > 0 else 0.0
 
+    if close_price is None:
+        # If all lines were unparsable, avoid crashing on formatting.
+        close_price = avg_price
+    if high_price is None:
+        high_price = close_price
+    if low_price is None:
+        low_price = close_price
+
     file_exists = os.path.isfile(aggregated_file_path)
     with open(aggregated_file_path, "a", encoding="utf-8") as f:
         if not file_exists:
-            f.write("Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n")
+            f.write(NEW_HEADER)
 
         f.write(
             f"{time.strftime('%Y-%m-%d %H:%M:%S')},"
@@ -176,7 +253,9 @@ def aggregate_and_clear():
             f"{buy_qty:.6f},"
             f"{sell_qty:.6f},"
             f"{avg_price:.0f},"
-            f"{close_price:.0f}\n"
+            f"{close_price:.0f},"
+            f"{high_price:.0f},"
+            f"{low_price:.0f}\n"
         )
 
     # Trim aggregated.csv to keep bounded size (original behavior preserved)
