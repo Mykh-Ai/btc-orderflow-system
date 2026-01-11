@@ -89,7 +89,7 @@ EXPECTED_HEADER = [
 def _normalize_header(header: list[str] | None) -> list[str] | None:
     if header is None:
         return None
-    return [h.strip() for h in header]
+    return [h.lstrip("\ufeff").strip() for h in header]
 
 def _validate_header(header: list[str] | None, path: str):
     if header is None:
