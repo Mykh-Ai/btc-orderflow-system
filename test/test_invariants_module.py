@@ -2,6 +2,7 @@ import importlib.util
 import inspect
 import time
 import unittest
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -60,8 +61,9 @@ class TestInvariantsModule(unittest.TestCase):
             # keep optional fields safe:
             "TRAIL_SOURCE": "AGG",
             "AGG_CSV": "X:/nonexistent/agg.csv",
-            "INVAR_STATE_FN": str(Path(__file__).resolve().parent / ".tmp_invariants_state.json"),
+            "INVAR_STATE_FN": str(Path(__file__).resolve().parent / f".tmp_invariants_state_{time.time_ns()}.json"),
         }
+        self._inv_state_fn = env["INVAR_STATE_FN"]
 
         # Configure with only the args that exist in current signature
         cfg = self.inv.configure
@@ -75,6 +77,12 @@ class TestInvariantsModule(unittest.TestCase):
         }
         kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
         cfg(**kwargs)
+
+    def tearDown(self):
+        fn = getattr(self, "_inv_state_fn", None)
+        if fn:
+            with suppress(Exception):
+                Path(fn).unlink()
 
     def _count(self, inv_id: str) -> int:
         return sum(1 for p in self.sent if _payload_inv_id(p) == inv_id)
