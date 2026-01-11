@@ -5,7 +5,7 @@ import requests
 from typing import Tuple
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-feed_dir = os.path.join(script_dir, "feed")
+feed_dir = os.getenv("FEED_DIR", os.path.join(script_dir, "feed"))
 csv_file = os.path.join(feed_dir, "aggregated.csv")
 
 N8N_URL = "http://n8n:5678/webhook/volume-alert"  # Production URL
