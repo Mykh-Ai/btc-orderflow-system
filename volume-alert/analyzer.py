@@ -103,11 +103,24 @@ def _compute_session_cum_from_df(df: pd.DataFrame) -> Tuple[str, float, float]:
 
 def analyze_last_10():
     if not os.path.exists(csv_file):
-        print("⚠️ Файл aggregated.csv не знайдено.")
+        print(f"aggregated.csv not found: {csv_file}")
         return
 
     df = pd.read_csv(csv_file, header=0, encoding="utf-8-sig")
     df.rename(columns=lambda x: x.replace('\ufeff', ''), inplace=True)
+    # Backward/forward compatible CSV schema:
+    # - Old schema: ... AvgPrice,ClosePrice
+    # - New schema: ... AvgPrice,ClosePrice,HiPrice,LowPrice
+    # Ensure price columns are numeric, and provide Hi/Lo fallbacks for old CSVs.
+    for _c in ("AvgPrice", "ClosePrice", "HiPrice", "LowPrice"):
+        if _c in df.columns:
+            df[_c] = pd.to_numeric(df[_c], errors="coerce")
+
+    if "ClosePrice" in df.columns:
+        if "HiPrice" not in df.columns:
+            df["HiPrice"] = df["ClosePrice"]
+        if "LowPrice" not in df.columns:
+            df["LowPrice"] = df["ClosePrice"]
     df = _prepare_df_for_session_calc(df)
 
     if len(df) < 10:
