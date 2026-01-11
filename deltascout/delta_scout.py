@@ -86,7 +86,6 @@ EXPECTED_HEADER = [
     "HiPrice",
     "LowPrice",
 ]
-
 def _normalize_header(header: list[str] | None) -> list[str] | None:
     if header is None:
         return None
@@ -612,8 +611,7 @@ def read_last_rows(path: str, n: int):
                         flush=True,
                     )
                 continue
-            row = {h: parts[idx[h]] for h in header}
-            tail.append(row)
+            tail.append({h: parts[idx[h]] for h in header})
     return list(tail)
 
 def warmup_init(scout: Scout, rows: list):

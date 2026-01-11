@@ -17,19 +17,19 @@ These contracts allow Buyer and Executor to remain decoupled from the raw Binanc
 **Path (typical):**
 - `/data/feed/aggregated.csv`
 
-### Required columns
+### Required columns (strict order)
 | Column | Type | Description |
 |---|---|---|
 | `Timestamp` | string/datetime | Candle minute timestamp (UTC recommended) |
+| `Trades` | int | Trade count for the minute |
+| `TotalQty` | float | Total traded quantity for the minute |
+| `AvgSize` | float | Average trade size for the minute |
 | `BuyQty` | float | Total aggressive buy quantity for the minute |
 | `SellQty` | float | Total aggressive sell quantity for the minute |
-| `ClosePrice` | float | Close price for the minute (or `AvgPrice` if used) |
-
-### Optional columns (allowed)
-- `AvgPrice` (float)
-- `Trades` (int)
-- `TotalQty` (float)
-- any additional telemetry fields
+| `AvgPrice` | float | Average price for the minute |
+| `ClosePrice` | float | Close price for the minute |
+| `HiPrice` | float | High price for the minute |
+| `LowPrice` | float | Low price for the minute |
 
 ### Notes
 - DeltaScout treats the feed as append-only time series.
