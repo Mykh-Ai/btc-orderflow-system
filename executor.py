@@ -221,7 +221,7 @@ def _split_symbol_guess(symbol: str) -> Tuple[str, str]:
 def _validate_trade_mode() -> str:
     mode = str(ENV.get("TRADE_MODE", "")).strip().lower()
     if mode not in ("spot", "margin"):
-        raise RuntimeError("paper mode removed; use TRADE_MODE=spot or TRADE_MODE=margin")
+        raise RuntimeError("unsupported mode removed; use TRADE_MODE=spot or TRADE_MODE=margin")
     ENV["TRADE_MODE"] = mode
     return mode
 
@@ -2151,8 +2151,7 @@ def main() -> None:
                     continue
                 tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
 
-                
-# --- USDT -> USDC conversion (k_entry fixed once per position) ---
+                # --- USDT -> USDC conversion (k_entry fixed once per position) ---
                 k_entry = get_usdt_usdc_k()
 
                 # Convert prices, then apply *directional* rounding to keep logic stable.
@@ -2214,42 +2213,42 @@ def main() -> None:
                     status0 = "PENDING"
                     entry_actual0 = None
                 st["position"] = {
-                        "status": status0,
-                        "mode": "live",
-                        "opened_at": iso_utc(),
-                        "opened_s": _now_s(),
-                        "side": side_txt,
-                        "qty": qty,
-                        "entry": entry,
-                        "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
-                        "client_id": client_id,
-                        "trade_key": client_id,
-                        "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
-                        "entry_actual": entry_actual0,
-                        "k_entry": k_entry,
-                        "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
-                        "src_evt": {
-                            "ts": evt.get("ts"),
-                            "kind": kind,
-                            "price_usdt": close_price_usdt,
-                            "entry_usdt": entry_usdt,
-                            "sl_usdt": sl_usdt,
-                            "tp1_usdt": tp1_usdt,
-                            "tp2_usdt": tp2_usdt,
-                        },
-                    }
-                    if status0 == "OPEN_FILLED":
-                        pos0 = st.get("position") or {}
-                        with suppress(Exception):
-                            margin_guard.on_after_entry_opened( st,trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
-                        if (not pos0.get("orders")) and pos0.get("prices"):
-                            exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
-                    save_state(st)
+                    "status": status0,
+                    "mode": "live",
+                    "opened_at": iso_utc(),
+                    "opened_s": _now_s(),
+                    "side": side_txt,
+                    "qty": qty,
+                    "entry": entry,
+                    "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
+                    "client_id": client_id,
+                    "trade_key": client_id,
+                    "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
+                    "entry_actual": entry_actual0,
+                    "k_entry": k_entry,
+                    "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
+                    "src_evt": {
+                        "ts": evt.get("ts"),
+                        "kind": kind,
+                        "price_usdt": close_price_usdt,
+                        "entry_usdt": entry_usdt,
+                        "sl_usdt": sl_usdt,
+                        "tp1_usdt": tp1_usdt,
+                        "tp2_usdt": tp2_usdt,
+                    },
+                }
+                if status0 == "OPEN_FILLED":
+                    pos0 = st.get("position") or {}
+                    with suppress(Exception):
+                        margin_guard.on_after_entry_opened(st, trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
+                    if (not pos0.get("orders")) and pos0.get("prices"):
+                        exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
+                save_state(st)
 
-                    log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
-                    send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
-                except Exception as e:
-                    log_event("LIVE_OPEN_ERROR", error=str(e))
+                log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
+                send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
+            except Exception as e:
+                log_event("LIVE_OPEN_ERROR", error=str(e))
                     
 if __name__ == "__main__":
     try:
