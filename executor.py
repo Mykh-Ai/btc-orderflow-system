@@ -510,10 +510,18 @@ def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
     else:
         lookback = df.iloc[max(0, i - ENV["SWING_MINS"]): i + 1]
         if side == "BUY":
-            swing = float(lookback["price"].min())
+            swing_col = "LowPrice" if "LowPrice" in lookback.columns else "price"
+            s = lookback[swing_col].dropna()
+            if s.empty:
+                s = lookback["price"].dropna()
+            swing = pct_sl if s.empty else float(s.min())
             sl = min(pct_sl, swing)
         else:
-            swing = float(lookback["price"].max())
+            swing_col = "HiPrice" if "HiPrice" in lookback.columns else "price"
+            s = lookback[swing_col].dropna()
+            if s.empty:
+                s = lookback["price"].dropna()
+            swing = pct_sl if s.empty else float(s.max())
             sl = max(pct_sl, swing)
 
     # Safety: enforce correct side and rounding

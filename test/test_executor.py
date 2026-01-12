@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
+import pandas as pd
 import executor
 from copy import deepcopy
 
@@ -14,6 +15,58 @@ def _stop_after_n_sleeps(n: int):
 
 
 class TestExecutorV15(unittest.TestCase):
+
+    def test_swing_stop_far_uses_agg_high_low(self):
+        df = pd.DataFrame({
+            "Timestamp": [1, 2, 3, 4, 5],
+            "price": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "LowPrice": [90.0, 90.0, 90.0, 90.0, 90.0],
+            "HiPrice": [110.0, 110.0, 110.0, 110.0, 110.0],
+        })
+
+        prev_sl_pct = executor.ENV["SL_PCT"]
+        prev_swing = executor.ENV["SWING_MINS"]
+        prev_tick = executor.ENV["TICK_SIZE"]
+        try:
+            executor.ENV["SL_PCT"] = 0.01
+            executor.ENV["SWING_MINS"] = 50
+            executor.ENV["TICK_SIZE"] = 0.1
+            entry = 100.0
+            sl_buy = executor.swing_stop_far(df, 4, "BUY", entry)
+            sl_sell = executor.swing_stop_far(df, 4, "SELL", entry)
+        finally:
+            executor.ENV["SL_PCT"] = prev_sl_pct
+            executor.ENV["SWING_MINS"] = prev_swing
+            executor.ENV["TICK_SIZE"] = prev_tick
+
+        self.assertEqual(sl_buy, 90.0)
+        self.assertEqual(sl_sell, 110.0)
+
+    def test_swing_stop_far_nan_fallbacks_to_price(self):
+        df = pd.DataFrame({
+            "Timestamp": [1, 2, 3, 4, 5],
+            "price": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "LowPrice": [float("nan")] * 5,
+            "HiPrice": [float("nan")] * 5,
+        })
+
+        prev_sl_pct = executor.ENV["SL_PCT"]
+        prev_swing = executor.ENV["SWING_MINS"]
+        prev_tick = executor.ENV["TICK_SIZE"]
+        try:
+            executor.ENV["SL_PCT"] = 0.01
+            executor.ENV["SWING_MINS"] = 50
+            executor.ENV["TICK_SIZE"] = 0.1
+            entry = 100.0
+            sl_buy = executor.swing_stop_far(df, 4, "BUY", entry)
+            sl_sell = executor.swing_stop_far(df, 4, "SELL", entry)
+        finally:
+            executor.ENV["SL_PCT"] = prev_sl_pct
+            executor.ENV["SWING_MINS"] = prev_swing
+            executor.ENV["TICK_SIZE"] = prev_tick
+
+        self.assertEqual(sl_buy, 99.0)
+        self.assertEqual(sl_sell, 101.0)
 
     def test_sl_filled_cancels_tp1_tp2_even_if_openorders_fail(self):
         st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
