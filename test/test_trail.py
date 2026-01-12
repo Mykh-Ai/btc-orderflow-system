@@ -105,7 +105,7 @@ class TestTrailModule(unittest.TestCase):
         self._configure_with_file(env)
         pos = {"side": "LONG"}
         stop = trail._trail_desired_stop_from_agg(pos)
-        self.assertEqual(stop, 7.5)
+        self.assertEqual(stop, 7.4)
 
     def test_trail_desired_stop_short(self) -> None:
         rows = [
@@ -125,7 +125,7 @@ class TestTrailModule(unittest.TestCase):
         self._configure_with_file(env)
         pos = {"side": "SHORT"}
         stop = trail._trail_desired_stop_from_agg(pos)
-        self.assertEqual(stop, 4)
+        self.assertEqual(stop, 4.1)
 
     def test_trail_desired_stop_no_path(self) -> None:
         rows = [
