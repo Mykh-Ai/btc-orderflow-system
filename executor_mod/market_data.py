@@ -49,7 +49,8 @@ def load_df_sorted() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-    # Hi/Low (optional in v2 schema). If missing, fall back to price (close/avg-derived).
+    # Hi/Low (optional in v2 schema). If missing, fall back to price.
+
     if "HiPrice" in df.columns:
         df["HiPrice"] = pd.to_numeric(df["HiPrice"], errors="coerce")
     else:
