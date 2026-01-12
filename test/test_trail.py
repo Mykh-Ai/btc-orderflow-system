@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 
 import executor_mod.trail as trail
@@ -8,32 +9,67 @@ class TestTrailModule(unittest.TestCase):
         # Preserve module globals to avoid leaking state between tests (or other test modules).
         self._old_env = trail.ENV
         self._old_read_tail_lines = trail.read_tail_lines
+        self._tmp_paths: list[str] = []
 
     def tearDown(self) -> None:
         trail.ENV = self._old_env
         trail.read_tail_lines = self._old_read_tail_lines
+        import os
+        for p in self._tmp_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
-    def _configure_with_lines(self, env: dict, lines: list[str]) -> None:
-        def _rtl(_path: str, _n: int) -> list[str]:
-            return list(lines)
+    def _configure_with_file(self, env: dict) -> None:
+        def _rtl(path: str, n: int) -> list[str]:
+            with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                lines = f.readlines()
+            if n <= 0:
+                return []
+            return lines[-n:]
         trail.configure(env, _rtl)
 
+    def _write_agg_csv(self, rows: list[list[str]], header: list[str] | None = None) -> str:
+        header = header or trail.AGG_HEADER_V2
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, newline="")
+        with tmp as f:
+            f.write(",".join(header) + "\n")
+            for row in rows:
+                f.write(",".join(row) + "\n")
+        self._tmp_paths.append(tmp.name)
+        return tmp.name
+
     def test_read_last_close_prices_returns_parsed_closes(self) -> None:
-        lines = [
-            "noise line\n",
-            "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n",
-            "2025-01-01 00:00:00,1,0.1,0.1,0.1,0,100.0,101.0\n",
-            "2025-01-01 00:01:00,1,0.1,0.1,0.1,0,102.0\n",  # no ClosePrice -> fallback to AvgPrice
-            "2025-01-01 00:02:00,1,0.1,0.1,0.1,0,103.0,abc\n",  # invalid -> skipped
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "100.0", "101.0", "101.5", "99.5"],
+            ["2025-01-01 00:01:00", "1", "0.1", "0.1", "0.1", "0", "102.0", "102.0", "102.5", "101.5"],
+            ["2025-01-01 00:02:00", "1", "0.1", "0.1", "0.1", "0", "103.0", "103.0", "103.5", "102.5"],
         ]
-        self._configure_with_lines({"QTY_STEP": None}, lines)
-        closes = trail._read_last_close_prices_from_agg_csv("dummy.csv", 10)
-        self.assertEqual(closes, [101.0, 102.0])
+        path = self._write_agg_csv(rows)
+        self._configure_with_file({"QTY_STEP": None})
+        closes = trail._read_last_close_prices_from_agg_csv(path, 2)
+        self.assertEqual(closes, [102.0, 103.0])
 
     def test_read_last_close_prices_n_rows_le_zero(self) -> None:
-        self._configure_with_lines({"QTY_STEP": None}, ["Timestamp,...\n"])
-        self.assertEqual(trail._read_last_close_prices_from_agg_csv("dummy.csv", 0), [])
-        self.assertEqual(trail._read_last_close_prices_from_agg_csv("dummy.csv", -1), [])
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "100.0", "101.0", "101.5", "99.5"],
+            ["2025-01-01 00:01:00", "1", "0.1", "0.1", "0.1", "0", "102.0", "102.0", "102.5", "101.5"],
+        ]
+        path = self._write_agg_csv(rows)
+        self._configure_with_file({"QTY_STEP": None})
+        self.assertEqual(trail._read_last_close_prices_from_agg_csv(path, 0), [])
+        self.assertEqual(trail._read_last_close_prices_from_agg_csv(path, -1), [])
+
+    def test_read_last_close_prices_malformed_rows_are_skipped(self) -> None:
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "100.0", "101.0", "101.5", "99.5"],
+            ["2025-01-01 00:01:00", "1", "0.1", "0.1", "0.1", "0", "102.0", "bad", "102.5", "101.5"],
+        ]
+        path = self._write_agg_csv(rows)
+        self._configure_with_file({"QTY_STEP": None})
+        closes = trail._read_last_close_prices_from_agg_csv(path, 10)
+        self.assertEqual(closes, [101.0])
 
     def test_find_last_fractal_swing_low(self) -> None:
         series = [10.0, 9.0, 8.0, 9.0, 10.0]
@@ -52,57 +88,57 @@ class TestTrailModule(unittest.TestCase):
         self.assertEqual(swing, 1.0)
 
     def test_trail_desired_stop_long(self) -> None:
-        lines = [
-            "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n",
-            "2025-01-01 00:00:00,1,0.1,0.1,0.1,0,10.0,10.0\n",
-            "2025-01-01 00:01:00,1,0.1,0.1,0.1,0,9.0,9.0\n",
-            "2025-01-01 00:02:00,1,0.1,0.1,0.1,0,8.0,8.0\n",
-            "2025-01-01 00:03:00,1,0.1,0.1,0.1,0,9.0,9.0\n",
-            "2025-01-01 00:04:00,1,0.1,0.1,0.1,0,10.0,10.0\n",
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "10.0", "10.0", "10.1", "9.9"],
+            ["2025-01-01 00:01:00", "1", "0.1", "0.1", "0.1", "0", "9.0", "9.0", "9.1", "8.9"],
+            ["2025-01-01 00:02:00", "1", "0.1", "0.1", "0.1", "0", "8.0", "8.0", "8.1", "7.9"],
+            ["2025-01-01 00:03:00", "1", "0.1", "0.1", "0.1", "0", "9.0", "9.0", "9.1", "8.9"],
+            ["2025-01-01 00:04:00", "1", "0.1", "0.1", "0.1", "0", "10.0", "10.0", "10.1", "9.9"],
         ]
+        path = self._write_agg_csv(rows)
         env = {
-            "AGG_CSV": "dummy.csv",
+            "AGG_CSV": path,
             "TRAIL_SWING_LOOKBACK": 50,
             "TRAIL_SWING_LR": 2,
             "TRAIL_SWING_BUFFER_USD": 0.5,
         }
-        self._configure_with_lines(env, lines)
+        self._configure_with_file(env)
         pos = {"side": "LONG"}
         stop = trail._trail_desired_stop_from_agg(pos)
         self.assertEqual(stop, 7.5)
 
     def test_trail_desired_stop_short(self) -> None:
-        lines = [
-            "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n",
-            "2025-01-01 00:00:00,1,0.1,0.1,0.1,0,1.0,1.0\n",
-            "2025-01-01 00:01:00,1,0.1,0.1,0.1,0,2.0,2.0\n",
-            "2025-01-01 00:02:00,1,0.1,0.1,0.0,0.1,3.0,3.5\n",
-            "2025-01-01 00:03:00,1,0.1,0.1,0.0,0.1,2.0,2.0\n",
-            "2025-01-01 00:04:00,1,0.1,0.1,0.0,0.1,1.0,1.0\n",
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "1.0", "1.0", "1.1", "0.9"],
+            ["2025-01-01 00:01:00", "1", "0.1", "0.1", "0.1", "0", "2.0", "2.0", "2.1", "1.9"],
+            ["2025-01-01 00:02:00", "1", "0.1", "0.1", "0.0", "0.1", "3.0", "3.5", "3.6", "3.4"],
+            ["2025-01-01 00:03:00", "1", "0.1", "0.1", "0.0", "0.1", "2.0", "2.0", "2.1", "1.9"],
+            ["2025-01-01 00:04:00", "1", "0.1", "0.1", "0.0", "0.1", "1.0", "1.0", "1.1", "0.9"],
         ]
+        path = self._write_agg_csv(rows)
         env = {
-            "AGG_CSV": "dummy.csv",
+            "AGG_CSV": path,
             "TRAIL_SWING_LOOKBACK": 50,
             "TRAIL_SWING_LR": 2,
             "TRAIL_SWING_BUFFER_USD": 0.5,
         }
-        self._configure_with_lines(env, lines)
+        self._configure_with_file(env)
         pos = {"side": "SHORT"}
         stop = trail._trail_desired_stop_from_agg(pos)
         self.assertEqual(stop, 4)
 
     def test_trail_desired_stop_no_path(self) -> None:
-        lines = [
-            "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n",
-            "2025-01-01 00:00:00,1,0.1,0.1,0.1,0,10.0,10.0\n",
+        rows = [
+            ["2025-01-01 00:00:00", "1", "0.1", "0.1", "0.1", "0", "10.0", "10.0", "10.1", "9.9"],
         ]
+        self._write_agg_csv(rows)
         env = {
             "AGG_CSV": "",
             "TRAIL_SWING_LOOKBACK": 50,
             "TRAIL_SWING_LR": 2,
             "TRAIL_SWING_BUFFER_USD": 0.5,
         }
-        self._configure_with_lines(env, lines)
+        self._configure_with_file(env)
         pos = {"side": "LONG"}
         self.assertIsNone(trail._trail_desired_stop_from_agg(pos))
 
