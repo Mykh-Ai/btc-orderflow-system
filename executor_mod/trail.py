@@ -6,12 +6,47 @@ Trailing helper logic extracted from executor.py.
 Hard rule: moved functions below are verbatim copies from executor.py.
 """
 from contextlib import suppress
+import csv
+from collections import deque
 from typing import Any, Dict, List, Optional, Callable
 ENV: Dict[str, Any] = {}
 _LOG_EVENT: Optional[Callable[..., None]] = None
 
 # injected dependency from executor.py
 read_tail_lines: Optional[Callable[[str, int], List[str]]] = None
+
+AGG_HEADER_V2 = [
+    "Timestamp",
+    "Trades",
+    "TotalQty",
+    "AvgSize",
+    "BuyQty",
+    "SellQty",
+    "AvgPrice",
+    "ClosePrice",
+    "HiPrice",
+    "LowPrice",
+]
+
+
+def _norm_col(c: str) -> str:
+    return (c or "").replace("\ufeff", "").strip()
+
+
+def _assert_agg_header_v2(path: str) -> None:
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+    if not header:
+        raise RuntimeError(f"aggregated.csv empty/missing header: {path}")
+    got = [_norm_col(x) for x in header]
+    if got != AGG_HEADER_V2:
+        raise RuntimeError(
+            "aggregated.csv schema mismatch (FAIL-LOUD)\n"
+            f"Expected: {AGG_HEADER_V2}\n"
+            f"Got:      {got}\n"
+            f"File: {path}"
+        )
 
 
 def configure(
@@ -34,42 +69,46 @@ def _log_event(action: str, **fields: Any) -> None:
 
 def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
     """
-    Read last N rows from aggregated.csv and extract ClosePrice (fallback to AvgPrice).
-    CSV header expected (example): Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice
+    Read last N ClosePrice values from aggregated.csv (v2 strict schema).
+    FAIL-LOUD on schema mismatch or malformed rows.
     """
-    if n_rows <= 0:
+    if int(n_rows or 0) <= 0:
         return []
-    # Read tail lines (avoid loading full file)
-    lines = read_tail_lines(path, n_rows + 5)  # header + a few extra
-    if not lines:
-        return []
-    # Find header
-    header_idx = None
-    for i, ln in enumerate(lines):
-        if "Timestamp" in ln and "ClosePrice" in ln:
-            header_idx = i
-            break
-    # If no header in tail, assume fixed order and parse from all lines
-    data_lines = lines[header_idx + 1:] if header_idx is not None else lines
-    closes: list[float] = []
-    for ln in data_lines:
-        ln = ln.strip()
-        if not ln or ln.startswith("Timestamp"):
-            continue
-        parts = [p.strip() for p in ln.split(",")]
-        if len(parts) < 7:
-            continue
-        # try ClosePrice last col (idx 7) if present
-        v = None
-        if len(parts) >= 8:
-            v = parts[7]
-        else:
-            v = parts[6]  # AvgPrice
-        try:
-            closes.append(float(v))
-        except Exception:
-            continue
-    return closes
+    n_rows = int(n_rows)
+    closes = deque(maxlen=n_rows)
+    _assert_agg_header_v2(path)
+
+    close_idx = AGG_HEADER_V2.index("ClosePrice")
+
+    # Prefer injected tail reader for performance; fallback to full scan if not provided.
+    if read_tail_lines is not None:
+        lines = read_tail_lines(path, n_rows + 5)  # a few extra lines for safety
+        for ln in lines:
+            ln = ln.strip()
+            if not ln or ln.startswith("Timestamp"):
+                continue
+            parts = [p.strip() for p in ln.split(",")]
+            if len(parts) != len(AGG_HEADER_V2):
+                continue
+            try:
+                closes.append(float(parts[close_idx]))
+            except Exception:
+                continue
+    else:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)  # header
+            for row in reader:
+                if not row:
+                    continue
+                if len(row) != len(AGG_HEADER_V2):
+                    continue
+                try:
+                    closes.append(float(row[close_idx]))
+                except Exception:
+                    continue
+
+    return list(closes)
 
 
 
