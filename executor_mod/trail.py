@@ -70,19 +70,28 @@ def _log_event(action: str, **fields: Any) -> None:
 def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
     """
     Read last N ClosePrice values from aggregated.csv (v2 strict schema).
-    FAIL-LOUD on schema mismatch or malformed rows.
+    - FAIL-LOUD on schema mismatch (header != expected v2).
+    - Fail-closed (return []) if file is missing/empty (startup/rotation).
+    - Malformed data rows are skipped (best-effort tail parsing).
     """
     if int(n_rows or 0) <= 0:
         return []
     n_rows = int(n_rows)
     closes = deque(maxlen=n_rows)
-    _assert_agg_header_v2(path)
-
     close_idx = AGG_HEADER_V2.index("ClosePrice")
 
     # Prefer injected tail reader for performance; fallback to full scan if not provided.
     if read_tail_lines is not None:
+        # Important: preserve fail-closed startup behavior when file doesn't exist yet.
+        # executor.read_tail_lines typically catches FileNotFoundError and returns [].
         lines = read_tail_lines(path, n_rows + 5)  # a few extra lines for safety
+        if not lines:
+            return []
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            # race: file rotated/deleted between tail read and header check
+            return []
         for ln in lines:
             ln = ln.strip()
             if not ln or ln.startswith("Timestamp"):
@@ -95,6 +104,10 @@ def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
             except Exception:
                 continue
     else:
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            return []
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.reader(f)
             next(reader, None)  # header
