@@ -87,7 +87,11 @@ def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
         lines = read_tail_lines(path, n_rows + 5)  # a few extra lines for safety
         if not lines:
             return []
-        _assert_agg_header_v2(path)
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            # race: file rotated/deleted between tail read and header check
+            return []
         for ln in lines:
             ln = ln.strip()
             if not ln or ln.startswith("Timestamp"):
