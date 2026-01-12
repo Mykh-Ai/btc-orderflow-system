@@ -124,6 +124,108 @@ def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
     return list(closes)
 
 
+def _read_last_low_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
+    """
+    Read last N LowPrice values from aggregated.csv (v2 schema: ...HiPrice,LowPrice).
+    Best-effort: skip malformed rows.
+    """
+    if int(n_rows or 0) <= 0:
+        return []
+    n_rows = int(n_rows)
+    lows = deque(maxlen=n_rows)
+    low_idx = AGG_HEADER_V2.index("LowPrice")
+
+    if read_tail_lines is not None:
+        lines = read_tail_lines(path, n_rows + 5)
+        if not lines:
+            return []
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            return []
+        for ln in lines:
+            ln = ln.strip()
+            if not ln or ln.startswith("Timestamp"):
+                continue
+            parts = [p.strip() for p in ln.split(",")]
+            if len(parts) != len(AGG_HEADER_V2):
+                continue
+            try:
+                lows.append(float(parts[low_idx]))
+            except Exception:
+                continue
+    else:
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            return []
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for row in reader:
+                if not row:
+                    continue
+                if len(row) != len(AGG_HEADER_V2):
+                    continue
+                try:
+                    lows.append(float(row[low_idx]))
+                except Exception:
+                    continue
+
+    return list(lows)
+
+
+def _read_last_high_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
+    """
+    Read last N HiPrice values from aggregated.csv (v2 schema: ...HiPrice,LowPrice).
+    Best-effort: skip malformed rows.
+    """
+    if int(n_rows or 0) <= 0:
+        return []
+    n_rows = int(n_rows)
+    highs = deque(maxlen=n_rows)
+    high_idx = AGG_HEADER_V2.index("HiPrice")
+
+    if read_tail_lines is not None:
+        lines = read_tail_lines(path, n_rows + 5)
+        if not lines:
+            return []
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            return []
+        for ln in lines:
+            ln = ln.strip()
+            if not ln or ln.startswith("Timestamp"):
+                continue
+            parts = [p.strip() for p in ln.split(",")]
+            if len(parts) != len(AGG_HEADER_V2):
+                continue
+            try:
+                highs.append(float(parts[high_idx]))
+            except Exception:
+                continue
+    else:
+        try:
+            _assert_agg_header_v2(path)
+        except FileNotFoundError:
+            return []
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for row in reader:
+                if not row:
+                    continue
+                if len(row) != len(AGG_HEADER_V2):
+                    continue
+                try:
+                    highs.append(float(row[high_idx]))
+                except Exception:
+                    continue
+
+    return list(highs)
+
+
 
 def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
     """
@@ -156,7 +258,8 @@ def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optiona
 
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     """
-    Compute desired trailing stop based on last swing from aggregated.csv ClosePrice.
+    Compute desired trailing stop based on last swing from aggregated.csv:
+      LONG uses LowPrice swings; SHORT uses HiPrice swings.
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """
@@ -204,11 +307,15 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     lookback = int(ENV.get("TRAIL_SWING_LOOKBACK") or 0)
     lr = int(ENV.get("TRAIL_SWING_LR") or 2)
     buf = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 0.0)
-    closes = _read_last_close_prices_from_agg_csv(path, lookback)
-    if not closes:
+    if pos.get("side") == "LONG":
+        series = _read_last_low_prices_from_agg_csv(path, lookback)
+        kind = "low"
+    else:
+        series = _read_last_high_prices_from_agg_csv(path, lookback)
+        kind = "high"
+    if not series:
         return None
-    kind = "low" if pos.get("side") == "LONG" else "high"
-    swing = _find_last_fractal_swing(closes, lr=lr, kind=kind)
+    swing = _find_last_fractal_swing(series, lr=lr, kind=kind)
     if swing is None:
         return None
     if pos.get("side") == "LONG":
