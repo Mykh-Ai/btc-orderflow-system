@@ -184,7 +184,6 @@ class TestExecutorV15(unittest.TestCase):
              patch.object(executor, "log_event", lambda *_ , **__: None), \
              patch.object(executor.time, "sleep", _stop_after_n_sleeps(10)):
 
-            executor.ENV["DRY"] = False
             executor.ENV["LIVE_ENTRY_TIMEOUT_SEC"] = 10
             executor.ENV["ENTRY_MODE"] = "LIMIT_THEN_MARKET"
             executor.ENV["LIVE_STATUS_POLL_EVERY"] = 2
@@ -228,7 +227,6 @@ class TestExecutorV15(unittest.TestCase):
              patch.object(executor, "send_webhook", lambda *_: None), \
              patch.object(executor, "log_event", lambda *_ , **__: None), \
              patch.object(executor.time, "sleep", _stop_after_n_sleeps(2)):
-            executor.ENV["DRY"] = False
             executor.ENV["EXITS_RETRY_EVERY_SEC"] = 0
             try:
                 executor.main()

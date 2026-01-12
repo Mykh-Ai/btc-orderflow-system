@@ -6,7 +6,6 @@ Executor — execution engine for DeltaScout PEAK signals.
 Design goals
 - Reads DeltaScout JSONL events from a shared log file (DELTASCOUT_LOG)
 - Single-position mode: ignores new PEAK while a position is OPEN/PENDING
-- DRY=1 (paper) now, DRY=0 (Binance) later
 - Writes ONLY to its own state/log files (never appends to deltascout.log)
 - Keeps executor log capped to LOG_MAX_LINES (default: 200)
 
@@ -17,11 +16,6 @@ Hardening (this patch)
 - Position lock right after OPEN (protects against duplicate opens on restart/race)
 - Keeps last_closed in state while freeing position slot (position=None)
 - Reads deltascout log by tail (TAIL_LINES) without loading full file
-
-Paper mode behavior (DRY=1)
-- On PEAK: compute entry/qty/sl/tps and open a virtual position
-- Continuously monitors latest price from AGG_CSV
-- Closes on SL or final TP (TP1/TP2 hits tracked)
 
 """
 from __future__ import annotations
@@ -40,7 +34,6 @@ from executor_mod.state_store import load_state, save_state, has_open_position, 
 from executor_mod.notifications import log_event, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
-import executor_mod.paper_mode as paper_mode
 import executor_mod.trail as trail
 import executor_mod.invariants as invariants
 import executor_mod.binance_api as binance_api
@@ -93,9 +86,6 @@ def _get_str(name: str, default: str) -> str:
 
 
 ENV: Dict[str, Any] = {
-# mode
-"DRY": _get_bool("DRY", True),
-
 # inputs
 "DELTASCOUT_LOG": os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log"),
 "AGG_CSV": os.getenv("AGG_CSV", "/data/feed/aggregated.csv"),
@@ -139,7 +129,7 @@ ENV: Dict[str, Any] = {
 "N8N_BASIC_AUTH_USER": os.getenv("N8N_BASIC_AUTH_USER", ""),
 "N8N_BASIC_AUTH_PASSWORD": os.getenv("N8N_BASIC_AUTH_PASSWORD", ""),
 
-# Binance (used only when DRY=0)
+# Binance
 "BINANCE_BASE_URL": os.getenv("BINANCE_BASE_URL", "https://api.binance.com"),
 "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY", ""),
 "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET", ""),
@@ -226,6 +216,14 @@ def _split_symbol_guess(symbol: str) -> Tuple[str, str]:
             return (s[:-len(q)], q)
     # fallback: unknown quote
     return (s, "")
+
+
+def _validate_trade_mode() -> str:
+    mode = str(ENV.get("TRADE_MODE", "")).strip().lower()
+    if mode not in ("spot", "margin"):
+        raise RuntimeError("paper mode removed; use TRADE_MODE=spot or TRADE_MODE=margin")
+    ENV["TRADE_MODE"] = mode
+    return mode
 
 def _as_f(x: Any, default: float = 0.0) -> float:
     try:
@@ -446,7 +444,7 @@ binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_pr
 
 
 def build_entry_price(kind: str, close_price: float) -> float:
-    """Entry price builder used for both paper and live.
+    """Entry price builder used for live.
 
     For breakout-style entries:
       - long  -> above close
@@ -557,7 +555,7 @@ def compute_tps(entry: float, sl: float, side: str) -> List[float]:
         tps.append(tp)
     return tps
 
-# ===================== Binance adapter (used only when DRY=0) =====================
+# ===================== Binance adapter =====================
 
 def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, str, Dict[str, Any]]:
     """Guard against chasing far away from planned entry.
@@ -1383,8 +1381,6 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
 
     This avoids accidental double-opening after restarts.
     """
-    if ENV["DRY"]:
-        return
     if str(ENV.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
 
@@ -1703,29 +1699,6 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     save_state(st)
     log_event("SYNC_ATTACHED", side=side_txt, tagged_orders=len(tagged))
 
-# ===================== Paper execution =====================
-
-paper_mode.configure(
-    ENV,
-    _now_s=_now_s,
-    build_entry_price=build_entry_price,
-    notional_to_qty=notional_to_qty,
-    validate_qty=validate_qty,
-    locate_index_by_ts=locate_index_by_ts,
-    swing_stop_far=swing_stop_far,
-    compute_tps=compute_tps,
-    latest_price=latest_price,
-    iso_utc=iso_utc,
-    round_nearest_to_step=round_nearest_to_step,
-    floor_to_step=floor_to_step,
-    ceil_to_step=ceil_to_step,
-)
-def open_paper_position(st: Dict[str, Any], evt: Dict[str, Any], df: pd.DataFrame) -> None:
-    return paper_mode.open_paper_position(st, evt, df)
-
-def monitor_paper_position(st: Dict[str, Any], df: pd.DataFrame) -> None:
-    return paper_mode.monitor_paper_position(st, df)
-
 # ===================== Main loop =====================
 def handle_open_filled_exits_retry(st: dict) -> None:
     """Retry exits placement for a live position stuck in OPEN_FILLED without exits."""
@@ -1761,6 +1734,7 @@ def handle_open_filled_exits_retry(st: dict) -> None:
             binance_api.flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
         _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
 def main() -> None:
+    _validate_trade_mode()
     st = load_state()
     # Margin-guard startup hook (safe no-op unless TRADE_MODE=margin)
     # Best-effort shutdown hook for margin_guard (runs on SIGTERM and normal exit).
@@ -1808,15 +1782,14 @@ def main() -> None:
         order_tp2=orders.get("tp2") if pos_exists else None,
     )
 
-    log_event("BOOT", dry=ENV["DRY"], symbol=ENV["SYMBOL"])
+    log_event("BOOT", trade_mode=ENV["TRADE_MODE"], symbol=ENV["SYMBOL"])
     with suppress(Exception):
         _preflight_margin_cross_usdc()
-    if not ENV["DRY"]:
-        with suppress(Exception):
-            sync_from_binance(st)
+    with suppress(Exception):
+        sync_from_binance(st)
 
     # Optional: one-shot connectivity/auth check (useful before going live)
-    if not ENV["DRY"] and ENV.get("LIVE_VALIDATE_ONLY"):
+    if ENV.get("LIVE_VALIDATE_ONLY"):
         try:
             binance_api.binance_sanity_check()
             log_event("LIVE_VALIDATE_ONLY_DONE")
@@ -1826,7 +1799,6 @@ def main() -> None:
         return
 
     last_manage_s = 0.0
-    agg_ok_prev: Optional[bool] = None
     next_invar_s = 0.0
 
 
@@ -1840,7 +1812,7 @@ def main() -> None:
                 invariants.run(st)
             next_invar_s = loop_now_s + float(ENV.get("INVAR_EVERY_SEC") or 20)
         posi = st.get("position") or {}
-        if posi and posi.get("mode") == "live" and (not ENV["DRY"]) and str(posi.get("status", "")).upper() in (
+        if posi and posi.get("mode") == "live" and str(posi.get("status", "")).upper() in (
             "ENTRY_TIMEOUT_CANCELED",
             "ENTRY_TIMEOUT",
             "ENTRY_CANCELED",
@@ -1853,7 +1825,7 @@ def main() -> None:
             save_state(st)
             log_event("ENTRY_SLOT_CLEARED", prev_status=posi.get("status"))
             continue
-        if posi.get("mode") == "live" and posi.get("status") == "PENDING" and not ENV["DRY"]:
+        if posi.get("mode") == "live" and posi.get("status") == "PENDING":
             try:
                 last_poll = float(posi.get("last_poll_s", 0.0))
                 now_s = _now_s()
@@ -2102,37 +2074,19 @@ def main() -> None:
             save_state(st)
 
 
-                # 2) Market data
-        # Paper mode: keep monitoring aggregated.csv.
-        # Live mode : do NOT read aggregated.csv in the main loop (only on PEAK for swing stop).
-        df: Optional[pd.DataFrame] = None
-        if ENV["DRY"]:
-            df = load_df_sorted()
-            ok = bool(df is not None and not df.empty)
-            if ok:
-                if agg_ok_prev is not True:
-                    log_event("AGG_OK")
-                    agg_ok_prev = True
-                monitor_paper_position(st, df)
-            else:
-                if agg_ok_prev is not False:
-                    log_event("AGG_READ_ERROR", error="empty_or_invalid_agg_csv")
-                    agg_ok_prev = False
-
-        # Live V1.5 management (TP1 -> SL to BE) — throttled
-        if not ENV["DRY"]:
-            pos_live = st.get("position") or {}
-            if pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED"):
-                now_s = _now_s()
-                if now_s - last_manage_s >= float(ENV["MANAGE_EVERY_SEC"]):
-                    last_manage_s = now_s
-                    # If entry filled but exits were not placed (or placement failed), retry.
-                    with suppress(Exception):
-                        handle_open_filled_exits_retry(st)             
-                    try:
-                        manage_v15_position(ENV["SYMBOL"], st)
-                    except Exception as e:
-                        log_event("LIVE_MANAGE_ERROR", error=str(e))
+        # 2) Live V1.5 management (TP1 -> SL to BE) — throttled
+        pos_live = st.get("position") or {}
+        if pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED"):
+            now_s = _now_s()
+            if now_s - last_manage_s >= float(ENV["MANAGE_EVERY_SEC"]):
+                last_manage_s = now_s
+                # If entry filled but exits were not placed (or placement failed), retry.
+                with suppress(Exception):
+                    handle_open_filled_exits_retry(st)             
+                try:
+                    manage_v15_position(ENV["SYMBOL"], st)
+                except Exception as e:
+                    log_event("LIVE_MANAGE_ERROR", error=str(e))
 
         if not new_events:
             continue
@@ -2148,9 +2102,8 @@ def main() -> None:
                     if age > max_age:
                         log_event("SKIP_PEAK", reason="stale_peak", age_sec=round(age, 3), evt_ts=str(evt.get("ts")))
                         continue
-            if not ENV["DRY"]:
-                with suppress(Exception):
-                    sync_from_binance(st)
+            with suppress(Exception):
+                sync_from_binance(st)
 
             if locked(st):
                 log_event("SKIP_PEAK", reason="position_lock")
@@ -2162,109 +2115,105 @@ def main() -> None:
                 log_event("SKIP_PEAK", reason="position_already_open")
                 continue
 
-            # Paper for now (DRY=1). When DRY=0 we will switch to Binance entry.
-            if ENV["DRY"]:
-                open_paper_position(st, evt, df)
-            else:
-                # Minimal live scaffold: open a LIMIT order and store as PENDING.
-                # (Exit logic / SL/TP placement is added in the next step.)
+            # Minimal live scaffold: open a LIMIT order and store as PENDING.
+            # (Exit logic / SL/TP placement is added in the next step.)
+            try:
+                # lock immediately
+                st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
+                save_state(st)
+
+                kind = str(evt.get("kind"))
+                close_price_usdt = float(evt.get("price"))
+                entry_usdt = build_entry_price(kind, close_price_usdt)
+                side = "BUY" if kind == "long" else "SELL"
+                side_txt = "LONG" if side == "BUY" else "SHORT"                    # aggregated.csv is used ONLY here (to compute swing stop from the USDT feed)
+                df_local = load_df_sorted()
+                if df_local.empty:
+                    log_event("SKIP_OPEN", reason="agg_unavailable")
+                    continue
+
+                # locate candle index by event timestamp (in USDT feed)
+                ts = evt.get("ts")
+                i = len(df_local) - 1
                 try:
-                    # lock immediately
-                    st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
-                    save_state(st)
-
-                    kind = str(evt.get("kind"))
-                    close_price_usdt = float(evt.get("price"))
-                    entry_usdt = build_entry_price(kind, close_price_usdt)
-                    side = "BUY" if kind == "long" else "SELL"
-                    side_txt = "LONG" if side == "BUY" else "SHORT"                    # aggregated.csv is used ONLY here (to compute swing stop from the USDT feed)
-                    df_local = load_df_sorted()
-                    if df_local.empty:
-                        log_event("SKIP_OPEN", reason="agg_unavailable")
-                        continue
-
-                    # locate candle index by event timestamp (in USDT feed)
-                    ts = evt.get("ts")
+                    if ts:
+                        _ts = ts
+                        if isinstance(_ts, str) and _ts.endswith("Z"):
+                            _ts = _ts[:-1] + "+00:00"
+                        i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
+                except Exception:
                     i = len(df_local) - 1
-                    try:
-                        if ts:
-                            _ts = ts
-                            if isinstance(_ts, str) and _ts.endswith("Z"):
-                                _ts = _ts[:-1] + "+00:00"
-                            i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
-                    except Exception:
-                        i = len(df_local) - 1
 
-                    sl_usdt = swing_stop_far(df_local, i, side, entry_usdt)
-                    tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
-                    if len(tps_usdt) < 2:
-                        log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
-                        continue
-                    tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
+                sl_usdt = swing_stop_far(df_local, i, side, entry_usdt)
+                tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
+                if len(tps_usdt) < 2:
+                    log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
+                    continue
+                tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
 
-                    
+                
 # --- USDT -> USDC conversion (k_entry fixed once per position) ---
-                    k_entry = get_usdt_usdc_k()
+                k_entry = get_usdt_usdc_k()
 
-                    # Convert prices, then apply *directional* rounding to keep logic stable.
-                    tick = ENV["TICK_SIZE"]
-                    close_usdc = float(close_price_usdt) * float(k_entry)
+                # Convert prices, then apply *directional* rounding to keep logic stable.
+                tick = ENV["TICK_SIZE"]
+                close_usdc = float(close_price_usdt) * float(k_entry)
 
-                    raw_entry = float(entry_usdt) * float(k_entry)
-                    raw_sl = float(sl_usdt) * float(k_entry)
-                    raw_tp1 = float(tp1_usdt) * float(k_entry)
-                    raw_tp2 = float(tp2_usdt) * float(k_entry)
+                raw_entry = float(entry_usdt) * float(k_entry)
+                raw_sl = float(sl_usdt) * float(k_entry)
+                raw_tp1 = float(tp1_usdt) * float(k_entry)
+                raw_tp2 = float(tp2_usdt) * float(k_entry)
 
-                    if kind == "long":
-                        # entry must be >= close_usdc + 1 tick
-                        entry = floor_to_step(raw_entry, tick)
-                        min_entry = close_usdc + float(tick)
-                        if entry < min_entry:
-                            entry = ceil_to_step(min_entry, tick)
+                if kind == "long":
+                    # entry must be >= close_usdc + 1 tick
+                    entry = floor_to_step(raw_entry, tick)
+                    min_entry = close_usdc + float(tick)
+                    if entry < min_entry:
+                        entry = ceil_to_step(min_entry, tick)
 
-                        sl = floor_to_step(raw_sl, tick)
-                        tp1 = floor_to_step(raw_tp1, tick)
-                        tp2 = floor_to_step(raw_tp2, tick)
-                    else:
-                        # entry must be <= close_usdc - 1 tick
-                        entry = ceil_to_step(raw_entry, tick)
-                        max_entry = close_usdc - float(tick)
-                        if entry > max_entry:
-                            entry = floor_to_step(max_entry, tick)
+                    sl = floor_to_step(raw_sl, tick)
+                    tp1 = floor_to_step(raw_tp1, tick)
+                    tp2 = floor_to_step(raw_tp2, tick)
+                else:
+                    # entry must be <= close_usdc - 1 tick
+                    entry = ceil_to_step(raw_entry, tick)
+                    max_entry = close_usdc - float(tick)
+                    if entry > max_entry:
+                        entry = floor_to_step(max_entry, tick)
 
-                        sl = ceil_to_step(raw_sl, tick)
-                        tp1 = ceil_to_step(raw_tp1, tick)
-                        tp2 = ceil_to_step(raw_tp2, tick)
+                    sl = ceil_to_step(raw_sl, tick)
+                    tp1 = ceil_to_step(raw_tp1, tick)
+                    tp2 = ceil_to_step(raw_tp2, tick)
 
-                    qty = notional_to_qty(entry, ENV["QTY_USD"])
+                qty = notional_to_qty(entry, ENV["QTY_USD"])
 
-                    if not validate_qty(qty, entry):
-                        log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
-                        continue
+                if not validate_qty(qty, entry):
+                    log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
+                    continue
 
-                    client_id = f"EX_EN_{int(time.time())}"
-                    entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
-                    if entry_mode == "MARKET_ONLY":
-                        with suppress(Exception):
-                            margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
-                                "trade_key": client_id,
-                                "entry_price": entry,
-                            })
-                        order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
-                        exq0 = float(order.get("executedQty") or 0.0)
-                        status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
-                        avgp0 = _avg_fill_price(order)
-                        entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
-                    else:
-                        with suppress(Exception):
-                            margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
-                                "trade_key": client_id,
-                                "entry_price": entry,
-                            })
-                        order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
-                        status0 = "PENDING"
-                        entry_actual0 = None
-                    st["position"] = {
+                client_id = f"EX_EN_{int(time.time())}"
+                entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
+                if entry_mode == "MARKET_ONLY":
+                    with suppress(Exception):
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                            "trade_key": client_id,
+                            "entry_price": entry,
+                        })
+                    order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
+                    exq0 = float(order.get("executedQty") or 0.0)
+                    status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
+                    avgp0 = _avg_fill_price(order)
+                    entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
+                else:
+                    with suppress(Exception):
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                            "trade_key": client_id,
+                            "entry_price": entry,
+                        })
+                    order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
+                    status0 = "PENDING"
+                    entry_actual0 = None
+                st["position"] = {
                         "status": status0,
                         "mode": "live",
                         "opened_at": iso_utc(),
