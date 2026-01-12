@@ -15,19 +15,19 @@ def configure(env: Dict[str, Any]) -> None:
     ENV = env
 
 def floor_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_FLOOR) * step
-    return float(d)
+    step_d = Decimal(str(step))
+    units = (Decimal(str(x)) / step_d).to_integral_value(rounding=ROUND_FLOOR)
+    return float(units * step_d)
 
 def ceil_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_CEILING) * step
-    return float(d)
+    step_d = Decimal(str(step))
+    units = (Decimal(str(x)) / step_d).to_integral_value(rounding=ROUND_CEILING)
+    return float(units * step_d)
 
 def round_nearest_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
-    return float(d)
+    step_d = Decimal(str(step))
+    units = (Decimal(str(x)) / step_d).to_integral_value(rounding=ROUND_HALF_UP)
+    return float(units * step_d)
 
 def _decimals_from_step(step: Decimal) -> int:
     """Number of decimal places implied by a step (tick/lot)."""
@@ -104,4 +104,3 @@ def split_qty_3legs_place(qty_total_r: float) -> Tuple[float, float, float]:
     if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
         raise RuntimeError(f"Invalid qty split: qty_total={qty_total_r} qty1={qty1} qty2={qty2} qty3={qty3}")
     return qty1, qty2, qty3
-
