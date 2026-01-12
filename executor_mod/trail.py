@@ -73,6 +73,7 @@ def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
     - FAIL-LOUD on schema mismatch (header != expected v2).
     - Fail-closed (return []) if file is missing/empty (startup/rotation).
     - Malformed data rows are skipped (best-effort tail parsing).
+    Used for trail_wait_confirm (bar-close confirmation), not swing extremes.
     """
     if int(n_rows or 0) <= 0:
         return []
@@ -260,6 +261,7 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     """
     Compute desired trailing stop based on last swing from aggregated.csv:
       LONG uses LowPrice swings; SHORT uses HiPrice swings.
+    trail_wait_confirm uses ClosePrice (bar close) for confirmation only.
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """

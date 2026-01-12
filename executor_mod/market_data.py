@@ -34,7 +34,7 @@ def load_df_sorted() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-    # Ensure we have a numeric price column
+    # Ensure we have a numeric price column (ClosePrice/AvgPrice-derived).
     if "ClosePrice" in df.columns:
         price_col = "ClosePrice"
     elif "AvgPrice" in df.columns:
@@ -49,7 +49,7 @@ def load_df_sorted() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-    # Hi/Low (optional in v2 schema). If missing, fall back to price.
+    # Hi/Low (optional in v2 schema). If missing, fall back to price (close/avg-derived).
     if "HiPrice" in df.columns:
         df["HiPrice"] = pd.to_numeric(df["HiPrice"], errors="coerce")
     else:
