@@ -175,7 +175,8 @@ ENV: Dict[str, Any] = {
 # trailing source: "AGG" (aggregated.csv) or "BINANCE" (bookTicker mid)
 "TRAIL_SOURCE": os.getenv("TRAIL_SOURCE", "AGG").strip().upper(),
 "TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
-# swing detection on ClosePrice from aggregated.csv
+# swing detection uses LowPrice (LONG) / HiPrice (SHORT) from aggregated.csv v2;
+# trail_wait_confirm uses bar ClosePrice for confirmation.
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
 "TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
@@ -502,6 +503,7 @@ def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
 
     - BUY: choose min(pct_sl, swing_low)
     - SELL: choose max(pct_sl, swing_high)
+    - swings are based on LowPrice/HiPrice when available (v2), else fall back to price.
     """
     pct_sl = entry * (1 - ENV["SL_PCT"]) if side == "BUY" else entry * (1 + ENV["SL_PCT"])
 
@@ -1353,7 +1355,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     """
-    Compute desired trailing stop based on last swing from aggregated.csv ClosePrice.
+    Compute desired trailing stop based on last swing from aggregated.csv v2:
+    LONG uses LowPrice swings; SHORT uses HiPrice swings.
+    trail_wait_confirm uses ClosePrice (bar close) for confirmation only.
     LONG: stop = swing_low - buffer
     SHORT: stop = swing_high + buffer
     """
