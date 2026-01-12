@@ -24,7 +24,7 @@ def load_df_sorted() -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.read_csv(ENV["AGG_CSV"])
-    df.columns = [c.strip() for c in df.columns]
+    df.columns = [(c or "").replace("\ufeff", "").strip() for c in df.columns]
 
     if "Timestamp" not in df.columns:
         return pd.DataFrame()
@@ -48,6 +48,20 @@ def load_df_sorted() -> pd.DataFrame:
         df["price"] = pd.to_numeric(df[price_col], errors="coerce")
     except Exception:
         return pd.DataFrame()
+
+    # Hi/Low (optional in v2 schema). If missing, fall back to price.
+    if "HiPrice" in df.columns:
+        df["HiPrice"] = pd.to_numeric(df["HiPrice"], errors="coerce")
+    else:
+        df["HiPrice"] = df["price"]
+
+    if "LowPrice" in df.columns:
+        df["LowPrice"] = pd.to_numeric(df["LowPrice"], errors="coerce")
+    else:
+        df["LowPrice"] = df["price"]
+
+    df["HiPrice"] = df["HiPrice"].fillna(df["price"])
+    df["LowPrice"] = df["LowPrice"].fillna(df["price"])
 
     df = df.dropna(subset=["Timestamp", "price"])
     df = df.sort_values("Timestamp").reset_index(drop=True)
