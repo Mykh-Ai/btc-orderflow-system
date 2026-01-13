@@ -18,7 +18,6 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
 
-import numpy as np
 import pandas as pd
 import requests
 
@@ -67,13 +66,15 @@ ENV = {
 
     # рrisk management
     "SL_PCT": float(require_env("SL_PCT")),
-    "SWING_MINS": int(os.getenv("SWING_MINS", "120")),
-    "TP_R_LIST": [float(x) for x in require_env("TP_R_LIST").split(",") if x],
     "TP_SPLIT": [float(x) for x in require_env("TP_SPLIT").split(",") if x],
     # These are kept only for calculating context metrics (not execution).
     "TRAIL_SIGMA": float(os.getenv("TRAIL_SIGMA", "0.7")),
     "TRAIL_WIN": int(os.getenv("TRAIL_WIN", "60")),
 }
+
+# Fixed execution-first risk settings (match executor semantics)
+SWING_LOOKBACK = 240
+TP_R_MULTIPLES = (1.0, 2.0)
 
 # ===================== Utils =====================
 def now_utc() -> datetime:
@@ -152,9 +153,14 @@ def load_df_sorted() -> pd.DataFrame:
             flush=True,
         )
         raise SystemExit(2)
+    missing_cols = {"HiPrice", "LowPrice"} - set(df.columns)
+    if missing_cols:
+        raise RuntimeError(f"aggregated.csv missing required columns: {sorted(missing_cols)}")
     df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.floor("min")
     price = df["ClosePrice"] if "ClosePrice" in df.columns else df.get("AvgPrice")
     df["price"] = pd.to_numeric(price, errors="coerce").ffill()
+    df["hi"] = pd.to_numeric(df["HiPrice"], errors="coerce")
+    df["low"] = pd.to_numeric(df["LowPrice"], errors="coerce")
     df["buy"]   = pd.to_numeric(df.get("BuyQty", 0.0), errors="coerce").fillna(0.0)
     df["sell"]  = pd.to_numeric(df.get("SellQty", 0.0), errors="coerce").fillna(0.0)
 
@@ -176,27 +182,30 @@ def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
 def _swing_stop(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
     pct_sl = entry * (1 - ENV["SL_PCT"]) if side == "BUY" else entry * (1 + ENV["SL_PCT"])
     if i < 0 or i >= len(df):
-        return pct_sl
-    lookback = df.iloc[max(0, i-ENV["SWING_MINS"]):i+1]
-    if lookback.empty:
-        return pct_sl
-    if side == "BUY":
-        swing = float(lookback["price"].min())
-        if not np.isfinite(swing):
-            return pct_sl
-        return max(pct_sl, swing)
+        sl = pct_sl
     else:
-        swing = float(lookback["price"].max())
-        if not np.isfinite(swing):
-            return pct_sl
-        return min(pct_sl, swing)
-def _tp_price(entry: float, side: str, r: float) -> float:
-    """Compute TP price using R-multiple and SL_PCT, then round to tick."""
-    if side == "BUY":
-        raw = entry * (1 + r * ENV["SL_PCT"])
-    else:
-        raw = entry * (1 - r * ENV["SL_PCT"])
-    return round_to_step(raw, ENV["TICK_SIZE"])
+        lookback = df.iloc[max(0, i - (SWING_LOOKBACK - 1)):i + 1]
+        if lookback.empty:
+            sl = pct_sl
+        elif side == "BUY":
+            swing = float(lookback["low"].min())
+            sl = min(pct_sl, swing)
+        else:
+            swing = float(lookback["hi"].max())
+            sl = max(pct_sl, swing)
+    return round_to_step(sl, ENV["TICK_SIZE"])
+def _compute_tps(entry: float, sl: float, side: str) -> List[float]:
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return []
+    tps: List[float] = []
+    for r in TP_R_MULTIPLES:
+        if side == "BUY":
+            tp_raw = entry + r * risk
+        else:
+            tp_raw = entry - r * risk
+        tps.append(round_to_step(tp_raw, ENV["TICK_SIZE"]))
+    return tps
 
 # ===================== State =====================
 STATE_FN = ENV["STATE_FN"]
@@ -281,10 +290,11 @@ def main():
                 side = "BUY" if evt.get("kind") == "long" else "SELL"
                 side_txt = "LONG" if side=="BUY" else "SHORT"
                 i = locate_index_by_ts(df, datetime.fromisoformat(evt.get("ts")))
-                sl = round_to_step(_swing_stop(df, i, side, entry), ENV["TICK_SIZE"])
-                # TP2 before TP1: compute and store in a consistent order
-                tp2 = _tp_price(entry, side, ENV["TP_R_LIST"][1])
-                tp1 = _tp_price(entry, side, ENV["TP_R_LIST"][0])
+                sl = _swing_stop(df, i, side, entry)
+                tps = _compute_tps(entry, sl, side)
+                if len(tps) < 2:
+                    raise RuntimeError(f"TPs not computed: entry={entry} sl={sl} side={side}")
+                tp1, tp2 = tps[0], tps[1]
 
                 st["position"] = {
                     "status": "OPEN",
