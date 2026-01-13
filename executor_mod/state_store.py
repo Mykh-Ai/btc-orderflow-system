@@ -35,6 +35,12 @@ def load_state() -> Dict[str, Any]:
     st.setdefault("last_closed", None)
     st.setdefault("cooldown_until", 0.0)
     st.setdefault("lock_until", 0.0)
+    baseline = st.get("baseline")
+    if not isinstance(baseline, dict):
+        baseline = {}
+    baseline.setdefault("active", None)
+    baseline.setdefault("truth", None)
+    st["baseline"] = baseline
     return st
 
 

@@ -31,6 +31,7 @@ from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
+from executor_mod import baseline_policy
 from executor_mod.notifications import log_event, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
@@ -2237,6 +2238,35 @@ def main() -> None:
                         "tp2_usdt": tp2_usdt,
                     },
                 }
+                baseline_log = None
+                baseline = st.get("baseline")
+                if not isinstance(baseline, dict):
+                    baseline = {}
+                active_snap = baseline.get("active")
+                active_key = active_snap.get("trade_key") if isinstance(active_snap, dict) else None
+                trade_key = st["position"].get("trade_key") or st["position"].get("client_id")
+                if active_snap is None or active_key != trade_key:
+                    try:
+                        snap = baseline_policy.take_snapshot(
+                            binance_api,
+                            ENV,
+                            ENV["SYMBOL"],
+                            trade_key,
+                            "pre_trade",
+                        )
+                        baseline["active"] = snap
+                        if baseline.get("truth") is not None and not isinstance(baseline.get("truth"), dict):
+                            baseline["truth"] = None
+                        baseline.setdefault("truth", None)
+                        st["baseline"] = baseline
+                        baseline_log = {
+                            "which": "active",
+                            "trade_key": trade_key,
+                            "symbol": snap.get("symbol"),
+                            "trade_mode": snap.get("trade_mode"),
+                        }
+                    except Exception as e:
+                        log_event("BASELINE_ERROR", which="active", trade_key=trade_key, error=str(e))
                 if status0 == "OPEN_FILLED":
                     pos0 = st.get("position") or {}
                     with suppress(Exception):
@@ -2244,6 +2274,8 @@ def main() -> None:
                     if (not pos0.get("orders")) and pos0.get("prices"):
                         exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                 save_state(st)
+                if baseline_log is not None:
+                    log_event("BASELINE_TAKEN", **baseline_log)
 
                 log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
                 send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
