@@ -23,8 +23,6 @@ Thumbs.db
 # --- Logs / runtime state (if any) ---
 *.log
 
-
-__pycache__/
-*.pyc
-*.pyo
-
+# --- Temporary files ---
+tmpclaude-*
+*.tmp
