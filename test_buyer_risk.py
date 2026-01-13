@@ -105,6 +105,29 @@ class BuyerRiskMathTests(unittest.TestCase):
         self.assertEqual(sl_long, 90.0)
         self.assertEqual(sl_short, 120.0)
 
+    def test_zero_risk_sl_clamped_one_tick(self):
+        # Re-load buyer with very small SL_PCT so tick rounding can produce sl == entry.
+        os.environ["SL_PCT"] = "0.001"
+        self.mod = load_buyer()
+        df = MiniDF(
+            {
+                # Force swing extremes at entry so pct_sl is the determining factor.
+                "LowPrice": [100.0, 100.0, 100.0],
+                "HiPrice": [100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0],
+                "hi": [100.0, 100.0, 100.0],
+            }
+        )
+        entry = 100.0  # tick=1
+        sl_long = self.mod._swing_stop(df, 2, "BUY", entry)
+        sl_short = self.mod._swing_stop(df, 2, "SELL", entry)
+        # With tick=1 and SL_PCT=0.001, pct_sl=99.9 (BUY) and 100.1 (SELL) would round to 100.
+        # Clamp ensures at least 1 tick separation.
+        self.assertEqual(sl_long, 99.0)
+        self.assertEqual(sl_short, 101.0)
+        self.assertEqual(self.mod._compute_tps(entry, sl_long, "BUY"), [101.0, 102.0])
+        self.assertEqual(self.mod._compute_tps(entry, sl_short, "SELL"), [99.0, 98.0])
+
     def test_compute_tps_rounding_and_ordering(self):
         tps_long = self.mod._compute_tps(100.0, 99.0, "BUY")
         tps_short = self.mod._compute_tps(100.0, 101.0, "SELL")

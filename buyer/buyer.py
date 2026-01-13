@@ -193,7 +193,17 @@ def _swing_stop(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
         else:
             swing = float(lookback["hi"].max())
             sl = max(pct_sl, swing)
-    return round_to_step(sl, ENV["TICK_SIZE"])
+    sl = round_to_step(sl, ENV["TICK_SIZE"])
+    # Clamp: after tick rounding SL can equal entry (zero-risk), which would make TP computation empty.
+    # Buyer is notify-only, but it must be robust and not stop the loop.
+    tick = float(ENV["TICK_SIZE"])
+    if side == "BUY":
+        if sl >= entry:
+            sl = entry - tick
+    else:
+        if sl <= entry:
+            sl = entry + tick
+    return sl
 def _compute_tps(entry: float, sl: float, side: str) -> List[float]:
     risk = abs(entry - sl)
     if risk <= 0:
