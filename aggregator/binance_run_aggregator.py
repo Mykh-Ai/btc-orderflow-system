@@ -110,6 +110,8 @@ def aggregate_and_clear():
     num_trades = len(lines)
     total_qty = total_price = buy_qty = sell_qty = 0
     close_price = None
+    high_price = None
+    low_price = None
     for line in lines:
         try:
             parts = line.strip().split('|')
@@ -123,15 +125,27 @@ def aggregate_and_clear():
             elif "Sell" in side_part:
                 sell_qty += qty
             close_price = price
+            if high_price is None or price > high_price:
+                high_price = price
+            if low_price is None or price < low_price:
+                low_price = price
         except Exception as e:
             print("Ошибка парсинга строки:", line, e)
+
+    # Safety: if no valid trades parsed, avoid formatting None
+    if close_price is None:
+        return  # nothing to write this interval
+    if high_price is None:
+        high_price = close_price
+    if low_price is None:
+        low_price = close_price
     avg_size = total_qty / num_trades if num_trades > 0 else 0
     avg_price = total_price / total_qty if total_qty > 0 else 0
     file_exists = os.path.isfile(aggregated_file_path)
     with open(aggregated_file_path, "a") as f:
         if not file_exists:
-            f.write("Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice\n")
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{num_trades},{total_qty:.6f},{avg_size:.6f},{buy_qty:.6f},{sell_qty:.6f},{avg_price:.2f},{close_price:.2f}\n")
+            f.write("Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{num_trades},{total_qty:.0f},{avg_size:.0f},{buy_qty:.0f},{sell_qty:.0f},{avg_price:.0f},{close_price:.0f},{high_price:.0f},{low_price:.0f}\n")
     with open(aggregated_file_path, "r") as f:
         rows = f.readlines()
     if len(rows) > MAX_RECORDS + 1:
