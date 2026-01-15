@@ -15,10 +15,10 @@ from contextlib import suppress
 import math
 import hmac
 import hashlib
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 
 import requests
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from executor_mod.notifications import log_event
 
@@ -79,6 +79,113 @@ def _margin_side_effect(env: Dict[str, Any]) -> str:
     if _margin_borrow_mode(env) == "manual":
         return "NO_SIDE_EFFECT"
     return str(env.get("MARGIN_SIDE_EFFECT") or "NO_SIDE_EFFECT").strip().upper()
+
+
+# ===================== HTTP reliability helpers =====================
+# These helpers implement retry/backoff/failover for transient CloudFront 503s and timeouts.
+
+
+def _env_bases() -> List[str]:
+    """Return list of Binance API base URLs from env or defaults.
+
+    Env var BINANCE_API_BASES can be comma-separated full URLs.
+    Default: api.binance.com, api1.binance.com, api2.binance.com, api3.binance.com
+    """
+    env = _env()
+    custom = env.get("BINANCE_API_BASES")
+    if custom:
+        return [b.strip() for b in str(custom).split(",") if b.strip()]
+    return [
+        "https://api.binance.com",
+        "https://api1.binance.com",
+        "https://api2.binance.com",
+        "https://api3.binance.com",
+    ]
+
+
+def _swap_base(url: str, base: str) -> str:
+    """Replace scheme+netloc of url with base while keeping path/query/fragment."""
+    parsed = urlsplit(url)
+    base_parsed = urlsplit(base)
+    return urlunsplit((base_parsed.scheme, base_parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _http_timeout() -> Tuple[float, float]:
+    """Return (connect_timeout, read_timeout) tuple.
+
+    Connect timeout fixed at 3s; read timeout from env (default 15s).
+    """
+    env = _env()
+    connect_timeout = 3.0
+    try:
+        read_timeout = float(env.get("BINANCE_HTTP_READ_TIMEOUT_SEC", 15))
+    except (ValueError, TypeError):
+        read_timeout = 15.0
+    if read_timeout <= 0:
+        read_timeout = 15.0
+    return (connect_timeout, read_timeout)
+
+
+def _do_request(method: str, url: str, *, headers: Dict[str, Any], req_params: Dict[str, Any]) -> requests.Response:
+    """Execute HTTP request with retry/backoff/failover across multiple Binance API hosts.
+
+    Strategy:
+    - Try each base in _env_bases()
+    - For each base, attempt with delays [0.0, 0.3, 1.0, 2.0] (4 attempts total)
+    - Treat HTTP 429/500/502/503/504 as transient (retry)
+    - Catch Timeout and ConnectionError as transient (retry/failover)
+    - On success (non-transient status), return Response immediately
+    - If all attempts fail, raise last exception
+    """
+    method = str(method).strip().upper()
+    bases = _env_bases()
+    timeout = _http_timeout()
+    delays = [0.0, 0.3, 1.0, 2.0]
+    transient_statuses = {429, 500, 502, 503, 504}
+
+    last_exception: Optional[Exception] = None
+    last_status: Optional[int] = None
+    last_text: Optional[str] = None
+
+    for base in bases:
+        swapped_url = _swap_base(url, base)
+        for delay in delays:
+            if delay > 0.0:
+                time.sleep(delay)
+
+            try:
+                if method == "POST":
+                    r = requests.post(swapped_url, headers=headers, params=req_params, timeout=timeout)
+                elif method == "GET":
+                    r = requests.get(swapped_url, headers=headers, params=req_params, timeout=timeout)
+                elif method == "DELETE":
+                    r = requests.delete(swapped_url, headers=headers, params=req_params, timeout=timeout)
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
+
+                # Success or non-transient error: return immediately
+                if r.status_code not in transient_statuses:
+                    return r
+
+                # Transient status: record and continue retrying
+                last_status = r.status_code
+                last_text = r.text
+                last_exception = None
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exception = e
+                last_status = None
+                last_text = None
+                # Continue to next retry or next base
+
+    # All attempts exhausted: raise last error
+    if last_exception:
+        raise last_exception
+    if last_status:
+        raise RuntimeError(f"Binance API exhausted all retries: last status {last_status}, text: {last_text}")
+    raise RuntimeError("Binance API exhausted all retries with no response")
+
+
 # ===================== Signed/Public requests =====================
 
 def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,14 +211,7 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
     req_params = dict(params_str)
     req_params["signature"] = signature
 
-    if method == "POST":
-        r = requests.post(url, headers=headers, params=req_params, timeout=5)
-    elif method == "GET":
-        r = requests.get(url, headers=headers, params=req_params, timeout=5)
-    elif method == "DELETE":
-        r = requests.delete(url, headers=headers, params=req_params, timeout=5)
-    else:
-        raise ValueError(f"Unsupported method: {method}")
+    r = _do_request(method, url, headers=headers, req_params=req_params)
 
     if r.status_code != 200:
         raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
@@ -123,7 +223,7 @@ def binance_public_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -
     env = _env()
     base_url = env["BINANCE_BASE_URL"]
     url = base_url + endpoint
-    r = requests.get(url, params=params or {}, timeout=5)
+    r = _do_request("GET", url, headers={}, req_params=params or {})
     if r.status_code != 200:
         raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
     return r.json() if r.text else {}
