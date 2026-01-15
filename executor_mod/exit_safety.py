@@ -37,7 +37,6 @@ def _min_qty(env: Dict[str, Any]) -> float:
 
 
 def _min_notional(env: Dict[str, Any]) -> float:
-    # Project uses MIN_NOTIONAL in env for Binance NOTIONAL (e.g. 5 USDC)
     try:
         return float(env.get("MIN_NOTIONAL") or 0.0)
     except Exception:
@@ -88,7 +87,6 @@ def _collect_cancel_ids(pos: Dict[str, Any]) -> List[int]:
             ids.append(int(oid))
         except Exception:
             continue
-    # de-dup while preserving order
     seen = set()
     uniq: List[int] = []
     for oid in ids:
@@ -120,7 +118,6 @@ def _position_qty(pos: Dict[str, Any], sl_order_payload: Optional[Dict[str, Any]
         oq = _as_float(sl_order_payload.get("origQty"), default=0.0)
         if oq > 0.0:
             return oq
-    # Fallback: derive remaining qty from the executor’s own split logic
     orders = pos.get("orders") or {}
     if pos.get("tp2_done"):
         q3 = _as_float(orders.get("qty3"), default=0.0)
@@ -143,15 +140,15 @@ def sl_watchdog_tick(
     price_now: float,
     sl_order_payload_or_status: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Return an action plan for SL fallback or None."""
+    """Return an action plan for SL fallback or None.
+
+    Policy: watchdog active ONLY after OPEN_FILLED.
+    """
     if not pos:
         return None
     status = str(pos.get("status") or "").upper()
-    if status not in ("OPEN_FILLED",):
-        if status != "OPEN":
-            return None
-        if not (pos.get("tp1_done") or pos.get("tp2_done") or pos.get("trail_active")):
-            return None
+    if status != "OPEN_FILLED":
+        return None
 
     orders = pos.get("orders") or {}
     sl_id = orders.get("sl")
@@ -173,33 +170,30 @@ def sl_watchdog_tick(
     if not _is_finite(price_now) or price_now <= 0.0:
         return None
 
-    status = ""
+    status2 = ""
     executed_qty = 0.0
     if isinstance(sl_order_payload_or_status, dict):
-        status = str(sl_order_payload_or_status.get("status", "")).upper()
+        status2 = str(sl_order_payload_or_status.get("status", "")).upper()
         executed_qty = _as_float(sl_order_payload_or_status.get("executedQty"), default=0.0)
 
-    if status == "FILLED":
+    if status2 == "FILLED":
         pos["sl_watchdog_first_trigger_s"] = None
         return None
 
-    if executed_qty > 0.0 and status != "FILLED" and not pos.get("sl_watchdog_fired"):
+    # If SL partially executed, close remaining via MARKET (or accept dust).
+    if executed_qty > 0.0 and status2 != "FILLED" and not pos.get("sl_watchdog_fired"):
         qty_remaining_raw = max(pos_qty - executed_qty, 0.0)
         qty_remaining = max(_quantize_qty_floor(qty_remaining_raw, env), 0.0)
         qty_quantized = qty_remaining
-        qty_step = env.get("QTY_STEP")
         try:
-            qty_step_f = float(qty_step)
+            qty_step_f = float(env.get("QTY_STEP") or 0.0)
         except Exception:
             qty_step_f = 0.0
         if qty_remaining <= max(min_qty_f, qty_step_f):
             qty_remaining = 0.0
 
-        # Dust policy: if remaining exists but MARKET close is impossible (qty quantized to 0
-        # OR notional < MIN_NOTIONAL), we accept leaving dust and closing slot after cleanup.
         min_notional_f = _min_notional(env)
         remaining_notional_raw = _notional(qty_remaining_raw, price_now)
-        remaining_notional_plan = _notional(qty_remaining, price_now)
         if qty_remaining_raw > 0.0 and (
             qty_quantized <= 0.0
             or (qty_quantized > 0.0 and qty_quantized < min_qty_f)
@@ -219,22 +213,14 @@ def sl_watchdog_tick(
                 "set_fired_on_success": True,
                 "events": [
                     {"name": "SL_PARTIAL_DETECTED", "executedQty": executed_qty, "order_id": sl_id},
-                    {
-                        "name": "SL_DUST_REMAINDER",
-                        "qty_raw": qty_remaining_raw,
-                        "qty_quantized": qty_quantized,
-                        "notional_raw": remaining_notional_raw,
-                        "min_notional": min_notional_f,
-                        "min_qty": min_qty_f,
-                        "price_now": price_now,
-                    },
+                    {"name": "SL_DUST_REMAINDER", "qty_raw": qty_remaining_raw, "qty_quantized": qty_quantized},
                 ],
             }
         return {
             "action": "MARKET_FLATTEN",
             "reason": "SL_PARTIAL_FALLBACK",
             "qty": qty_remaining,
-            "side": "SELL" if pos.get("side") == "LONG" else "BUY",
+            "side": "SELL" if str(pos.get("side")).upper() == "LONG" else "BUY",
             "cancel_order_ids": _collect_cancel_ids(pos),
             "set_fired_on_success": True,
             "events": [
@@ -258,10 +244,7 @@ def sl_watchdog_tick(
             qty_quantized = qty_remaining
             min_notional_f = _min_notional(env)
             rem_notional_raw = _notional(qty_remaining_raw, price_now)
-            rem_notional_plan = _notional(qty_remaining, price_now)
 
-            # Dust policy for full-position close: if MARKET is impossible (qty==0 or notional below min),
-            # accept leaving dust and close slot after cleanup.
             if qty_remaining_raw > 0.0 and (
                 qty_quantized <= 0.0
                 or (qty_quantized > 0.0 and qty_quantized < min_qty_f)
@@ -279,17 +262,7 @@ def sl_watchdog_tick(
                     "price_now": price_now,
                     "cancel_order_ids": _collect_cancel_ids(pos),
                     "set_fired_on_success": True,
-                    "events": [
-                        {
-                            "name": "SL_DUST_REMAINDER",
-                            "qty_raw": qty_remaining_raw,
-                            "qty_quantized": qty_quantized,
-                            "notional_raw": rem_notional_raw,
-                            "min_notional": min_notional_f,
-                            "min_qty": min_qty_f,
-                            "price_now": price_now,
-                        },
-                    ],
+                    "events": [{"name": "SL_DUST_REMAINDER", "qty_raw": qty_remaining_raw, "qty_quantized": qty_quantized}],
                 }
             return {
                 "action": "MARKET_FLATTEN",
@@ -308,5 +281,4 @@ def sl_watchdog_tick(
 
 
 def tp_safety_tick(*args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
-    """TP safety stub (PR-TP1 will implement)."""
     return None

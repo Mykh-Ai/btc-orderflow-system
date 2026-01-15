@@ -1438,6 +1438,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             st["position"] = pos
             _save_state_best_effort("sl_watchdog_tick_error")
             log_event("SL_WATCHDOG_ERROR", error=str(e), mode="live")
+
     if prev_trigger_s is None and pos.get("sl_watchdog_first_trigger_s") is not None:
         log_event("SL_WATCHDOG_TRIGGER", mode="live", order_id_sl=sl_id, price_now=price_now)
 
