@@ -7,9 +7,6 @@ from typing import Any, Dict, Tuple
 
 from executor_mod import margin_policy
 
-BASE_ASSET = "BTC"
-QUOTE_ASSET = "USDC"
-
 _LOG = logging.getLogger(__name__)
 
 
@@ -35,6 +32,28 @@ def _spot_account(api: Any, env: Dict[str, Any]) -> Dict[str, Any]:
     _LOG.warning("baseline spot account fetch unavailable")
     return {}
 
+def _split_symbol_assets(symbol: str, env: Dict[str, Any]) -> Tuple[str, str]:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return "", ""
+
+    base_env = env.get("BASE_ASSET") or env.get("BASE")
+    quote_env = env.get("QUOTE_ASSET") or env.get("QUOTE")
+    if base_env and quote_env:
+        return str(base_env).strip().upper(), str(quote_env).strip().upper()
+
+    quotes = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI",
+        "BTC", "ETH", "EUR", "TRY", "BRL", "GBP", "JPY",
+        "AUD", "CAD", "CHF",
+    ]
+    for quote in sorted(quotes, key=len, reverse=True):
+        if sym.endswith(quote) and len(sym) > len(quote):
+            return sym[:-len(quote)], quote
+
+    _LOG.warning("baseline split failed for %s; returning empty assets", sym)
+    return "", ""
+
 
 def _find_balance(balances: Any, asset: str) -> Tuple[float, float]:
     if not isinstance(balances, list):
@@ -57,9 +76,12 @@ def _margin_mode_label(env: Dict[str, Any]) -> str:
 
 
 def _snapshot_margin_balances(api: Any, env: Dict[str, Any], symbol: str) -> Dict[str, float]:
+    base_asset, quote_asset = _split_symbol_assets(symbol, env)
+    if not base_asset or not quote_asset:
+        return {"base_free": 0.0, "base_locked": 0.0, "quote_free": 0.0, "quote_locked": 0.0}
     account = api.margin_account(is_isolated=_is_isolated(env), symbols=symbol)
-    base = margin_policy._asset_snapshot(account, BASE_ASSET)
-    quote = margin_policy._asset_snapshot(account, QUOTE_ASSET)
+    base = margin_policy._asset_snapshot(account, base_asset)
+    quote = margin_policy._asset_snapshot(account, quote_asset)
     return {
         "base_free": _as_float(base.get("free")),
         "base_locked": _as_float(base.get("locked")),
@@ -69,14 +91,18 @@ def _snapshot_margin_balances(api: Any, env: Dict[str, Any], symbol: str) -> Dic
 
 
 def _snapshot_spot_balances(api: Any, env: Dict[str, Any]) -> Dict[str, float]:
+    symbol = env.get("SYMBOL") or ""
+    base_asset, quote_asset = _split_symbol_assets(symbol, env)
+    if not base_asset or not quote_asset:
+        return {"base_free": 0.0, "base_locked": 0.0, "quote_free": 0.0, "quote_locked": 0.0}
     account = _spot_account(api, env)
     balances = {}
     if isinstance(account, dict):
         balances = account.get("balances") or account.get("userAssets") or []
     else:
         _LOG.warning("baseline spot account payload invalid")
-    base_free, base_locked = _find_balance(balances, BASE_ASSET)
-    quote_free, quote_locked = _find_balance(balances, QUOTE_ASSET)
+    base_free, base_locked = _find_balance(balances, base_asset)
+    quote_free, quote_locked = _find_balance(balances, quote_asset)
     return {
         "base_free": base_free,
         "base_locked": base_locked,

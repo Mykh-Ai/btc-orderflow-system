@@ -219,10 +219,28 @@ def place_spot_market(symbol: str, side: str, qty: float, client_id: Optional[st
 
 
 def flatten_market(symbol: str, pos_side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
-    """Fail-safe: close a live position by MARKET (best effort)."""
+    """Fail-safe: close a live position by MARKET (best effort).
+
+    In spot mode we use place_spot_market().
+    In margin mode we must use place_order_raw() so margin parameters (isIsolated/sideEffectType/autoRepayAtCancel)
+    are injected consistently.
+    """
     exit_side = "SELL" if str(pos_side).upper() == "LONG" else "BUY"
     if not client_id:
         client_id = f"EX_FLAT_{int(time.time())}"
+
+    env = _env()
+    mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        # Margin MARKET close (best effort). Uses current margin policy via place_order_raw().
+        return place_order_raw({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "MARKET",
+            "quantity": qty,
+            "newClientOrderId": client_id,
+        })
+
     return place_spot_market(symbol, exit_side, qty, client_id=client_id)
 
 
