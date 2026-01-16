@@ -148,10 +148,7 @@ def sl_watchdog_tick(
         return None
     status = str(pos.get("status") or "").upper()
     if status not in ("OPEN_FILLED",):
-        if status != "OPEN":
-            return None
-        if not (pos.get("tp1_done") or pos.get("tp2_done") or pos.get("trail_active")):
-            return None
+        return None
 
     orders = pos.get("orders") or {}
     sl_id = orders.get("sl")
