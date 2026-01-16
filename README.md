@@ -8,18 +8,20 @@
 - [Архітектура](#архітектура)
 - [Основний модуль: executor.py](#основний-модуль-executorpy)
 - [Допоміжні модулі](#допоміжні-модулі)
+  - [baseline_policy.py](#baseline_policypy)
   - [binance_api.py](#binance_apipy)
-  - [state_store.py](#state_storepy)
-  - [notifications.py](#notificationspy)
   - [event_dedup.py](#event_deduppy)
-  - [exits_flow.py](#exits_flowpy)
-  - [margin_policy.py](#margin_policypy)
-  - [margin_guard.py](#margin_guardpy)
-  - [invariants.py](#invariantspy)
-  - [risk_math.py](#risk_mathpy)
-  - [market_data.py](#market_datapy)
-  - [trail.py](#trailpy)
   - [exchange_snapshot.py](#exchange_snapshotpy)
+  - [exit_safety.py](#exit_safetypy)
+  - [exits_flow.py](#exits_flowpy)
+  - [invariants.py](#invariantspy)
+  - [margin_guard.py](#margin_guardpy)
+  - [margin_policy.py](#margin_policypy)
+  - [market_data.py](#market_datapy)
+  - [notifications.py](#notificationspy)
+  - [risk_math.py](#risk_mathpy)
+  - [state_store.py](#state_storepy)
+  - [trail.py](#trailpy)
 - [Конфігурація](#конфігурація)
 - [Режими роботи](#режими-роботи)
 - [Безпека та надійність](#безпека-та-надійність)
@@ -53,16 +55,19 @@ Executor/
 ├── executor.py              # Головний виконавчий механізм
 ├── executor_mod/            # Модульна архітектура
 │   ├── __init__.py
+│   ├── baseline_policy.py   # Базові стратегії управління позицією
 │   ├── binance_api.py       # REST API адаптер
-│   ├── state_store.py       # Менеджер стану
-│   ├── notifications.py     # Логування та вебхуки
 │   ├── event_dedup.py       # Дедуплікація подій
+│   ├── exchange_snapshot.py # Кеш стану біржі
+│   ├── exit_safety.py       # Контроль безпечного закриття позицій
 │   ├── exits_flow.py        # Логіка виходів
-│   ├── margin_policy.py     # Політика маржі
-│   ├── margin_guard.py      # Хуки маржинальної торгівлі
 │   ├── invariants.py        # Детектори інваріантів
-│   ├── risk_math.py         # Ризик-менеджмент математика
+│   ├── margin_guard.py      # Хуки маржинальної торгівлі
+│   ├── margin_policy.py     # Політика маржі
 │   ├── market_data.py       # Ринкові дані
+│   ├── notifications.py     # Логування та вебхуки
+│   ├── risk_math.py         # Ризик-менеджмент математика
+│   ├── state_store.py       # Менеджер стану
 │   └── trail.py             # Trailing stop логіка
 └── test/                    # Тести
     ├── test_executor.py
@@ -134,6 +139,12 @@ Executor/
 
 ## Допоміжні модулі
 
+### baseline_policy.py
+
+**Призначення**: Модуль для реалізації базових стратегій управління позицією та ризиком. Забезпечує fallback-логіку для випадків, коли основна стратегія недоступна або виникають нестандартні ситуації. Може використовуватись для тестування та порівняння з основними алгоритмами.
+
+---
+
 ### binance_api.py
 
 **Призначення**: Адаптер для Binance REST API з підтримкою spot та margin
@@ -169,85 +180,6 @@ Executor/
 
 ---
 
-### state_store.py
-
-**Призначення**: Менеджер персистентного стану виконавця
-
-#### Структура стану
-
-```python
-{
-  "meta": {
-    "seen_keys": [...],      # дедуплікація подій
-    "dedup_fp": "...",       # fingerprint алгоритму
-    "boot_ts": "ISO8601"
-  },
-  "position": {              # активна позиція або None
-    "mode": "live",
-    "side": "LONG",
-    "status": "OPEN_FILLED",
-    "qty": 0.001,
-    "entry": 95000.0,
-    "order_id": 123456,
-    "client_id": "EX_...",
-    "orders": {              # exit ордера
-      "sl": 789,
-      "tp1": 790,
-      "tp2": 791,
-      "qty1": 0.0003,
-      "qty2": 0.0003,
-      "qty3": 0.0004
-    },
-    "prices": {
-      "entry": 95000.0,
-      "sl": 94800.0,
-      "tp1": 95200.0,
-      "tp2": 95400.0
-    },
-    "trail_active": true,
-    "trail_sl_price": 95100.0,
-    ...
-  },
-  "last_closed": {...},      # остання закрита позиція
-  "cooldown_until": 1234567890.0,
-  "lock_until": 1234567890.0,
-  "margin": {                # margin стан (якщо margin mode)
-    "borrowed_assets": {"USDC": 100.0},
-    "borrowed_by_trade": {},
-    "active_trade_key": "..."
-  }
-}
-```
-
-#### Функції
-
-- `load_state()` — завантаження з `STATE_FN` (JSON)
-- `save_state(st)` — атомарний запис через `.tmp` + `os.replace`
-- `has_open_position(st)` — чи є активна позиція (PENDING/OPEN/OPEN_FILLED)
-- `in_cooldown(st)` — чи активний cooldown
-- `locked(st)` — чи активний lock
-
----
-
-### notifications.py
-
-**Призначення**: Логування та вебхуки
-
-#### Функції
-
-- `log_event(action, **fields)` — додає JSON-рядок до `EXEC_LOG`
-- `append_line_with_cap(path, line, cap)` — запис з обмеженням `LOG_MAX_LINES`
-- `send_webhook(payload)` — POST до `N8N_WEBHOOK_URL` з basic auth
-- `iso_utc(dt)` — ISO8601 timestamp
-
-#### Формат лога
-
-```json
-{"ts": "2025-01-13T20:00:00+00:00", "source": "executor", "action": "ENTRY_PLACED", "symbol": "BTCUSDC", ...}
-```
-
----
-
 ### event_dedup.py
 
 **Призначення**: Дедуплікація DeltaScout PEAK подій
@@ -278,6 +210,33 @@ bootstrap_seen_keys_from_tail(st, tail_lines)
 - Ігнорує події від інших джерел якщо `STRICT_SOURCE=True`
 - Бакетує ts до хвилини для стабільності
 - Зберігає останні `SEEN_KEYS_MAX` (500) ключів
+
+---
+
+### exchange_snapshot.py
+
+**Призначення**: In-memory кеш/знімок стану біржі (openOrders) для зменшення кількості API-викликів та підвищення продуктивності.
+
+- Зберігає останній список відкритих ордерів, час оновлення, статус, джерело оновлення
+- Оновлюється лише при статусі позиції `OPEN` (manage loop) або при спеціальних подіях (BOOT, MANUAL, RECOVERY)
+- Дозволяє іншим модулям (invariants, baseline_policy) читати стан без прямих API-запитів
+- Має throttling (SNAPSHOT_MIN_SEC) для захисту від надмірних викликів
+- Всі споживачі отримують дані через get_snapshot()/refresh_snapshot()
+
+**Обмеження:** Кешує **тільки** openOrders. Не впливає на margin debt перевірки (I13 інваріант), account balance API чи check_order_status виклики.
+
+**Ключові методи:**
+- `freshness_sec()` — вік snapshot
+- `is_fresh(max_age_sec)` — чи актуальний
+- `refresh()` — оновлення через openOrders API
+- `get_orders()` — отримати список ордерів (або порожній список)
+- `to_dict()` — серіалізація для логування
+
+---
+
+### exit_safety.py
+
+**Призначення**: Модуль контролю безпечного закриття позицій. Відстежує умови, за яких вихід з позиції може бути ризикованим (наприклад, нестабільність API, аномалії ринку) та застосовує додаткові перевірки або обмеження для мінімізації втрат.
 
 ---
 
@@ -408,6 +367,25 @@ I13_KILL_ON_DEBT=false        # halt executor якщо I13 ERROR
 
 ---
 
+### notifications.py
+
+**Призначення**: Логування та вебхуки
+
+#### Функції
+
+- `log_event(action, **fields)` — додає JSON-рядок до `EXEC_LOG`
+- `append_line_with_cap(path, line, cap)` — запис з обмеженням `LOG_MAX_LINES`
+- `send_webhook(payload)` — POST до `N8N_WEBHOOK_URL` з basic auth
+- `iso_utc(dt)` — ISO8601 timestamp
+
+#### Формат лога
+
+```json
+{"ts": "2025-01-13T20:00:00+00:00", "source": "executor", "action": "ENTRY_PLACED", "symbol": "BTCUSDC", ...}
+```
+
+---
+
 ### risk_math.py
 
 **Призначення**: Математичні утиліти для ризик-менеджменту
@@ -447,22 +425,54 @@ split_qty_3legs_place(qty_total_r) -> (qty1, qty2, qty3)
 
 ---
 
-### market_data.py
+### state_store.py
 
-**Призначення**: Утиліти для роботи з ринковими даними (aggregated.csv)
+**Призначення**: Менеджер персистентного стану виконавця
 
-#### Функції
+#### Структура стану
 
 ```python
-load_df_sorted() -> pd.DataFrame
-# Завантажує aggregated.csv, нормалізує Timestamp, повертає відсортований DataFrame
-# Колонки: Timestamp, price (з ClosePrice/AvgPrice), HiPrice, LowPrice
-
-locate_index_by_ts(df, ts) -> int
-# Знаходить індекс рядка за timestamp (minute resolution)
-
-latest_price(df) -> float
-# Повертає останню ціну з DataFrame
+{
+  "meta": {
+    "seen_keys": [...],      # дедуплікація подій
+    "dedup_fp": "...",       # fingerprint алгоритму
+    "boot_ts": "ISO8601"
+  },
+  "position": {              # активна позиція або None
+    "mode": "live",
+    "side": "LONG",
+    "status": "OPEN_FILLED",
+    "qty": 0.001,
+    "entry": 95000.0,
+    "order_id": 123456,
+    "client_id": "EX_...",
+    "orders": {              # exit ордера
+      "sl": 789,
+      "tp1": 790,
+      "tp2": 791,
+      "qty1": 0.0003,
+      "qty2": 0.0003,
+      "qty3": 0.0004
+    },
+    "prices": {
+      "entry": 95000.0,
+      "sl": 94800.0,
+      "tp1": 95200.0,
+      "tp2": 95400.0
+    },
+    "trail_active": true,
+    "trail_sl_price": 95100.0,
+    ...
+  },
+  "last_closed": {...},      # остання закрита позиція
+  "cooldown_until": 1234567890.0,
+  "lock_until": 1234567890.0,
+  "margin": {                # margin стан (якщо margin mode)
+    "borrowed_assets": {"USDC": 100.0},
+    "borrowed_by_trade": {},
+    "active_trade_key": "..."
+  }
+}
 ```
 
 #### Схема aggregated.csv v2
@@ -517,29 +527,6 @@ TRAIL_CONFIRM_BUFFER_USD=0.0        # буфер для bar-close confirmation
 - **Fail-loud** на schema mismatch (header != AGG_HEADER_V2)
 - **Fail-closed** на missing file (startup/rotation)
 - Використовує `read_tail_lines` для performance (не сканує весь файл)
-
----
-
-### exchange_snapshot.py
-
-**Файл**: `exchange_snapshot.py`
-**Призначення**: In-memory кеш/знімок стану біржі (openOrders) для зменшення кількості API-викликів та підвищення продуктивності.
-
-- Зберігає останній список відкритих ордерів, час оновлення, статус, джерело оновлення
-- Оновлюється лише при статусі позиції `OPEN` (manage loop) або при спеціальних подіях (BOOT, MANUAL, RECOVERY)
-- Дозволяє іншим модулям (invariants, baseline_policy) читати стан без прямих API-запитів
-- Має throttling (SNAPSHOT_MIN_SEC) для захисту від надмірних викликів
-- Всі споживачі отримують дані через get_snapshot()/refresh_snapshot()
-
-**Обмеження:** Кешує **тільки** openOrders. Не впливає на margin debt перевірки (I13 інваріант), account balance API чи check_order_status виклики.
-
-**Ключові методи:**
-- `freshness_sec()` — вік snapshot
-- `is_fresh(max_age_sec)` — чи актуальний
-- `refresh()` — оновлення через openOrders API
-- `get_orders()` — отримати список ордерів (або порожній список)
-- `to_dict()` — серіалізація для логування
-
 ---
 
 ## Конфігурація
