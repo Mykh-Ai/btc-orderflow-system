@@ -19,6 +19,7 @@
   - [risk_math.py](#risk_mathpy)
   - [market_data.py](#market_datapy)
   - [trail.py](#trailpy)
+  - [exchange_snapshot.py](#exchange_snapshotpy)
 - [Конфігурація](#конфігурація)
 - [Режими роботи](#режими-роботи)
 - [Безпека та надійність](#безпека-та-надійність)
@@ -189,7 +190,7 @@ Executor/
     "entry": 95000.0,
     "order_id": 123456,
     "client_id": "EX_...",
-    "orders": {              # exit ордери
+    "orders": {              # exit ордера
       "sl": 789,
       "tp1": 790,
       "tp2": 791,
@@ -516,6 +517,28 @@ TRAIL_CONFIRM_BUFFER_USD=0.0        # буфер для bar-close confirmation
 - **Fail-loud** на schema mismatch (header != AGG_HEADER_V2)
 - **Fail-closed** на missing file (startup/rotation)
 - Використовує `read_tail_lines` для performance (не сканує весь файл)
+
+---
+
+### exchange_snapshot.py
+
+**Файл**: `exchange_snapshot.py`
+**Призначення**: In-memory кеш/знімок стану біржі (openOrders) для зменшення кількості API-викликів та підвищення продуктивності.
+
+- Зберігає останній список відкритих ордерів, час оновлення, статус, джерело оновлення
+- Оновлюється лише при статусі позиції `OPEN` (manage loop) або при спеціальних подіях (BOOT, MANUAL, RECOVERY)
+- Дозволяє іншим модулям (invariants, baseline_policy) читати стан без прямих API-запитів
+- Має throttling (SNAPSHOT_MIN_SEC) для захисту від надмірних викликів
+- Всі споживачі отримують дані через get_snapshot()/refresh_snapshot()
+
+**Обмеження:** Кешує **тільки** openOrders. Не впливає на margin debt перевірки (I13 інваріант), account balance API чи check_order_status виклики.
+
+**Ключові методи:**
+- `freshness_sec()` — вік snapshot
+- `is_fresh(max_age_sec)` — чи актуальний
+- `refresh()` — оновлення через openOrders API
+- `get_orders()` — отримати список ордерів (або порожній список)
+- `to_dict()` — серіалізація для логування
 
 ---
 

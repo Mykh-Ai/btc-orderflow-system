@@ -43,6 +43,7 @@ import executor_mod.risk_math as risk_math
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 import executor_mod.exit_safety as exit_safety
+from executor_mod.exchange_snapshot import get_snapshot, refresh_snapshot
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -192,6 +193,8 @@ ENV: Dict[str, Any] = {
 "ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 "RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
+"SNAPSHOT_MIN_SEC": _get_int("SNAPSHOT_MIN_SEC", 5),  # min interval between snapshot refreshes
+"SYNC_BINANCE_THROTTLE_SEC": _get_int("SYNC_BINANCE_THROTTLE_SEC", 300),  # sync_from_binance throttle
 }
 
 
@@ -835,7 +838,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     Optimized:
       - Throttled by MANAGE_EVERY_SEC in main loop
-      - Uses a single openOrders fetch
+      - openOrders polling GATED to OPEN status only (not OPEN_FILLED)
       - Verifies missing orders via order status (FILLED) before acting
     """
     pos = st.get("position") or {}
@@ -844,19 +847,39 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if not pos.get("orders") or not pos.get("prices"):
         return
     now_s = _now_s()
-    try:
-        orders = binance_api.open_orders(symbol)
-    except Exception as e:
-        # Do not abort manage-cycle: openOrders can be empty/incomplete or fail transiently.
-        # We still can verify FILLED via check_order_status and cancel siblings best-effort.
-        orders = []
-        now_err = _now_s()
-        last_err = float(pos.get("open_orders_err_s") or 0.0)
-        if now_err - last_err >= 30.0:
-            pos["open_orders_err_s"] = now_err
-            st["position"] = pos
-            save_state(st)
-            log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {e}")
+    
+    # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
+    # During OPEN_FILLED, rely on place_order responses + retries, not polling
+    orders = []
+    if pos.get("status") == "OPEN":
+        snapshot = get_snapshot()
+        refreshed = refresh_snapshot(
+            symbol=symbol,
+            source="manage",
+            open_orders_fn=binance_api.open_orders,
+            min_interval_sec=float(ENV.get("SNAPSHOT_MIN_SEC", 5)),
+        )
+        if refreshed:
+            log_event(
+                "SNAPSHOT_REFRESH",
+                source="manage",
+                ok=snapshot.ok,
+                error=snapshot.error,
+                age_sec=snapshot.freshness_sec(),
+                order_count=len(snapshot.get_orders()),
+            )
+        orders = snapshot.get_orders()
+        if not snapshot.ok and snapshot.error:
+            # Throttle error logging
+            last_err = float(pos.get("open_orders_err_s") or 0.0)
+            if now_s - last_err >= 30.0:
+                pos["open_orders_err_s"] = now_s
+                st["position"] = pos
+                save_state(st)
+                log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
+    else:
+        # OPEN_FILLED: skip openOrders polling
+        log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
 
     open_ids: set[int] = set()
     for _o in (orders or []):
@@ -1641,7 +1664,7 @@ def get_usdt_usdc_k() -> float:
     mid_usdc = binance_api.get_mid_price("BTCUSDC")
     return mid_usdc / mid_usdt
 
-def sync_from_binance(st: Dict[str, Any]) -> None:
+def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
     """Best-effort reconciliation of executor state with Binance.
 
     Why:
@@ -1653,17 +1676,49 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
       - Look at *tagged* openOrders (clientOrderId starts with 'EX_')
       - If we see tagged orders and local state is empty -> create/attach a live position shell
       - If local state says OPEN/PENDING but Binance has no tagged orders -> clear slot (assume closed/canceled)
+      
+    GATED: Only run on BOOT/MANUAL/RECOVERY or at most once per SYNC_BINANCE_THROTTLE_SEC.
+    Prefer using snapshot if fresh to avoid duplicate openOrders calls.
 
     This avoids accidental double-opening after restarts.
     """
     if str(ENV.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
-
-    try:
-        orders = binance_api.open_orders(ENV["SYMBOL"])
-    except Exception as e:
-        log_event("SYNC_ERR_OPENORDERS", error=str(e))
-        return
+    
+    # GATE: Throttle sync_from_binance unless reason is BOOT/MANUAL/RECOVERY
+    pos = st.get("position") or {}
+    now_s = time.time()
+    
+    if reason not in ("BOOT", "MANUAL", "RECOVERY"):
+        # Check if we have a live position - if yes, throttle sync
+        if pos and pos.get("mode") == "live":
+            last_sync = float(st.get("last_sync_from_binance_s") or 0.0)
+            throttle_sec = float(ENV.get("SYNC_BINANCE_THROTTLE_SEC", 300))
+            if now_s - last_sync < throttle_sec:
+                log_event("SYNC_SKIP_THROTTLED", reason=reason, throttle_sec=throttle_sec, age_sec=now_s - last_sync)
+                return
+    
+    st["last_sync_from_binance_s"] = now_s
+    
+    # Try to use fresh snapshot first to avoid duplicate openOrders call
+    snapshot = get_snapshot()
+    if snapshot.is_fresh(float(ENV.get("SNAPSHOT_MIN_SEC", 5))) and snapshot.ok:
+        orders = snapshot.get_orders()
+        log_event("SYNC_USE_SNAPSHOT", reason=reason, age_sec=snapshot.freshness_sec(), order_count=len(orders))
+    else:
+        try:
+            orders = binance_api.open_orders(ENV["SYMBOL"])
+            # Update snapshot while we're here
+            snapshot.ts_updated = now_s
+            snapshot.ok = True
+            snapshot.error = None
+            snapshot.open_orders = orders
+            snapshot.source = f"sync:{reason}"
+            snapshot.symbol = ENV["SYMBOL"]
+            log_event("SYNC_FETCH_OPENORDERS", reason=reason, order_count=len(orders or []))
+        except Exception as e:
+            log_event("SYNC_ERR_OPENORDERS", reason=reason, error=str(e))
+            return
 
     tagged = [o for o in (orders or []) if str(o.get("clientOrderId", "")).startswith("EX_")]
     pos = st.get("position") or {}
@@ -2061,7 +2116,7 @@ def main() -> None:
     with suppress(Exception):
         _preflight_margin_cross_usdc()
     with suppress(Exception):
-        sync_from_binance(st)
+        sync_from_binance(st, reason="BOOT")
 
     # Optional: one-shot connectivity/auth check (useful before going live)
     if ENV.get("LIVE_VALIDATE_ONLY"):
@@ -2378,7 +2433,7 @@ def main() -> None:
                         log_event("SKIP_PEAK", reason="stale_peak", age_sec=round(age, 3), evt_ts=str(evt.get("ts")))
                         continue
             with suppress(Exception):
-                sync_from_binance(st)
+                sync_from_binance(st, reason="PEAK_EVENT")
 
             if locked(st):
                 log_event("SKIP_PEAK", reason="position_lock")
