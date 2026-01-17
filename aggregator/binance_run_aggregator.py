@@ -145,7 +145,7 @@ def aggregate_and_clear():
     with open(aggregated_file_path, "a") as f:
         if not file_exists:
             f.write("Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice\n")
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{num_trades},{total_qty:.0f},{avg_size:.0f},{buy_qty:.0f},{sell_qty:.0f},{avg_price:.0f},{close_price:.0f},{high_price:.0f},{low_price:.0f}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{num_trades},{total_qty:.6f},{avg_size:.6f},{buy_qty:.6f},{sell_qty:.6f},{avg_price:.6f},{close_price:.0f},{high_price:.0f},{low_price:.0f}\n")
     with open(aggregated_file_path, "r") as f:
         rows = f.readlines()
     if len(rows) > MAX_RECORDS + 1:
