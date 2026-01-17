@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import executor_mod.margin_guard as mg
+from executor_mod.price_snapshot import reset_snapshot_for_tests
 
 
 class FakeMarginPolicy:
@@ -57,12 +58,15 @@ def _base_env(symbol="BTCUSDC"):
 class TestMarginGuard(unittest.TestCase):
     def setUp(self):
         # fresh globals each test
+        reset_snapshot_for_tests()  # Reset price snapshot state
         self.log = Mock()
         self.api = FakeApi(mid_price=123.45)
         self.policy = FakeMarginPolicy()
 
-        # configure guard
-        mg.configure(_base_env(), self.log, api=self.api)
+        # configure guard (include PRICE_SNAPSHOT_MIN_SEC to avoid missing key)
+        env = _base_env()
+        env["PRICE_SNAPSHOT_MIN_SEC"] = 0  # No throttling in tests
+        mg.configure(env, self.log, api=self.api)
 
         # inject policy (guard checks `margin_policy is None`)
         mg.margin_policy = self.policy

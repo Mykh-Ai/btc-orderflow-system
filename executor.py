@@ -44,6 +44,7 @@ import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 import executor_mod.exit_safety as exit_safety
 from executor_mod.exchange_snapshot import get_snapshot, refresh_snapshot
+from executor_mod import price_snapshot
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -194,6 +195,7 @@ ENV: Dict[str, Any] = {
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 "RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
 "SNAPSHOT_MIN_SEC": _get_int("SNAPSHOT_MIN_SEC", 5),  # min interval between snapshot refreshes
+"PRICE_SNAPSHOT_MIN_SEC": _get_int("PRICE_SNAPSHOT_MIN_SEC", 2),  # min interval between price snapshot refreshes
 "SYNC_BINANCE_THROTTLE_SEC": _get_int("SYNC_BINANCE_THROTTLE_SEC", 300),  # sync_from_binance throttle
 }
 
@@ -448,6 +450,7 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
 
 risk_math.configure(ENV)
 binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
+price_snapshot.configure(log_event_fn=log_event)
 
 
 def build_entry_price(kind: str, close_price: float) -> float:
@@ -1094,9 +1097,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 desired = _trail_desired_stop_from_agg(pos)
                 if desired is None:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
+                    snapshot = price_snapshot.get_price_snapshot()
+                    min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+                    price_snapshot.refresh_price_snapshot(symbol, "trailing_activate", binance_api.get_mid_price, min_interval)
                     mid = 0.0
-                    with suppress(Exception):
-                        mid = float(binance_api.get_mid_price(symbol))
+                    if snapshot.ok:
+                        mid = float(snapshot.price_mid)
                     if mid > 0.0:
                         off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                         desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -1259,9 +1265,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             desired = _trail_desired_stop_from_agg(pos)
             if desired is None and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
+                snapshot = price_snapshot.get_price_snapshot()
+                min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+                price_snapshot.refresh_price_snapshot(symbol, "trailing_update", binance_api.get_mid_price, min_interval)
                 mid = 0.0
-                with suppress(Exception):
-                    mid = float(binance_api.get_mid_price(symbol))
+                if snapshot.ok:
+                    mid = float(snapshot.price_mid)
                 if mid > 0.0:
                     off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                     desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -1437,36 +1446,43 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             with suppress(Exception):
                 sl_status_payload = binance_api.check_order_status(symbol, sl_id)
 
-    # Watchdog must use only live exchange price (no aggregated.csv to avoid stale triggers).
-    price_now = float("nan")
-    with suppress(Exception):
-        price_now = float(binance_api.get_mid_price(symbol))
-
-    prev_trigger_s = pos.get("sl_watchdog_first_trigger_s")
-    prev_fired = bool(pos.get("sl_watchdog_fired"))
+    # SL watchdog only active when status == "OPEN" (entry filled, exits not yet tracked as filled)
+    status = str(pos.get("status") or "").strip().upper()
     plan = None
-    next_err_s = float(pos.get("sl_watchdog_error_next_s") or 0.0)
-    try:
-        plan = exit_safety.sl_watchdog_tick(
-            st,
-            pos,
-            ENV,
-            now_s,
-            price_now,
-            sl_status_payload,
-        )
-    except Exception as e:
-        if now_s >= next_err_s:
-            pos["sl_watchdog_error_next_s"] = now_s + 60.0
-            st["position"] = pos
-            _save_state_best_effort("sl_watchdog_tick_error")
-            log_event("SL_WATCHDOG_ERROR", error=str(e), mode="live")
-    if prev_trigger_s is None and pos.get("sl_watchdog_first_trigger_s") is not None:
-        log_event("SL_WATCHDOG_TRIGGER", mode="live", order_id_sl=sl_id, price_now=price_now)
+    if status == "OPEN":
+        # Watchdog must use only live exchange price (no aggregated.csv to avoid stale triggers).
+        snapshot = price_snapshot.get_price_snapshot()
+        min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+        price_snapshot.refresh_price_snapshot(symbol, "sl_watchdog", binance_api.get_mid_price, min_interval)
+        price_now = float("nan")
+        if snapshot.ok:
+            price_now = float(snapshot.price_mid)
 
-    if prev_trigger_s != pos.get("sl_watchdog_first_trigger_s") or prev_fired != bool(pos.get("sl_watchdog_fired")):
-        st["position"] = pos
-        _save_state_best_effort("sl_watchdog_state_change")
+        prev_trigger_s = pos.get("sl_watchdog_first_trigger_s")
+        prev_fired = bool(pos.get("sl_watchdog_fired"))
+        next_err_s = float(pos.get("sl_watchdog_error_next_s") or 0.0)
+        try:
+            plan = exit_safety.sl_watchdog_tick(
+                st,
+                pos,
+                ENV,
+                now_s,
+                price_now,
+                sl_status_payload,
+            )
+        except Exception as e:
+            if now_s >= next_err_s:
+                pos["sl_watchdog_error_next_s"] = now_s + 60.0
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_tick_error")
+                log_event("SL_WATCHDOG_ERROR", error=str(e), mode="live")
+
+        if prev_trigger_s is None and pos.get("sl_watchdog_first_trigger_s") is not None:
+            log_event("SL_WATCHDOG_TRIGGER", mode="live", order_id_sl=sl_id, price_now=price_now)
+
+        if prev_trigger_s != pos.get("sl_watchdog_first_trigger_s") or prev_fired != bool(pos.get("sl_watchdog_fired")):
+            st["position"] = pos
+            _save_state_best_effort("sl_watchdog_state_change")
 
     if plan:
         post_market_events: List[Dict[str, Any]] = []
@@ -1660,6 +1676,12 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     return trail._trail_desired_stop_from_agg(pos)
 
 def get_usdt_usdc_k() -> float:
+    """Get USDC/USDT conversion ratio.
+
+    Note: Uses direct API calls (not PriceSnapshot) because we need two different
+    symbols simultaneously and PriceSnapshot is a singleton holding one symbol.
+    This is called only during signal processing, not in tight loops.
+    """
     mid_usdt = binance_api.get_mid_price("BTCUSDT")
     mid_usdc = binance_api.get_mid_price("BTCUSDC")
     return mid_usdc / mid_usdt
