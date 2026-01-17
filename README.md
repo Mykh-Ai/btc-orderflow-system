@@ -240,6 +240,66 @@ bootstrap_seen_keys_from_tail(st, tail_lines)
 
 ---
 
+### TP Watchdog / Exit Safety (Missing Orders & Synthetic Trailing)
+
+**Контекст проблеми**: Binance API може повертати помилку "unknown order" для ордерів, які вже були виконані, скасовані або не існують на біржі внаслідок затримок синхронізації стану. Без нормалізації цих помилок до детермінованого статусу, planner-логіка може застрягнути в неоднозначному стані, а позиція залишиться неочищеною.
+
+**Рішення**: Додано three-layer safety механізм для обробки missing TP orders та synthetic trailing:
+
+#### 1. Missing Order Detection
+
+**Проблема**: `check_order_status()` викидає виключення для missing orders, що порушує детермінованість planner-логіки.
+
+**Рішення**:
+- Додано helper функцію `_is_unknown_order_error(e)` в `executor.py`, яка розпізнає сигнатури "unknown order" у повідомленнях виключень:
+  - `"UNKNOWN ORDER"`, `"UNKNOWN_ORDER"`
+  - `"ORDER DOES NOT EXIST"`, `"ORDER_NOT_FOUND"`
+  - `"NO SUCH ORDER"`
+- При виникненні такої помилки під час `check_order_status()`, інжектується synthetic payload `{"status": "MISSING"}` замість пропагації виключення
+- `exit_safety.tp_watchdog_tick()` обробляє `"MISSING"` так само як `"CANCELED"`, `"REJECTED"`, `"EXPIRED"` (missing TP states)
+
+**Гарантії**:
+- Інші типи виключень (мережеві помилки, rate limits) пропагуються нормально без synthetic injection
+- `"MISSING"` статус використовується ТІЛЬКИ для нормалізації unknown-order помилок, не для інших станів
+
+#### 2. TP2 Synthetic Trailing Quantity
+
+**Проблема**: Коли TP2 ордер missing/canceled/expired, аварійна trailing логіка має використовувати правильну кількість для trailing stop.
+
+**Рішення**:
+- `tp_watchdog_tick()` для missing TP2 ЗАВЖДИ активує trailing на `qty2 + qty3` (не повну qty)
+- Це відповідає V1.5 exit policy: TP1=33%, TP2=33%, trailing=34% remaining
+- Незалежно від стану `tp1_done`, TP2 synthetic trailing завжди працює тільки з `qty2 + qty3`
+
+**Відмінність від нормального flow**:
+- Нормальний TP2 FILLED flow: trailing активується на remaining qty після TP1 і TP2 fills (зазвичай qty3)
+- Аварійний TP2 MISSING flow: synthetic trailing на `qty2 + qty3` (TP2 не був виконаний)
+
+#### 3. One-Shot Event Logging
+
+**Проблема**: Detection events (TP1_PARTIAL_DETECTED, TP1_MISSING_PRICE_CROSSED, TP2_MISSING_SYNTHETIC_TRAILING) можуть логуватися на кожному tick, створюючи alert spam.
+
+**Рішення**:
+- Додано per-position boolean flags:
+  - `tp1_wd_partial_logged` — TP1 partial fill виявлено
+  - `tp1_wd_missing_logged` — TP1 missing + price crossed
+  - `tp2_wd_missing_logged` — TP2 missing synthetic trailing
+- Detection events логуються ТІЛЬКИ якщо відповідний flag = False
+- Після логування flag встановлюється в True і зберігається в state
+- Action events (TP1_MARKET_FALLBACK, TP2_SYNTHETIC_TRAILING_ACTIVATED) логуються завжди
+
+#### Developer Notes / Testing
+
+**Запуск тестів**:
+```bash
+python -m unittest -q
+python -m pytest test/test_tp_watchdog.py -v
+```
+
+**Важливо для тестів**: `exchange_snapshot` є singleton модулем, який може зберігати стан між тестами. У `test_tp_watchdog.py` використовується `reset_snapshot_for_tests()` в `setUp()` для ізоляції тестів. Ця функція призначена ТІЛЬКИ для тестів і НЕ має використовуватися в production runtime.
+
+---
+
 ### exits_flow.py
 
 **Призначення**: Централізована логіка розміщення exits
