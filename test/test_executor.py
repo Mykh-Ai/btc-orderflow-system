@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import executor
+from executor_mod.exchange_snapshot import reset_snapshot
 from copy import deepcopy
 
 
@@ -15,6 +16,8 @@ def _stop_after_n_sleeps(n: int):
 
 
 class TestExecutorV15(unittest.TestCase):
+    def setUp(self):
+        reset_snapshot()
 
     def test_swing_stop_far_uses_agg_high_low(self):
         df = pd.DataFrame({
