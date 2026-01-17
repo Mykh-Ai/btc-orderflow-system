@@ -100,10 +100,15 @@ def get_snapshot() -> ExchangeSnapshot:
     return _snapshot
 
 
-def reset_snapshot() -> None:
-    """Reset the global ExchangeSnapshot instance (test isolation helper)."""
+def reset_snapshot_for_tests() -> None:
+    """Tests only: reset the global ExchangeSnapshot to a pristine state."""
     global _snapshot
-    _snapshot = ExchangeSnapshot()
+    _snapshot.ts_updated = 0.0
+    _snapshot.ok = False
+    _snapshot.error = None
+    _snapshot.source = ""
+    _snapshot.symbol = ""
+    _snapshot.open_orders = None
 
 
 def refresh_snapshot(

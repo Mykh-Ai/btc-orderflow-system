@@ -6,12 +6,18 @@ Tests for exchange_snapshot module.
 
 import unittest
 import time
-from executor_mod.exchange_snapshot import ExchangeSnapshot, get_snapshot, refresh_snapshot, reset_snapshot
+from executor_mod.exchange_snapshot import (
+    ExchangeSnapshot,
+    get_snapshot,
+    refresh_snapshot,
+    reset_snapshot_for_tests,
+)
 
 
 class TestExchangeSnapshot(unittest.TestCase):
     def setUp(self):
-        reset_snapshot()
+        super().setUp()
+        reset_snapshot_for_tests()
 
     def test_snapshot_creation(self):
         """Test basic snapshot creation and freshness."""
