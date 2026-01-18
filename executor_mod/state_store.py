@@ -33,6 +33,7 @@ def load_state() -> Dict[str, Any]:
     st["meta"].setdefault("seen_keys", [])
     st.setdefault("position", None)
     st.setdefault("last_closed", None)
+    st.setdefault("last_reported_report_id", None)
     st.setdefault("cooldown_until", 0.0)
     st.setdefault("lock_until", 0.0)
     baseline = st.get("baseline")

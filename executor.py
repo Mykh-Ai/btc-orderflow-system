@@ -45,6 +45,7 @@ import executor_mod.exits_flow as exits_flow
 import executor_mod.exit_safety as exit_safety
 from executor_mod.exchange_snapshot import get_snapshot, refresh_snapshot
 from executor_mod import price_snapshot
+from executor_mod import reporting
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -891,6 +892,68 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         with suppress(Exception):
             open_ids.add(int(_o.get("orderId")))
 
+    def _update_order_fill(pos: Dict[str, Any], leg: str, payload: Dict[str, Any]) -> bool:
+        """Reporting Spec v1: persist execution data from existing status calls."""
+        if not isinstance(payload, dict) or not leg:
+            return False
+        orders = pos.get("orders")
+        if not isinstance(orders, dict):
+            return False
+        fills = orders.setdefault("fills", {})
+        if not isinstance(fills, dict):
+            fills = {}
+            orders["fills"] = fills
+        leg_data = fills.setdefault(leg, {})
+        if not isinstance(leg_data, dict):
+            leg_data = {}
+            fills[leg] = leg_data
+
+        changed = False
+        order_id = payload.get("orderId") or orders.get(leg)
+        if order_id is not None and leg_data.get("orderId") != order_id:
+            leg_data["orderId"] = order_id
+            changed = True
+
+        status = payload.get("status")
+        if status and leg_data.get("status") != status:
+            leg_data["status"] = status
+            changed = True
+
+        for key in ("executedQty", "cummulativeQuoteQty"):
+            val = payload.get(key)
+            try:
+                val_f = float(val)
+            except Exception:
+                continue
+            prev = leg_data.get(key)
+            try:
+                prev_f = float(prev) if prev is not None else None
+            except Exception:
+                prev_f = None
+            if prev_f is None or val_f > prev_f:
+                leg_data[key] = val_f
+                changed = True
+
+        executed = leg_data.get("executedQty")
+        cum_quote = leg_data.get("cummulativeQuoteQty")
+        try:
+            if executed is not None and cum_quote is not None and float(executed) > 0:
+                avg = float(cum_quote) / float(executed)
+                if leg_data.get("avgFillPrice") != avg:
+                    leg_data["avgFillPrice"] = avg
+                    changed = True
+        except Exception:
+            pass
+
+        last_update = payload.get("updateTime")
+        if last_update is not None and leg_data.get("lastUpdateTs") != last_update:
+            leg_data["lastUpdateTs"] = last_update
+            changed = True
+
+        if changed:
+            pos["orders"] = orders
+        return changed
+
     def _save_state_best_effort(where: str) -> None:
         """Watchdog-only persistence: never crash the loop; throttle noise."""
         try:
@@ -943,6 +1006,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             "side": pos.get("side"),
             "entry": (pos.get("prices") or {}).get("entry"),
         }
+        with suppress(Exception):
+            reporting.report_trade_close(st, pos, reason)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
@@ -1009,8 +1074,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         # Do not gate FILLED detection on openOrders/open_ids; throttle via tp1_status_next_s
         if poll_due or (not orders):
             pos["tp1_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
-
-            if _status_is_filled(tp1_id):
+            tp1_status_payload = None
+            with suppress(Exception):
+                tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+            if isinstance(tp1_status_payload, dict):
+                if _update_order_fill(pos, "tp1", tp1_status_payload):
+                    st["position"] = pos
+                    _save_state_best_effort("tp1_fill_update")
+            tp1_filled = False
+            if isinstance(tp1_status_payload, dict):
+                tp1_filled = str(tp1_status_payload.get("status", "")).upper() == "FILLED"
+            if tp1_filled:
                 exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
                 be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
 
@@ -1069,7 +1143,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # TP2 filled -> activate trailing SL for remaining qty3 (if configured)
     if tp2_id and not pos.get("tp2_done"):    
-        if _status_is_filled(tp2_id):
+        tp2_status_payload = None
+        with suppress(Exception):
+            tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+        if isinstance(tp2_status_payload, dict):
+            if _update_order_fill(pos, "tp2", tp2_status_payload):
+                st["position"] = pos
+                _save_state_best_effort("tp2_fill_update")
+        tp2_filled = False
+        if isinstance(tp2_status_payload, dict):
+            tp2_filled = str(tp2_status_payload.get("status", "")).upper() == "FILLED"
+        if tp2_filled:
             pos["tp2_done"] = True
             st["position"] = pos
             save_state(st)
@@ -1445,6 +1529,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _save_state_best_effort("sl_status_next_s_watchdog")
             with suppress(Exception):
                 sl_status_payload = binance_api.check_order_status(symbol, sl_id)
+            if isinstance(sl_status_payload, dict):
+                if _update_order_fill(pos, "sl", sl_status_payload):
+                    st["position"] = pos
+                    _save_state_best_effort("sl_fill_update")
 
     # SL watchdog only active when status == "OPEN" (entry filled, exits not yet tracked as filled)
     status = str(pos.get("status") or "").strip().upper()
@@ -1661,6 +1749,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 _save_state_best_effort("tp1_watchdog_status_poll")
                 try:
                     tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+                    if isinstance(tp1_status_payload, dict):
+                        if _update_order_fill(pos, "tp1", tp1_status_payload):
+                            st["position"] = pos
+                            _save_state_best_effort("tp1_watchdog_fill_update")
                 except Exception as e:
                     # If order is missing on exchange, inject synthetic status for planner.
                     if _is_unknown_order_error(e):
@@ -1678,6 +1770,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 _save_state_best_effort("tp2_watchdog_status_poll")
                 try:
                     tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+                    if isinstance(tp2_status_payload, dict):
+                        if _update_order_fill(pos, "tp2", tp2_status_payload):
+                            st["position"] = pos
+                            _save_state_best_effort("tp2_watchdog_fill_update")
                 except Exception as e:
                     if _is_unknown_order_error(e):
                         tp2_status_payload = {"status": "MISSING"}
