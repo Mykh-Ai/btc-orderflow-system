@@ -856,6 +856,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     # During OPEN_FILLED, rely on place_order responses + retries, not polling
     orders = []
     if pos.get("status") == "OPEN":
+        pos.pop("openorders_skip_logged", None)
         snapshot = get_snapshot()
         refreshed = refresh_snapshot(
             symbol=symbol,
@@ -882,8 +883,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 save_state(st)
                 log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
     else:
-        # OPEN_FILLED: skip openOrders polling
-        log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
+        # OPEN_FILLED: skip openOrders polling (log once per position to avoid spam)
+        if not pos.get("openorders_skip_logged"):
+            pos["openorders_skip_logged"] = iso_utc()
+            st["position"] = pos
+            save_state(st)
+            log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
 
     open_ids: set[int] = set()
     for _o in (orders or []):

@@ -13,6 +13,7 @@ Pattern follows exchange_snapshot.py design (singleton, throttled refresh).
 
 from __future__ import annotations
 
+from contextlib import suppress
 import time
 from typing import Any, Callable, Dict, Optional
 
@@ -118,9 +119,6 @@ def refresh_price_snapshot(
         _snapshot.ok = True
         _snapshot.error = None
 
-        # Log successful refresh (optional, only if configured)
-        if _log_event_fn:
-            _log_event_fn("PRICE_SNAPSHOT_REFRESH", symbol=symbol, source=source, ok=True, price_mid=float(mid_price))
     except Exception as e:
         _snapshot.price_mid = 0.0
         _snapshot.ok = False
@@ -128,6 +126,7 @@ def refresh_price_snapshot(
 
         # Log failed refresh (optional, only if configured)
         if _log_event_fn:
-            _log_event_fn("PRICE_SNAPSHOT_REFRESH", symbol=symbol, source=source, ok=False, error=str(e))
+            with suppress(Exception):
+                _log_event_fn("PRICE_SNAPSHOT_ERROR", symbol=symbol, source=source, ok=False, error=str(e))
 
     return True
