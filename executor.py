@@ -1544,12 +1544,18 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     plan = None
     if status == "OPEN":
         # Watchdog must use only live exchange price (no aggregated.csv to avoid stale triggers).
-        snapshot = price_snapshot.get_price_snapshot()
         min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
         price_snapshot.refresh_price_snapshot(symbol, "sl_watchdog", binance_api.get_mid_price, min_interval)
+        snapshot = price_snapshot.get_price_snapshot()
         price_now = float("nan")
         if snapshot.ok:
             price_now = float(snapshot.price_mid)
+        else:
+            next_direct_s = float(pos.get("sl_watchdog_direct_next_s") or 0.0)
+            if now_s >= next_direct_s:
+                pos["sl_watchdog_direct_next_s"] = now_s + min_interval
+                with suppress(Exception):
+                    price_now = float(binance_api.get_mid_price(symbol))
 
         prev_trigger_s = pos.get("sl_watchdog_first_trigger_s")
         prev_fired = bool(pos.get("sl_watchdog_fired"))
@@ -1783,15 +1789,21 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     if _is_unknown_order_error(e):
                         tp2_status_payload = {"status": "MISSING"}
 
-    # Execute TP watchdog (only when OPEN_FILLED status)
+    # Execute TP watchdog (OPEN or OPEN_FILLED status)
     tp_plan = None
-    if status == "OPEN_FILLED":
-        snapshot = price_snapshot.get_price_snapshot()
+    if status in ("OPEN", "OPEN_FILLED"):
         min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
         price_snapshot.refresh_price_snapshot(symbol, "tp_watchdog", binance_api.get_mid_price, min_interval)
+        snapshot = price_snapshot.get_price_snapshot()
         price_now_tp = float("nan")
         if snapshot.ok:
             price_now_tp = float(snapshot.price_mid)
+        else:
+            next_direct_s = float(pos.get("tp_watchdog_direct_next_s") or 0.0)
+            if now_s >= next_direct_s:
+                pos["tp_watchdog_direct_next_s"] = now_s + min_interval
+                with suppress(Exception):
+                    price_now_tp = float(binance_api.get_mid_price(symbol))
 
         next_err_s = float(pos.get("tp_watchdog_error_next_s") or 0.0)
         try:

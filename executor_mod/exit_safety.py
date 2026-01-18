@@ -147,7 +147,7 @@ def sl_watchdog_tick(
     if not pos:
         return None
     status = str(pos.get("status") or "").upper()
-    if status not in ("OPEN_FILLED",):
+    if status not in ("OPEN", "OPEN_FILLED"):
         return None
 
     orders = pos.get("orders") or {}
@@ -341,7 +341,7 @@ def tp_watchdog_tick(
     if not pos:
         return None
     status = str(pos.get("status") or "").upper()
-    if status not in ("OPEN_FILLED",):
+    if status not in ("OPEN", "OPEN_FILLED"):
         return None
 
     orders = pos.get("orders") or {}
