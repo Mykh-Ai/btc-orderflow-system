@@ -148,6 +148,17 @@ def _compute_exit_quote_total(rec: Dict[str, Any]) -> Optional[float]:
     return total if seen else None
 
 
+def _leg_is_filled(leg_data: Dict[str, Any]) -> bool:
+    executed_qty = _safe_float(leg_data.get("executedQty"))
+    if executed_qty is not None and executed_qty > 0:
+        return True
+    quote_qty = _safe_float(leg_data.get("cummulativeQuoteQty"))
+    if quote_qty is not None and quote_qty > 0:
+        return True
+    status = str(leg_data.get("status") or "").upper()
+    return status == "FILLED"
+
+
 def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[str, Any]]]) -> Dict[str, Any]:
     rec = dict(rec)
     symbol = str(rec.get("symbol") or "").upper()
@@ -168,6 +179,10 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
         if order_id in (None, 0, "", "0"):
             continue
         had_leg = True
+        if not _leg_is_filled(leg_data):
+            leg_data["feeQuote"] = 0.0
+            _append_note(rec, f"skip_fee_leg_{leg}_unfilled")
+            continue
         oid = int(order_id)
         cache_key = (symbol, oid)
         trades = cache.get(cache_key)
@@ -178,7 +193,10 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
         if fee_err:
             fees_allowed = False
             leg_data["feeQuote"] = None
-            _append_note(rec, f"fee_{leg}_{fee_err}")
+            if fee_err == "no_commission":
+                _append_note(rec, f"fee_{leg}_missing_commission_on_filled_leg")
+            else:
+                _append_note(rec, f"fee_{leg}_{fee_err}")
         else:
             leg_data["feeQuote"] = fee
             fees_total_quote = (fees_total_quote or 0.0) + float(fee or 0.0)
