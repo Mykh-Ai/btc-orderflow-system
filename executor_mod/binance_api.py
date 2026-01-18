@@ -387,6 +387,40 @@ def open_orders(symbol: str) -> List[Dict[str, Any]]:
     return list(j) if isinstance(j, list) else []
 
 
+def my_trades(
+    symbol: str,
+    *,
+    order_id: Optional[int] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Return account trades for a symbol.
+
+    Spot:   GET /api/v3/myTrades
+    Margin: GET /sapi/v1/margin/myTrades
+    """
+    env = _env()
+    mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    params: Dict[str, Any] = {"symbol": symbol}
+    if order_id is not None:
+        params["orderId"] = int(order_id)
+    if start_time is not None:
+        params["startTime"] = int(start_time)
+    if end_time is not None:
+        params["endTime"] = int(end_time)
+    if limit is not None:
+        params["limit"] = int(limit)
+
+    if mode == "margin":
+        params["isIsolated"] = _tf(env.get("MARGIN_ISOLATED", "FALSE"))
+        j = _binance_signed_request("GET", "/sapi/v1/margin/myTrades", params)
+        return list(j) if isinstance(j, list) else []
+
+    j = _binance_signed_request("GET", "/api/v3/myTrades", params)
+    return list(j) if isinstance(j, list) else []
+
+
 def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
     """Place an order in current TRADE_MODE.
 
