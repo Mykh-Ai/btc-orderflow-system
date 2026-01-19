@@ -102,7 +102,27 @@ class TestMarginPolicy(unittest.TestCase):
         asset, amt, is_iso, sym = api.borrow_calls[0]
         self.assertEqual(asset, "BTC")
         self.assertIsInstance(amt, Decimal)
-        self.assertEqual(amt, Decimal("0.000291"))
+        self.assertEqual(amt, Decimal("0.000292"))
+
+    def test_borrow_rounds_up_to_step_size(self):
+        account = {"userAssets": [{"asset": "BTC", "free": "0.00103875"}]}
+        api = FakeApi(account)
+        st = {}
+        plan = {
+            "trade_key": "T2",
+            "is_isolated": False,
+            "borrow_asset": "BTC",
+            "borrow_amount": "0.00129",
+            "stepSize": "0.00001",
+        }
+
+        mp.ensure_borrow_if_needed(st, api, "BTCUSDC", "SELL", 0.00129, plan)
+
+        self.assertEqual(len(api.borrow_calls), 1)
+        asset, amt, is_iso, sym = api.borrow_calls[0]
+        self.assertEqual(asset, "BTC")
+        self.assertIsInstance(amt, Decimal)
+        self.assertEqual(amt, Decimal("0.00026"))
 
 
 if __name__ == "__main__":

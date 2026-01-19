@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any, Dict, Optional
 
 
@@ -134,6 +134,14 @@ def _round_amount_down(amount: Decimal, step_size: Decimal) -> Decimal:
     return units * step_d
 
 
+def _round_amount_up(amount: Decimal, step_size: Decimal) -> Decimal:
+    step_d = _to_decimal(step_size)
+    if step_d is None or step_d <= 0:
+        return Decimal(str(amount))
+    units = (Decimal(str(amount)) / step_d).to_integral_value(rounding=ROUND_UP)
+    return units * step_d
+
+
 def ensure_borrow_if_needed(
     st: Dict[str, Any],
     api: Any,
@@ -172,7 +180,7 @@ def ensure_borrow_if_needed(
     step_size = _asset_step_size(plan, api, asset, symbol)
     step_size_log: Optional[Decimal] = None
     if step_size is not None and step_size > 0:
-        borrow_amt_dec = _round_amount_down(borrow_amt_dec, step_size)
+        borrow_amt_dec = _round_amount_up(borrow_amt_dec, step_size)
         step_size_log = step_size
     else:
         env = _get_env(api)
@@ -198,10 +206,10 @@ def ensure_borrow_if_needed(
             qty_step_d = _to_decimal(qty_step) if qty_step is not None else None
             if qty_step_d is not None and qty_step_d > 0:
                 fallback_step = qty_step_d
-                borrow_amt_dec = _round_amount_down(borrow_amt_dec, qty_step_d)
+                borrow_amt_dec = _round_amount_up(borrow_amt_dec, qty_step_d)
             elif asset_s == "BTC":
                 fallback_step = Decimal("0.000001")
-                borrow_amt_dec = _round_amount_down(borrow_amt_dec, fallback_step)
+                borrow_amt_dec = _round_amount_up(borrow_amt_dec, fallback_step)
         if fallback_step is not None:
             step_size_log = fallback_step
     log_fn = getattr(api, "log_event", None)
