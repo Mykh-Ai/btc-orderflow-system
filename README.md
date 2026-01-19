@@ -19,9 +19,12 @@
   - [margin_policy.py](#margin_policypy)
   - [market_data.py](#market_datapy)
   - [notifications.py](#notificationspy)
+  - [price_snapshot.py](#price_snapshotpy)
+  - [reporting.py](#reportingpy)
   - [risk_math.py](#risk_mathpy)
   - [state_store.py](#state_storepy)
   - [trail.py](#trailpy)
+- [Утиліти (tools/)](#утиліти-tools)
 - [Конфігурація](#конфігурація)
 - [Режими роботи](#режими-роботи)
 - [Безпека та надійність](#безпека-та-надійність)
@@ -39,12 +42,15 @@ Executor — це Python-застосунок для автоматизован�
 - **Моніторить стан** через систему інваріантів
 - **Підтримує margin** з автоматичним і ручним управлінням запозиченнями
 - **Надсилає сповіщення** через вебхуки (n8n)
+- **Генерує звіти** для offline аналізу та управлінської звітності
 
 Ключові принципи:
 - **Ізоляція даних**: Executor пише лише у власні файли стану/логів
 - **Дедуплікація**: Стабільна система дедуплікації подій на основі ключа `action|ts|min|kind|price`
 - **Відмовостійкість**: Cooldown після закриття, блокування після відкриття, ретраї для exits
 - **Детермінованість**: Всі розрахунки через `Decimal` для уникнення float-артефактів
+- **Safety-first**: TP/SL watchdog механізми для захисту від missing ордерів
+- **Performance**: In-memory snapshots (openOrders, mid-price) для мінімізації API викликів
 
 ---
 
@@ -58,17 +64,22 @@ Executor/
 │   ├── baseline_policy.py   # Базові стратегії управління позицією
 │   ├── binance_api.py       # REST API адаптер
 │   ├── event_dedup.py       # Дедуплікація подій
-│   ├── exchange_snapshot.py # Кеш стану біржі
-│   ├── exit_safety.py       # Контроль безпечного закриття позицій
+│   ├── exchange_snapshot.py # Кеш стану біржі (openOrders)
+│   ├── exit_safety.py       # TP/SL watchdog контроль
 │   ├── exits_flow.py        # Логіка виходів
 │   ├── invariants.py        # Детектори інваріантів
 │   ├── margin_guard.py      # Хуки маржинальної торгівлі
 │   ├── margin_policy.py     # Політика маржі
 │   ├── market_data.py       # Ринкові дані
 │   ├── notifications.py     # Логування та вебхуки
+│   ├── price_snapshot.py    # Кеш mid-price (bookTicker)
+│   ├── reporting.py         # Генерація trade reports
 │   ├── risk_math.py         # Ризик-менеджмент математика
 │   ├── state_store.py       # Менеджер стану
 │   └── trail.py             # Trailing stop логіка
+├── tools/                   # Утиліти
+│   ├── enrich_trades_with_fees.py  # Збагачення trade reports комісіями
+│   └── make_manager_report.py      # Генерація manager звітів
 └── test/                    # Тести
     ├── test_executor.py
     ├── test_binance_api_smoke.py
@@ -77,7 +88,12 @@ Executor/
     ├── test_event_dedup.py
     ├── test_invariants_*.py
     ├── test_margin_*.py
-    └── test_trail.py
+    ├── test_trail.py
+    ├── test_tp_watchdog.py
+    ├── test_sl_watchdog.py
+    ├── test_exchange_snapshot.py
+    ├── test_price_snapshot.py
+    └── test_enrich_trades_with_fees.py
 ```
 
 ---
@@ -122,6 +138,11 @@ Executor/
 - `close_position()` — закриття позиції з cooldown
 - `failsafe_flatten()` — аварійне закриття market ордером
 
+#### Синхронізація та відновлення
+- `sync_from_binance(st, reason)` — синхронізація стану з біржею (attach до існуючої позиції)
+- `handle_open_filled_exits_retry(st)` — retry логіка для exits при OPEN_FILLED
+- `manage_v15_position(symbol, st)` — керування позицією v1.5 (TP fills, trailing, watchdog)
+
 #### Головний цикл
 - `main_loop()` — нескінченний polling loop
 - Інваріанти перевіряються кожні `INVAR_EVERY_SEC`
@@ -134,6 +155,10 @@ Executor/
 2. **Cooldown**: після закриття чекає `COOLDOWN_SEC` перед новим входом
 3. **Lock**: після відкриття блокує `LOCK_SEC` для захисту від дублікатів
 4. **Plan B**: якщо entry не спрацював вчасно, перевіряє актуальність через bookTicker
+5. **TP/SL Watchdog**: автоматична детекція missing TP/SL ордерів з synthetic trailing fallback
+6. **Exchange/Price Snapshots**: in-memory кеш openOrders та mid-price для зменшення API викликів
+7. **Trade Reporting**: автоматична генерація trade reports для offline аналізу та fee enrichment
+8. **Синхронізація стану**: можливість attach до існуючої позиції на біржі через `sync_from_binance()`
 
 ---
 
@@ -141,7 +166,19 @@ Executor/
 
 ### baseline_policy.py
 
-**Призначення**: Модуль для реалізації базових стратегій управління позицією та ризиком. Забезпечує fallback-логіку для випадків, коли основна стратегія недоступна або виникають нестандартні ситуації. Може використовуватись для тестування та порівняння з основними алгоритмами.
+**Призначення**: Модуль для реалізації базових стратегій управління позицією та ризиком.
+
+#### Основні функції
+
+- `configure()` — ініціалізація залежностей модуля
+- Fallback-логіка для випадків, коли основна стратегія недоступна
+- Контроль за станом позиції через `exchange_snapshot`
+- Може використовуватись для тестування та порівняння з основними алгоритмами
+
+#### Особливості
+
+- Працює з in-memory кешем openOrders через `exchange_snapshot`
+- Забезпечує детермінований baseline для порівняння з експериментальними стратегіями
 
 ---
 
@@ -236,11 +273,9 @@ bootstrap_seen_keys_from_tail(st, tail_lines)
 
 ### exit_safety.py
 
-**Призначення**: Модуль контролю безпечного закриття позицій. Відстежує умови, за яких вихід з позиції може бути ризикованим (наприклад, нестабільність API, аномалії ринку) та застосовує додаткові перевірки або обмеження для мінімізації втрат.
+**Призначення**: Модуль контролю безпечного закриття позицій з системою TP/SL watchdog.
 
----
-
-### TP Watchdog / Exit Safety (Missing Orders & Synthetic Trailing)
+#### TP Watchdog / Exit Safety (Missing Orders & Synthetic Trailing)
 
 **Контекст проблеми**: Binance API може повертати помилку "unknown order" для ордерів, які вже були виконані, скасовані або не існують на біржі внаслідок затримок синхронізації стану. Без нормалізації цих помилок до детермінованого статусу, planner-логіка може застрягнути в неоднозначному стані, а позиція залишиться неочищеною.
 
@@ -297,6 +332,27 @@ python -m pytest test/test_tp_watchdog.py -v
 ```
 
 **Важливо для тестів**: `exchange_snapshot` є singleton модулем, який може зберігати стан між тестами. У `test_tp_watchdog.py` використовується `reset_snapshot_for_tests()` в `setUp()` для ізоляції тестів. Ця функція призначена ТІЛЬКИ для тестів і НЕ має використовуватися в production runtime.
+
+#### SL Watchdog
+
+**Призначення**: Захист від зависання у OPEN_FILLED стані коли SL ордер missing/rejected
+
+**Функції**:
+```python
+sl_watchdog_tick(st, pos, symbol, get_mid_price_fn, now_s) -> Dict[str, Any]
+# Перевіряє стан SL ордера та активує fallback при необхідності
+```
+
+**Логіка**:
+1. Виклик при `status == "OPEN_FILLED"` та `sl_wd_enabled=True`
+2. Перевіряє наявність SL ордера через `exchange_snapshot`
+3. Якщо SL missing + ціна crossed stop → активує market fallback
+4. One-shot events логуються через `sl_wd_missing_logged` flag
+
+**Особливості**:
+- Інтегрується з `price_snapshot` для отримання mid-price
+- Throttled detection для зменшення spam
+- Fallback до `flatten_market()` при критичних умовах
 
 ---
 
@@ -427,6 +483,38 @@ I13_KILL_ON_DEBT=false        # halt executor якщо I13 ERROR
 
 ---
 
+### market_data.py
+
+**Призначення**: Утиліти для роботи з ринковими даними (aggregated.csv)
+
+#### Основні функції
+
+```python
+configure(env)
+# Ініціалізація залежностей
+
+load_df_sorted() -> pd.DataFrame
+# Завантажує aggregated.csv та нормалізує схему
+# - Нормалізує Timestamp до UTC
+# - Створює price колонку (ClosePrice/AvgPrice/Close fallback)
+# - Заповнює HiPrice/LowPrice (якщо відсутні)
+# - Сортує за Timestamp
+# - Повертає порожній DataFrame при schema issues (robust)
+
+locate_index_by_ts(df, ts) -> int
+# Знаходить індекс рядка за timestamp (minute resolution)
+# Використовується для синхронізації з PEAK подіями
+```
+
+#### Особливості
+
+- **Robust loader**: повертає порожній DataFrame при schema mismatch
+- **Schema tolerance**: підтримує різні варіанти назв колонок (ClosePrice/AvgPrice/Close)
+- **Fallback логіка**: якщо HiPrice/LowPrice відсутні → використовує price
+- Витягнуто з `executor.py` для покращення тестування та переусадності
+
+---
+
 ### notifications.py
 
 **Призначення**: Логування та вебхуки
@@ -443,6 +531,85 @@ I13_KILL_ON_DEBT=false        # halt executor якщо I13 ERROR
 ```json
 {"ts": "2025-01-13T20:00:00+00:00", "source": "executor", "action": "ENTRY_PLACED", "symbol": "BTCUSDC", ...}
 ```
+
+---
+
+### price_snapshot.py
+
+**Призначення**: In-memory кеш mid-price для зменшення redundant bookTicker API викликів
+
+#### Основні функції
+
+```python
+configure(log_event_fn)
+# Ініціалізація залежностей
+
+class PriceSnapshot:
+    freshness_sec() -> float
+    # Повертає вік snapshot в секундах
+
+    is_fresh(max_age_sec) -> bool
+    # Перевіряє чи snapshot актуальний
+
+    refresh(symbol, get_mid_price_fn, throttle_sec, source) -> bool
+    # Оновлює snapshot з throttling
+
+    get_price() -> Optional[float]
+    # Повертає cached mid-price або None
+```
+
+#### Особливості
+
+- **Singleton pattern**: один екземпляр на процес
+- **Throttled refresh**: викликає `get_mid_price()` тільки якщо snapshot stale
+- **Споживачі**: SL watchdog, trailing fallback, margin_guard
+- Подібна архітектура до `exchange_snapshot.py`
+
+---
+
+### reporting.py
+
+**Призначення**: Генерація trade reports (Reporting Spec v1)
+
+#### Основні функції
+
+```python
+write_trade_open(pos, ts, symbol) -> None
+# Записує trade open подію в /data/reports/trades.jsonl
+
+write_trade_close(pos, ts, symbol, reason) -> None
+# Записує trade close подію
+
+_exit_type(reason) -> str
+# Класифікує тип виходу: FAILSAFE_FLATTEN, EXIT_CLEANUP, MISSING,
+# ABORTED, NORMAL_TRAIL, NORMAL_TP1, NORMAL_TP2, NORMAL_TP3, NORMAL
+```
+
+#### Trade Report Schema
+
+```json
+{
+  "trade_key": "LIVE_2025-01-13T20:00:00Z",
+  "open_ts": "2025-01-13T20:00:00Z",
+  "close_ts": "2025-01-13T20:05:00Z",
+  "symbol": "BTCUSDC",
+  "side": "LONG",
+  "qty": 0.001,
+  "entry_price": 95000.0,
+  "sl_price": 94800.0,
+  "tp1_price": 95200.0,
+  "tp2_price": 95400.0,
+  "exit_type": "NORMAL_TP2",
+  "close_reason": "TP2"
+}
+```
+
+#### Особливості
+
+- **Best-effort, read-only**: ніколи не блокує виконання
+- **Детермінований**: один trade = один запис
+- Записує JSONL у `/data/reports/trades.jsonl`
+- Використовується для offline аналізу та fee enrichment
 
 ---
 
@@ -587,6 +754,128 @@ TRAIL_CONFIRM_BUFFER_USD=0.0        # буфер для bar-close confirmation
 - **Fail-loud** на schema mismatch (header != AGG_HEADER_V2)
 - **Fail-closed** на missing file (startup/rotation)
 - Використовує `read_tail_lines` для performance (не сканує весь файл)
+
+---
+
+## Утиліти (tools/)
+
+Директорія `tools/` містить автономні скрипти для offline обробки та аналізу trade reports.
+
+### enrich_trades_with_fees.py
+
+**Призначення**: Offline збагачення trade reports комісіями з Binance API
+
+#### Використання
+
+```bash
+export BINANCE_API_KEY=your_key
+export BINANCE_API_SECRET=your_secret
+export TRADE_MODE=spot  # або margin
+
+# Базовий запуск (читає /data/reports/trades.jsonl → пише /data/reports/trades_enriched.jsonl)
+python tools/enrich_trades_with_fees.py
+
+# Кастомні шляхи
+python tools/enrich_trades_with_fees.py \
+  --input /path/to/trades.jsonl \
+  --output /path/to/enriched.jsonl
+```
+
+#### Що робить
+
+1. Читає `trades.jsonl` (TradeReportInternal schema)
+2. Для кожного trade:
+   - Витягує всі myTrades для відповідних orderId через Binance API
+   - Обчислює `total_fee_quote` (комісії в quote asset, наприклад USDC)
+   - Обчислює `realized_pnl` (з урахуванням комісій)
+3. Додає поля `fee_enriched`, `fee_enriched_ts`, `total_fee_quote`, `realized_pnl`
+4. Записує у `trades_enriched.jsonl`
+
+#### Policy A (Strict Mode)
+
+- **Вимагає** щоб усі orderId мали myTrades записи
+- Якщо будь-який orderId не має trades → trade пропускається (`skipped_no_trades`)
+- Гарантує 100% покриття для успішно enriched trades
+
+#### Особливості
+
+- **Atomic write**: використовує `.tmp` + `os.replace()`
+- **Ідемпотентний**: може бути запущений повторно (перезаписує output)
+- **Cron-safe**: підходить для періодичного запуску
+- **Rate limit aware**: має retry логіку для 429 помилок
+
+---
+
+### make_manager_report.py
+
+**Призначення**: Генерація manager звітів з enriched trades
+
+#### Використання
+
+```bash
+# Базовий запуск (читає /data/reports/trades_enriched.jsonl → пише /data/reports/manager_report.md)
+python tools/make_manager_report.py
+
+# Кастомні шляхи
+python tools/make_manager_report.py \
+  --input /path/to/trades_enriched.jsonl \
+  --output /path/to/report.md
+```
+
+#### Що генерує
+
+Markdown звіт з наступними секціями:
+
+1. **Summary**
+   - Total trades
+   - Win rate
+   - Total realized PnL (gross/net з комісіями)
+   - Average trade duration
+   - Best/worst trade
+
+2. **Breakdown by Exit Type**
+   - Статистика по кожному типу виходу (TP1, TP2, TRAIL, FAILSAFE, тощо)
+   - Win rate та PnL per exit type
+
+3. **Recent Trades (last 10)**
+   - Таблиця останніх 10 trades з ключовими метриками
+
+4. **Daily Performance**
+   - Aggregate PnL по датам
+   - Daily win rate
+
+#### Особливості
+
+- **Read-only**: тільки читає enriched trades
+- **Cron-safe**: безпечний для періодичного запуску
+- **Human-readable**: генерує markdown для легкого читання
+- **Atomic write**: використовує `.tmp` + `os.replace()`
+
+---
+
+### Workflow для reporting
+
+Рекомендований workflow для генерації звітів:
+
+```bash
+# 1. Executor генерує trades.jsonl під час роботи (автоматично)
+python executor.py
+
+# 2. Періодично (наприклад, раз на день через cron) збагачуємо комісіями
+python tools/enrich_trades_with_fees.py
+
+# 3. Генеруємо manager звіт
+python tools/make_manager_report.py
+
+# 4. Звіт доступний у /data/reports/manager_report.md
+cat /data/reports/manager_report.md
+```
+
+Файли у `/data/reports/`:
+- `trades.jsonl` — raw trade events (генерується executor.py через reporting.py)
+- `trades_enriched.jsonl` — збагачені комісіями (enrich_trades_with_fees.py)
+- `manager_report.md` — фінальний звіт (make_manager_report.py)
+
 ---
 
 ## Конфігурація
@@ -661,6 +950,13 @@ TRAIL_SWING_LR=2
 TRAIL_SWING_BUFFER_USD=15.0
 TRAIL_CONFIRM_BUFFER_USD=0.0
 TRAIL_UPDATE_EVERY_SEC=20
+```
+
+### Watchdog (SL/TP Safety)
+
+```bash
+SL_WATCHDOG_GRACE_SEC=3        # Grace period перед активацією SL watchdog
+SL_WATCHDOG_RETRY_SEC=5        # Retry інтервал для market fallback
 ```
 
 ### Інваріанти
@@ -794,8 +1090,12 @@ python executor.py
 ├── state/
 │   ├── executor_state.json  # основний стан
 │   └── invariants_state.json # metadata інваріантів
-└── feed/
-    └── aggregated.csv       # ринкові дані для trailing
+├── feed/
+│   └── aggregated.csv       # ринкові дані для trailing
+└── reports/                 # trade reports та звіти
+    ├── trades.jsonl         # raw trade events (reporting.py)
+    ├── trades_enriched.jsonl # збагачені комісіями (enrich_trades_with_fees.py)
+    └── manager_report.md    # manager звіт (make_manager_report.py)
 ```
 
 ---
@@ -807,11 +1107,34 @@ python executor.py
 python -m pytest test/
 
 # Окремі модулі
+python -m pytest test/test_executor.py
 python -m pytest test/test_state_store.py
 python -m pytest test/test_binance_api_smoke.py
 python -m pytest test/test_invariants_module.py
 python -m pytest test/test_margin_policy.py
+python -m pytest test/test_margin_policy_isolated.py
 python -m pytest test/test_trail.py
+
+# Watchdog тести
+python -m pytest test/test_tp_watchdog.py -v
+python -m pytest test/test_sl_watchdog.py -v
+
+# Snapshot тести
+python -m pytest test/test_exchange_snapshot.py
+python -m pytest test/test_price_snapshot.py
+
+# Інші функціональні тести
+python -m pytest test/test_market_data.py
+python -m pytest test/test_event_dedup.py
+python -m pytest test/test_risk_math.py
+python -m pytest test/test_notifications.py
+python -m pytest test/test_enrich_trades_with_fees.py
+
+# Запуск з verbose output
+python -m pytest -v test/
+
+# Запуск з print statements
+python -m pytest -s test/test_executor.py
 ```
 
 ---
