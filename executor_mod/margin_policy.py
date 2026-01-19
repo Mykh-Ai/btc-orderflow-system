@@ -1,7 +1,9 @@
 # executor_mod/margin_policy.py
 from __future__ import annotations
 
-from typing import Any, Dict
+import json
+from decimal import Decimal, ROUND_DOWN
+from typing import Any, Dict, Optional
 
 
 def _ensure_margin_state(st: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,6 +53,87 @@ def _is_true(v: Any) -> bool:
     return str(v).strip().upper() in ("TRUE", "1", "YES", "Y", "ON")
 
 
+def _split_symbol_assets(symbol: str) -> tuple[str, str]:
+    s = str(symbol or "").strip().upper()
+    if not s:
+        return "", ""
+    quotes = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI",
+        "BTC", "ETH", "EUR", "TRY", "BRL", "GBP", "JPY",
+        "AUD", "CAD", "CHF",
+    ]
+    for quote in sorted(quotes, key=len, reverse=True):
+        if s.endswith(quote) and len(s) > len(quote):
+            return s[:-len(quote)], quote
+    return "", ""
+
+
+def _to_decimal(value: Any) -> Optional[Decimal]:
+    try:
+        if isinstance(value, Decimal):
+            return value
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _get_env(api: Any) -> Dict[str, Any]:
+    env_fn = getattr(api, "_env", None)
+    if callable(env_fn):
+        try:
+            env = env_fn()
+            if isinstance(env, dict):
+                return env
+        except Exception:
+            return {}
+    return {}
+
+
+def _asset_step_size(plan: Dict[str, Any], api: Any, asset: str, symbol: str) -> Optional[Decimal]:
+    asset_s = str(asset or "").strip().upper()
+    for key in ("stepSize", "step_size", "asset_step", "borrow_step", "borrow_step_size"):
+        if key in plan and plan.get(key) is not None:
+            return _to_decimal(plan.get(key))
+    env = _get_env(api)
+    if asset_s:
+        for key in (
+            f"{asset_s}_STEP_SIZE",
+            f"{asset_s}_STEP",
+            f"ASSET_STEP_{asset_s}",
+            f"ASSET_STEP_SIZE_{asset_s}",
+        ):
+            if key in env and env.get(key) is not None:
+                return _to_decimal(env.get(key))
+        asset_steps = env.get("ASSET_STEP_SIZES") or env.get("ASSET_STEPS")
+        if isinstance(asset_steps, str):
+            try:
+                asset_steps = json.loads(asset_steps)
+            except Exception:
+                asset_steps = None
+        if isinstance(asset_steps, dict):
+            if asset_s in asset_steps and asset_steps.get(asset_s) is not None:
+                return _to_decimal(asset_steps.get(asset_s))
+            if asset_s.lower() in asset_steps and asset_steps.get(asset_s.lower()) is not None:
+                return _to_decimal(asset_steps.get(asset_s.lower()))
+    base_asset, quote_asset = _split_symbol_assets(symbol)
+    if asset_s and asset_s == base_asset:
+        if env.get("QTY_STEP") is not None:
+            return _to_decimal(env.get("QTY_STEP"))
+    if asset_s and asset_s == quote_asset:
+        for key in ("QUOTE_STEP", "QUOTE_ASSET_STEP", "QUOTE_STEP_SIZE"):
+            if env.get(key) is not None:
+                return _to_decimal(env.get(key))
+    return None
+
+
+def _round_amount_down(amount: Decimal, step_size: Decimal) -> Decimal:
+    step_d = _to_decimal(step_size)
+    if step_d is None or step_d <= 0:
+        return Decimal(str(amount))
+    units = (Decimal(str(amount)) / step_d).to_integral_value(rounding=ROUND_DOWN)
+    return units * step_d
+
+
 def ensure_borrow_if_needed(
     st: Dict[str, Any],
     api: Any,
@@ -90,12 +173,45 @@ def ensure_borrow_if_needed(
     if free >= needed_f:
         return
 
-    borrow_amt = needed_f - free
-    api.margin_borrow(asset, borrow_amt, is_isolated=is_isolated, symbol=symbol)
-    margin["borrowed_assets"][asset] = float(margin["borrowed_assets"].get(asset, 0.0)) + float(borrow_amt)
+    borrow_amt_raw = needed_f - free
+    borrow_amt_dec = Decimal(str(borrow_amt_raw))
+    step_size = _asset_step_size(plan, api, asset, symbol)
+    step_size_log: Optional[Decimal] = None
+    if step_size is not None and step_size > 0:
+        borrow_amt_dec = _round_amount_down(borrow_amt_dec, step_size)
+        step_size_log = step_size
+    else:
+        env = _get_env(api)
+        asset_s = str(asset or "").strip().upper()
+        fallback_step: Optional[Decimal] = None
+        if asset_s == "BTC":
+            fallback_step = Decimal("0.000001")
+            borrow_amt_dec = borrow_amt_dec.quantize(fallback_step, rounding=ROUND_DOWN)
+        else:
+            qty_step = env.get("QTY_STEP")
+            qty_step_d = _to_decimal(qty_step) if qty_step is not None else None
+            if qty_step_d is not None and qty_step_d > 0:
+                fallback_step = qty_step_d
+                borrow_amt_dec = _round_amount_down(borrow_amt_dec, qty_step_d)
+        if fallback_step is not None:
+            step_size_log = fallback_step
+    log_fn = getattr(api, "log_event", None)
+    if not callable(log_fn):
+        from executor_mod.notifications import log_event as log_fn
+    log_fn(
+        "BORROW_AMOUNT_ROUNDED",
+        raw_amount=borrow_amt_raw,
+        rounded_amount=str(borrow_amt_dec),
+        stepSize=str(step_size_log) if step_size_log is not None else None,
+    )
+    if borrow_amt_dec <= 0:
+        margin["last_borrow_skip_reason"] = "borrow<=0_after_round"
+        return
+    api.margin_borrow(asset, borrow_amt_dec, is_isolated=is_isolated, symbol=symbol)
+    margin["borrowed_assets"][asset] = float(margin["borrowed_assets"].get(asset, 0.0)) + float(borrow_amt_dec)
     if trade_key and trade_key not in margin["borrowed_trade_keys"]:
         per = margin["borrowed_by_trade"].setdefault(trade_key, {})
-        per[asset] = float(per.get(asset, 0.0)) + float(borrow_amt)
+        per[asset] = float(per.get(asset, 0.0)) + float(borrow_amt_dec)
         margin["borrowed_trade_keys"].append(trade_key)
         margin["active_trade_key"] = trade_key
 
