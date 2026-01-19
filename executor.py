@@ -138,7 +138,7 @@ ENV: Dict[str, Any] = {
 "BINANCE_BASE_URL": os.getenv("BINANCE_BASE_URL", "https://api.binance.com"),
 "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY", ""),
 "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET", ""),
-"BINANCE_DEBUG_PARAMS": _get_str("BINANCE_DEBUG_PARAMS", "0"),
+"BINANCE_DEBUG_PARAMS": _get_str("BINANCE_DEBUG_PARAMS", "").strip(),
 "BINANCE_DEBUG_BALANCE_MIN_SEC": _get_int("BINANCE_DEBUG_BALANCE_MIN_SEC", 30),
 
 # Trading account mode

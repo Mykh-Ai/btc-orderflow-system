@@ -153,11 +153,8 @@ def ensure_borrow_if_needed(
     if not asset:
         margin["last_borrow_skip_reason"] = "missing_borrow_asset"
         return
-    try:
-        needed_f = float(needed or 0.0)
-    except Exception:
-        needed_f = 0.0
-    if needed_f <= 0.0:
+    needed_dec = _to_decimal(needed) or Decimal("0")
+    if needed_dec <= 0:
         margin["last_borrow_skip_reason"] = "needed<=0"
         return
 
@@ -165,16 +162,13 @@ def ensure_borrow_if_needed(
     margin["is_isolated"] = is_isolated
     account = api.margin_account(is_isolated=is_isolated, symbols=symbol)
     snap = _asset_snapshot(account, asset)
-    try:
-        free = float(snap.get("free") or 0.0)
-    except Exception:
-        free = 0.0
-
-    if free >= needed_f:
+    free_dec = _to_decimal(snap.get("free") or "0") or Decimal("0")
+    if free_dec >= needed_dec:
         return
 
-    borrow_amt_raw = needed_f - free
-    borrow_amt_dec = Decimal(str(borrow_amt_raw))
+    borrow_amt_dec = max(needed_dec - free_dec, Decimal("0"))
+    borrow_amt_raw = borrow_amt_dec
+    base_asset, quote_asset = _split_symbol_assets(symbol)
     step_size = _asset_step_size(plan, api, asset, symbol)
     step_size_log: Optional[Decimal] = None
     if step_size is not None and step_size > 0:
@@ -183,16 +177,31 @@ def ensure_borrow_if_needed(
     else:
         env = _get_env(api)
         asset_s = str(asset or "").strip().upper()
+        if asset_s and asset_s == quote_asset:
+            margin["last_borrow_skip_reason"] = "missing_quote_step_size"
+            log_fn = getattr(api, "log_event", None)
+            if not callable(log_fn):
+                from executor_mod.notifications import log_event as log_fn
+            log_fn(
+                "BORROW_SKIP",
+                asset=asset_s,
+                symbol=str(symbol or ""),
+                reason="missing_quote_step_size",
+                needed=str(needed_dec),
+                free=str(free_dec),
+                raw_amount=str(borrow_amt_raw),
+            )
+            return
         fallback_step: Optional[Decimal] = None
-        if asset_s == "BTC":
-            fallback_step = Decimal("0.000001")
-            borrow_amt_dec = borrow_amt_dec.quantize(fallback_step, rounding=ROUND_DOWN)
-        else:
+        if asset_s and asset_s == base_asset:
             qty_step = env.get("QTY_STEP")
             qty_step_d = _to_decimal(qty_step) if qty_step is not None else None
             if qty_step_d is not None and qty_step_d > 0:
                 fallback_step = qty_step_d
                 borrow_amt_dec = _round_amount_down(borrow_amt_dec, qty_step_d)
+            elif asset_s == "BTC":
+                fallback_step = Decimal("0.000001")
+                borrow_amt_dec = _round_amount_down(borrow_amt_dec, fallback_step)
         if fallback_step is not None:
             step_size_log = fallback_step
     log_fn = getattr(api, "log_event", None)
@@ -200,7 +209,7 @@ def ensure_borrow_if_needed(
         from executor_mod.notifications import log_event as log_fn
     log_fn(
         "BORROW_AMOUNT_ROUNDED",
-        raw_amount=borrow_amt_raw,
+        raw_amount=str(borrow_amt_raw),
         rounded_amount=str(borrow_amt_dec),
         stepSize=str(step_size_log) if step_size_log is not None else None,
     )
