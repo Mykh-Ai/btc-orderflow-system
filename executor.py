@@ -1554,6 +1554,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             next_direct_s = float(pos.get("sl_watchdog_direct_next_s") or 0.0)
             if now_s >= next_direct_s:
                 pos["sl_watchdog_direct_next_s"] = now_s + min_interval
+                # Persist throttle across ticks (state is reloaded every loop).
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_direct_throttle")
                 with suppress(Exception):
                     price_now = float(binance_api.get_mid_price(symbol))
 
@@ -1802,6 +1805,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             next_direct_s = float(pos.get("tp_watchdog_direct_next_s") or 0.0)
             if now_s >= next_direct_s:
                 pos["tp_watchdog_direct_next_s"] = now_s + min_interval
+                # Persist throttle across ticks (state is reloaded every loop).
+                st["position"] = pos
+                _save_state_best_effort("tp_watchdog_direct_throttle")
                 with suppress(Exception):
                     price_now_tp = float(binance_api.get_mid_price(symbol))
 
