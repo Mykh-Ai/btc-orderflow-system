@@ -1,6 +1,7 @@
 # test/test_margin_policy_isolated.py
 import unittest
 from unittest.mock import MagicMock
+from decimal import Decimal
 
 import executor_mod.margin_policy as mp
 
@@ -54,11 +55,13 @@ class TestMarginPolicyIsolated(unittest.TestCase):
         api = MagicMock()
         api.margin_account.return_value = self._isolated_account(quote_free="100")
 
+        # Quote-asset borrow requires stepSize now; otherwise policy skips borrow with missing_quote_step_size.
         plan = {
             "trade_key": "t2",
             "is_isolated": True,
             "borrow_asset": "USDC",
-            "borrow_amount": 150.0,
+            "borrow_amount": Decimal("150"),
+            "stepSize": "0.01",
         }
 
         mp.ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.01, plan)
@@ -89,11 +92,14 @@ class TestMarginPolicyIsolated(unittest.TestCase):
             self._isolated_account(quote_free="0", quote_borrowed="60"),
         ]
 
+        # Keep test stable: quote repay will call margin_repay with tracked amount.
+        # No stepSize required for repay path in current code; this test should pass once borrow test passes.
         plan = {
             "trade_key": "t3",
             "is_isolated": True,
             "borrow_asset": "USDC",
             "borrow_amount": 150.0,
+            "stepSize": "0.01",
         }
 
         mp.ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.01, plan)
