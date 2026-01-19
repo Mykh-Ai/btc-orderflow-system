@@ -133,6 +133,39 @@ class TestBinanceApiSmoke(unittest.TestCase):
             self.assertEqual(params["symbol"], "BTCUSDC")
             self.assertIn("isIsolated", params)
 
+    def test_open_orders_margin_cross_symbol_rules(self):
+        env = _margin_env()
+        env["MARGIN_ISOLATED"] = "FALSE"
+        binance_api.configure(env)
+
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = []
+            binance_api.open_orders(None)
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/openOrders"))
+            self.assertNotIn("symbol", params)
+
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = []
+            binance_api.open_orders("")
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/openOrders"))
+            self.assertNotIn("symbol", params)
+
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = []
+            binance_api.open_orders(" BTCUSDC ")
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/openOrders"))
+            self.assertEqual(params.get("symbol"), "BTCUSDC")
+
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = []
+            binance_api.open_orders(" ethusdc ")
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/openOrders"))
+            self.assertEqual(params.get("symbol"), "ETHUSDC")
+
     def test_check_and_cancel_order_endpoints(self):
         binance_api.configure(_spot_env())
         with patch.object(binance_api, "_binance_signed_request") as signed:

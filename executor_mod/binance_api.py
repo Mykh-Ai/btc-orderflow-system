@@ -11,6 +11,7 @@ Design:
 from __future__ import annotations
 
 import time
+import json
 from contextlib import suppress
 import math
 import hmac
@@ -370,6 +371,32 @@ def _do_request(method: str, url: str, *, headers: Dict[str, Any], req_params: D
 
 # ===================== Signed/Public requests =====================
 
+def _sanitize_log_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    redacted = {}
+    for k, v in params.items():
+        key = str(k)
+        if key in ("signature", "X-MBX-APIKEY", "api_key", "api_secret", "apikey"):
+            continue
+        redacted[key] = v
+    return redacted
+
+
+def _binance_error_code(body_text: str) -> Optional[int]:
+    if not body_text:
+        return None
+    try:
+        payload = json.loads(body_text)
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        code = payload.get("code")
+        if isinstance(code, int):
+            return code
+        with suppress(Exception):
+            return int(code)
+    return None
+
+
 def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
     env = _env()
     api_key = env["BINANCE_API_KEY"]
@@ -406,6 +433,18 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
 
     if r.status_code != 200:
         text = r.text or ""
+        debug = env.get("BINANCE_DEBUG_PARAMS")
+        if debug:
+            code = _binance_error_code(text)
+            if code == -1100:
+                log_event(
+                    "BINANCE_REQ_FAIL",
+                    method=method,
+                    endpoint=endpoint,
+                    params=_sanitize_log_params(req_params),
+                    status=r.status_code,
+                    body=text,
+                )
         if '"code":-2010' in text or '"code": -2010' in text:
             _log_order_intent(endpoint, method, params, text)
         raise RuntimeError(f"Binance API error: {r.status_code} {text}")
@@ -567,18 +606,23 @@ def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     return _binance_signed_request("DELETE", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
 
 
-def open_orders(symbol: str) -> List[Dict[str, Any]]:
+def open_orders(symbol: Optional[str]) -> List[Dict[str, Any]]:
     """Return open orders for symbol in current TRADE_MODE."""
     env = _env()
     mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    symbol_norm = str(symbol or "").strip().upper()
+    symbol_val = symbol_norm if symbol_norm else None
     if mode == "margin":
-        j = _binance_signed_request(
-            "GET",
-            "/sapi/v1/margin/openOrders",
-            {"symbol": symbol, "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE"))},
-        )
+        is_isolated = _tf(env.get("MARGIN_ISOLATED", "FALSE"))
+        params: Dict[str, Any] = {"isIsolated": is_isolated}
+        if symbol_val:
+            params["symbol"] = symbol_val
+        j = _binance_signed_request("GET", "/sapi/v1/margin/openOrders", params)
         return list(j) if isinstance(j, list) else []
-    j = _binance_signed_request("GET", "/api/v3/openOrders", {"symbol": symbol})
+    params_spot: Dict[str, Any] = {}
+    if symbol_val:
+        params_spot["symbol"] = symbol_val
+    j = _binance_signed_request("GET", "/api/v3/openOrders", params_spot)
     return list(j) if isinstance(j, list) else []
 
 
