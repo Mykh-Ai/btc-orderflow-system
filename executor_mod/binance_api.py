@@ -397,6 +397,29 @@ def _binance_error_code(body_text: str) -> Optional[int]:
     return None
 
 
+def _sanitize_margin_params(endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    if not str(endpoint).startswith("/sapi/v1/margin/"):
+        return params
+    cleaned = dict(params)
+    for key in ("symbol", "asset"):
+        val = cleaned.get(key)
+        if isinstance(val, str):
+            cleaned[key] = val.strip().upper()
+    symbols = cleaned.get("symbols")
+    if symbols is None:
+        return cleaned
+    if isinstance(symbols, (list, tuple)):
+        parts = [str(s) for s in symbols]
+    else:
+        parts = str(symbols).split(",")
+    sym_parts = [p.strip().upper() for p in parts if p.strip()]
+    if sym_parts:
+        cleaned["symbols"] = ",".join(sym_parts)
+    else:
+        cleaned.pop("symbols", None)
+    return cleaned
+
+
 def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
     env = _env()
     api_key = env["BINANCE_API_KEY"]
@@ -406,6 +429,7 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
         raise RuntimeError("Binance API key/secret missing")
 
     params = _validate_params(dict(params), endpoint=endpoint, method=method)
+    params = _sanitize_margin_params(endpoint, params)
     normalized: Dict[str, Any] = {}
     for k, v in params.items():
         if v is None:
