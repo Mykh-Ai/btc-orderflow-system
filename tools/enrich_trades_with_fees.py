@@ -171,6 +171,7 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
     fees_total_quote: Optional[float] = 0.0
     fees_allowed = True
     had_leg = False
+    filled_exit_legs = 0
     for leg in ("tp1", "tp2", "sl", "trail"):
         leg_data = exit_leg_orders.get(leg)
         if not isinstance(leg_data, dict):
@@ -183,6 +184,7 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
             leg_data["feeQuote"] = 0.0
             _append_note(rec, f"skip_fee_leg_{leg}_unfilled")
             continue
+        filled_exit_legs += 1
         oid = int(order_id)
         cache_key = (symbol, oid)
         trades = cache.get(cache_key)
@@ -200,6 +202,13 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
         else:
             leg_data["feeQuote"] = fee
             fees_total_quote = (fees_total_quote or 0.0) + float(fee or 0.0)
+
+    if had_leg and filled_exit_legs == 0:
+        rec["fees_total_quote"] = None
+        rec["pnl_quote"] = None
+        rec["roi_pct"] = None
+        _append_note(rec, "pnl_blocked_no_filled_exit")
+        return rec
 
     if not had_leg:
         fees_allowed = False
