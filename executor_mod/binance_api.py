@@ -15,6 +15,7 @@ from contextlib import suppress
 import math
 import hmac
 import hashlib
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, List, Tuple
 
 import requests
@@ -247,6 +248,21 @@ def _margin_side_effect(env: Dict[str, Any]) -> str:
     return str(env.get("MARGIN_SIDE_EFFECT") or "NO_SIDE_EFFECT").strip().upper()
 
 
+def _fmt_amount_no_sci(amount: Any) -> str:
+    if amount is None:
+        raise ValueError("amount is None")
+    try:
+        d = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"bad amount: {amount!r}") from exc
+    s = format(d, "f").strip()
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    if s == "" or s == "-0":
+        s = "0"
+    return s
+
+
 # ===================== HTTP reliability helpers =====================
 # These helpers implement retry/backoff/failover for transient CloudFront 503s and timeouts.
 
@@ -363,6 +379,15 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
         raise RuntimeError("Binance API key/secret missing")
 
     params = _validate_params(dict(params), endpoint=endpoint, method=method)
+    normalized: Dict[str, Any] = {}
+    for k, v in params.items():
+        if v is None:
+            continue
+        if isinstance(v, str):
+            normalized[k] = v.strip()
+        else:
+            normalized[k] = v
+    params = normalized
     params["timestamp"] = int(time.time() * 1000) + int(_BINANCE_TIME_OFFSET_MS)
     params.setdefault("recvWindow", env.get("RECV_WINDOW", 5000))
 
@@ -759,16 +784,18 @@ def margin_borrow(asset: str, amount: Any, *, is_isolated: Optional[bool] = None
     env = _env()
     iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
     sym = symbol or env.get("SYMBOL")
+    asset_s = str(asset).strip().upper()
+    sym_s = str(sym or "").strip().upper() if sym else sym
     p: Dict[str, Any] = {
-        "asset": asset,
-        "amount": str(amount),
+        "asset": asset_s,
+        "amount": _fmt_amount_no_sci(amount),
         "type": "BORROW",
         "isIsolated": iso,
     }
     if iso == "TRUE":
-        if not sym:
+        if not sym_s:
             raise RuntimeError("margin_borrow(): isolated borrow requires symbol")
-        p["symbol"] = sym
+        p["symbol"] = sym_s
     return _binance_signed_request("POST", "/sapi/v1/margin/borrow-repay", p)
 
 
@@ -777,16 +804,18 @@ def margin_repay(asset: str, amount: Any, *, is_isolated: Optional[bool] = None,
     env = _env()
     iso = _tf(is_isolated if is_isolated is not None else env.get("MARGIN_ISOLATED", "FALSE"))
     sym = symbol or env.get("SYMBOL")
+    asset_s = str(asset).strip().upper()
+    sym_s = str(sym or "").strip().upper() if sym else sym
     p: Dict[str, Any] = {
-        "asset": asset,
-        "amount": str(amount),
+        "asset": asset_s,
+        "amount": _fmt_amount_no_sci(amount),
         "type": "REPAY",
         "isIsolated": iso,
     }
     if iso == "TRUE":
-        if not sym:
+        if not sym_s:
             raise RuntimeError("margin_repay(): isolated repay requires symbol")
-        p["symbol"] = sym
+        p["symbol"] = sym_s
     return _binance_signed_request("POST", "/sapi/v1/margin/borrow-repay", p)
 
 # ===================== Sanity/time sync =====================
