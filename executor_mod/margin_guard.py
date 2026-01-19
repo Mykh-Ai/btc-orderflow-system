@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Callable
 
+from executor_mod import price_snapshot
+
 ENV: Dict[str, Any] = {}
 log_event: Optional[Callable[..., None]] = None
 api_client: Optional[Any] = None
@@ -107,9 +109,14 @@ def _prepare_plan_for_borrow(
                 borrow_amount = 0.0
             if borrow_amount <= 0.0:
                 try:
+                    # Use price snapshot (throttled) to reduce API calls
+                    min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
                     if api_client and hasattr(api_client, "get_mid_price"):
-                        mid_price = api_client.get_mid_price(symbol)
-                        borrow_amount = float(qty or 0.0) * float(mid_price or 0.0)
+                        snapshot = price_snapshot.get_price_snapshot()
+                        price_snapshot.refresh_price_snapshot(symbol, "margin_borrow", api_client.get_mid_price, min_interval)
+                        if snapshot.ok:
+                            mid_price = float(snapshot.price_mid)
+                            borrow_amount = float(qty or 0.0) * float(mid_price)
                 except Exception:
                     borrow_amount = 0.0
         else:

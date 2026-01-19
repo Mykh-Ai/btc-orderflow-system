@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, List, Tuple
 
 import requests
 from urllib.parse import urlencode, urlsplit, urlunsplit
+import inspect
 
 from executor_mod.notifications import log_event
 
@@ -28,6 +29,171 @@ _BINANCE_TIME_OFFSET_MS: int = 0
 _fmt_qty = None
 _fmt_price = None
 _round_qty = None
+_intent_log_guard = False
+_balance_debug_last: Dict[str, float] = {}
+
+
+def _caller_context(max_frames: int = 3) -> List[str]:
+    frames = []
+    for frame in inspect.stack()[2:]:
+        module = frame.frame.f_globals.get("__name__", "")
+        if module.startswith("executor_mod.binance_api"):
+            continue
+        frames.append(f"{frame.function}@{frame.filename}:{frame.lineno}")
+        if len(frames) >= max_frames:
+            break
+    return frames
+
+
+def _validate_params(params: Dict[str, Any], *, endpoint: str, method: str) -> Dict[str, Any]:
+    clean: Dict[str, Any] = {}
+    invalid_keys: List[str] = []
+    for k, v in params.items():
+        if v is None:
+            continue
+        if not isinstance(k, str):
+            invalid_keys.append(repr(k))
+            continue
+        if k.strip() == "":
+            invalid_keys.append(repr(k))
+            continue
+        if any(ch.isspace() for ch in k) or "&" in k or "=" in k:
+            invalid_keys.append(repr(k))
+            continue
+        clean[k] = v
+    if invalid_keys:
+        log_event(
+            "BINANCE_PARAM_INVALID",
+            endpoint=endpoint,
+            method=method,
+            invalid_keys=invalid_keys,
+            param_keys=list(clean.keys()),
+            caller_context=_caller_context(),
+        )
+        raise ValueError(f"Invalid Binance param keys for {method} {endpoint}: {invalid_keys}")
+    return clean
+
+
+def _split_symbol_assets(symbol: str) -> tuple[str, str]:
+    s = str(symbol or "").strip().upper()
+    if not s:
+        return "", ""
+    quotes = [
+        "USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI",
+        "BTC", "ETH", "EUR", "TRY", "BRL", "GBP", "JPY",
+        "AUD", "CAD", "CHF",
+    ]
+    for quote in sorted(quotes, key=len, reverse=True):
+        if s.endswith(quote) and len(s) > len(quote):
+            return s[:-len(quote)], quote
+    return "", ""
+
+
+def _extract_margin_free(account: Any, asset: str, *, is_isolated: bool) -> Optional[float]:
+    def _as_float(val: Any) -> Optional[float]:
+        try:
+            return float(val or 0.0)
+        except Exception:
+            return None
+    if not asset:
+        return None
+    if not is_isolated:
+        assets = account.get("userAssets") if isinstance(account, dict) else None
+        if isinstance(assets, list):
+            for row in assets:
+                if isinstance(row, dict) and str(row.get("asset")).upper() == asset:
+                    return _as_float(row.get("free"))
+        return None
+    assets = None
+    if isinstance(account, list):
+        assets = account
+    elif isinstance(account, dict):
+        assets = account.get("assets")
+    if isinstance(assets, list):
+        for row in assets:
+            if not isinstance(row, dict):
+                continue
+            for leg in ("baseAsset", "quoteAsset"):
+                leg_row = row.get(leg)
+                if isinstance(leg_row, dict) and str(leg_row.get("asset")).upper() == asset:
+                    return _as_float(leg_row.get("free"))
+    return None
+
+
+def _log_order_intent(endpoint: str, method: str, params: Dict[str, Any], error_text: str) -> None:
+    global _intent_log_guard
+    if _intent_log_guard:
+        return
+    _intent_log_guard = True
+    try:
+        env = _env()
+        symbol = params.get("symbol") or env.get("SYMBOL")
+        side = params.get("side")
+        order_type = params.get("type")
+        qty = params.get("quantity")
+        price = params.get("price")
+        stop_price = params.get("stopPrice")
+        tif = params.get("timeInForce")
+        side_effect = params.get("sideEffectType")
+        is_isolated = params.get("isIsolated") or env.get("MARGIN_ISOLATED")
+        trade_mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+        notional = None
+        try:
+            if price is not None and qty is not None:
+                notional = float(price) * float(qty)
+        except Exception:
+            notional = None
+        base_asset, quote_asset = _split_symbol_assets(symbol)
+        log_event(
+            "ORDER_INTENT",
+            endpoint=endpoint,
+            method=method,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=qty,
+            price=price,
+            stopPrice=stop_price,
+            timeInForce=tif,
+            notional_est=notional,
+            trade_mode=trade_mode,
+            is_isolated=is_isolated,
+            side_effect=side_effect,
+            base_asset=base_asset,
+            quote_asset=quote_asset,
+            error=error_text,
+            caller_context=_caller_context(),
+        )
+        debug = env.get("BINANCE_DEBUG_PARAMS")
+        if debug:
+            key = f"{symbol}:{params.get('newClientOrderId') or params.get('clientOrderId') or params.get('orderId') or 'na'}"
+            now_s = time.time()
+            min_iv = float(env.get("BINANCE_DEBUG_BALANCE_MIN_SEC", 30))
+            last_s = _balance_debug_last.get(key, 0.0)
+            if now_s - last_s >= min_iv:
+                _balance_debug_last[key] = now_s
+                if trade_mode == "margin":
+                    try:
+                        iso_bool = str(is_isolated or "FALSE").strip().upper() in ("TRUE", "1", "YES", "Y", "ON")
+                        account = margin_account(is_isolated=iso_bool, symbols=symbol if iso_bool else None)
+                        base_free = _extract_margin_free(account, base_asset, is_isolated=iso_bool)
+                        quote_free = _extract_margin_free(account, quote_asset, is_isolated=iso_bool)
+                        log_event(
+                            "ORDER_BALANCE_SNAPSHOT",
+                            symbol=symbol,
+                            trade_mode=trade_mode,
+                            is_isolated=iso_bool,
+                            base_asset=base_asset,
+                            quote_asset=quote_asset,
+                            base_free=base_free,
+                            quote_free=quote_free,
+                        )
+                    except Exception as exc:
+                        log_event("ORDER_BALANCE_SNAPSHOT_ERROR", symbol=symbol, error=str(exc))
+                else:
+                    log_event("ORDER_BALANCE_SNAPSHOT_SKIP", symbol=symbol, reason="spot_account_unavailable")
+    finally:
+        _intent_log_guard = False
 
 
 def configure(env: Dict[str, Any], *, fmt_qty=None, fmt_price=None, round_qty=None) -> None:
@@ -196,7 +362,7 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
     if not api_key or not api_secret:
         raise RuntimeError("Binance API key/secret missing")
 
-    params = dict(params)
+    params = _validate_params(dict(params), endpoint=endpoint, method=method)
     params["timestamp"] = int(time.time() * 1000) + int(_BINANCE_TIME_OFFSET_MS)
     params.setdefault("recvWindow", env.get("RECV_WINDOW", 5000))
 
@@ -214,7 +380,10 @@ def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) 
     r = _do_request(method, url, headers=headers, req_params=req_params)
 
     if r.status_code != 200:
-        raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
+        text = r.text or ""
+        if '"code":-2010' in text or '"code": -2010' in text:
+            _log_order_intent(endpoint, method, params, text)
+        raise RuntimeError(f"Binance API error: {r.status_code} {text}")
     return r.json()
 
 
@@ -223,7 +392,8 @@ def binance_public_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -
     env = _env()
     base_url = env["BINANCE_BASE_URL"]
     url = base_url + endpoint
-    r = _do_request("GET", url, headers={}, req_params=params or {})
+    req_params = _validate_params(params or {}, endpoint=endpoint, method="GET")
+    r = _do_request("GET", url, headers={}, req_params=req_params)
     if r.status_code != 200:
         raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
     return r.json() if r.text else {}
@@ -319,10 +489,28 @@ def place_spot_market(symbol: str, side: str, qty: float, client_id: Optional[st
 
 
 def flatten_market(symbol: str, pos_side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
-    """Fail-safe: close a live position by MARKET (best effort)."""
+    """Fail-safe: close a live position by MARKET (best effort).
+
+    In spot mode we use place_spot_market().
+    In margin mode we must use place_order_raw() so margin parameters (isIsolated/sideEffectType/autoRepayAtCancel)
+    are injected consistently.
+    """
     exit_side = "SELL" if str(pos_side).upper() == "LONG" else "BUY"
     if not client_id:
         client_id = f"EX_FLAT_{int(time.time())}"
+
+    env = _env()
+    mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        # Margin MARKET close (best effort). Uses current margin policy via place_order_raw().
+        return place_order_raw({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "MARKET",
+            "quantity": qty,
+            "newClientOrderId": client_id,
+        })
+
     return place_spot_market(symbol, exit_side, qty, client_id=client_id)
 
 
@@ -366,6 +554,40 @@ def open_orders(symbol: str) -> List[Dict[str, Any]]:
         )
         return list(j) if isinstance(j, list) else []
     j = _binance_signed_request("GET", "/api/v3/openOrders", {"symbol": symbol})
+    return list(j) if isinstance(j, list) else []
+
+
+def my_trades(
+    symbol: str,
+    *,
+    order_id: Optional[int] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Return account trades for a symbol.
+
+    Spot:   GET /api/v3/myTrades
+    Margin: GET /sapi/v1/margin/myTrades
+    """
+    env = _env()
+    mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    params: Dict[str, Any] = {"symbol": symbol}
+    if order_id is not None:
+        params["orderId"] = int(order_id)
+    if start_time is not None:
+        params["startTime"] = int(start_time)
+    if end_time is not None:
+        params["endTime"] = int(end_time)
+    if limit is not None:
+        params["limit"] = int(limit)
+
+    if mode == "margin":
+        params["isIsolated"] = _tf(env.get("MARGIN_ISOLATED", "FALSE"))
+        j = _binance_signed_request("GET", "/sapi/v1/margin/myTrades", params)
+        return list(j) if isinstance(j, list) else []
+
+    j = _binance_signed_request("GET", "/api/v3/myTrades", params)
     return list(j) if isinstance(j, list) else []
 
 

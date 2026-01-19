@@ -31,6 +31,7 @@ from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
+from executor_mod import baseline_policy
 from executor_mod.notifications import log_event, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
@@ -41,6 +42,10 @@ import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
+import executor_mod.exit_safety as exit_safety
+from executor_mod.exchange_snapshot import get_snapshot, refresh_snapshot
+from executor_mod import price_snapshot
+from executor_mod import reporting
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -158,6 +163,8 @@ ENV: Dict[str, Any] = {
 "FAILSAFE_EXITS_GRACE_SEC": _get_int("FAILSAFE_EXITS_GRACE_SEC", 60),
 "LIVE_STATUS_POLL_EVERY": _get_int("LIVE_STATUS_POLL_EVERY", 10),
 "MANAGE_EVERY_SEC": _get_int("MANAGE_EVERY_SEC", 15),
+"SL_WATCHDOG_GRACE_SEC": _get_int("SL_WATCHDOG_GRACE_SEC", 3),
+"SL_WATCHDOG_RETRY_SEC": _get_int("SL_WATCHDOG_RETRY_SEC", 5),
 "TRAIL_ACTIVATE_AFTER_TP2": _get_bool("TRAIL_ACTIVATE_AFTER_TP2", True),
 "TRAIL_STEP_USD": _get_float("TRAIL_STEP_USD", 20.0),
 "TRAIL_UPDATE_EVERY_SEC": _get_int("TRAIL_UPDATE_EVERY_SEC", 20),
@@ -188,6 +195,9 @@ ENV: Dict[str, Any] = {
 "ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 "RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
+"SNAPSHOT_MIN_SEC": _get_int("SNAPSHOT_MIN_SEC", 5),  # min interval between snapshot refreshes
+"PRICE_SNAPSHOT_MIN_SEC": _get_int("PRICE_SNAPSHOT_MIN_SEC", 2),  # min interval between price snapshot refreshes
+"SYNC_BINANCE_THROTTLE_SEC": _get_int("SYNC_BINANCE_THROTTLE_SEC", 300),  # sync_from_binance throttle
 }
 
 
@@ -441,6 +451,7 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
 
 risk_math.configure(ENV)
 binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
+price_snapshot.configure(log_event_fn=log_event)
 
 
 def build_entry_price(kind: str, close_price: float) -> float:
@@ -831,7 +842,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     Optimized:
       - Throttled by MANAGE_EVERY_SEC in main loop
-      - Uses a single openOrders fetch
+      - openOrders polling GATED to OPEN status only (not OPEN_FILLED)
       - Verifies missing orders via order status (FILLED) before acting
     """
     pos = st.get("position") or {}
@@ -840,19 +851,44 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if not pos.get("orders") or not pos.get("prices"):
         return
     now_s = _now_s()
-    try:
-        orders = binance_api.open_orders(symbol)
-    except Exception as e:
-        # Do not abort manage-cycle: openOrders can be empty/incomplete or fail transiently.
-        # We still can verify FILLED via check_order_status and cancel siblings best-effort.
-        orders = []
-        now_err = _now_s()
-        last_err = float(pos.get("open_orders_err_s") or 0.0)
-        if now_err - last_err >= 30.0:
-            pos["open_orders_err_s"] = now_err
+    
+    # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
+    # During OPEN_FILLED, rely on place_order responses + retries, not polling
+    orders = []
+    if pos.get("status") == "OPEN":
+        pos.pop("openorders_skip_logged", None)
+        snapshot = get_snapshot()
+        refreshed = refresh_snapshot(
+            symbol=symbol,
+            source="manage",
+            open_orders_fn=binance_api.open_orders,
+            min_interval_sec=float(ENV.get("SNAPSHOT_MIN_SEC", 5)),
+        )
+        if refreshed:
+            log_event(
+                "SNAPSHOT_REFRESH",
+                source="manage",
+                ok=snapshot.ok,
+                error=snapshot.error,
+                age_sec=snapshot.freshness_sec(),
+                order_count=len(snapshot.get_orders()),
+            )
+        orders = snapshot.get_orders()
+        if not snapshot.ok and snapshot.error:
+            # Throttle error logging
+            last_err = float(pos.get("open_orders_err_s") or 0.0)
+            if now_s - last_err >= 30.0:
+                pos["open_orders_err_s"] = now_s
+                st["position"] = pos
+                save_state(st)
+                log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
+    else:
+        # OPEN_FILLED: skip openOrders polling (log once per position to avoid spam)
+        if not pos.get("openorders_skip_logged"):
+            pos["openorders_skip_logged"] = iso_utc()
             st["position"] = pos
             save_state(st)
-            log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {e}")
+            log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
 
     open_ids: set[int] = set()
     for _o in (orders or []):
@@ -860,6 +896,105 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             continue
         with suppress(Exception):
             open_ids.add(int(_o.get("orderId")))
+
+    def _update_order_fill(pos: Dict[str, Any], leg: str, payload: Dict[str, Any]) -> bool:
+        """Reporting Spec v1: persist execution data from existing status calls."""
+        if not isinstance(payload, dict) or not leg:
+            return False
+        orders = pos.get("orders")
+        if not isinstance(orders, dict):
+            return False
+        fills = orders.setdefault("fills", {})
+        if not isinstance(fills, dict):
+            fills = {}
+            orders["fills"] = fills
+        leg_data = fills.setdefault(leg, {})
+        if not isinstance(leg_data, dict):
+            leg_data = {}
+            fills[leg] = leg_data
+
+        changed = False
+        order_id = payload.get("orderId") or orders.get(leg)
+        if order_id is not None and leg_data.get("orderId") != order_id:
+            leg_data["orderId"] = order_id
+            changed = True
+
+        status = payload.get("status")
+        if status and leg_data.get("status") != status:
+            leg_data["status"] = status
+            changed = True
+
+        for key in ("executedQty", "cummulativeQuoteQty"):
+            val = payload.get(key)
+            try:
+                val_f = float(val)
+            except Exception:
+                continue
+            prev = leg_data.get(key)
+            try:
+                prev_f = float(prev) if prev is not None else None
+            except Exception:
+                prev_f = None
+            if prev_f is None or val_f > prev_f:
+                leg_data[key] = val_f
+                changed = True
+
+        executed = leg_data.get("executedQty")
+        cum_quote = leg_data.get("cummulativeQuoteQty")
+        try:
+            if executed is not None and cum_quote is not None and float(executed) > 0:
+                avg = float(cum_quote) / float(executed)
+                if leg_data.get("avgFillPrice") != avg:
+                    leg_data["avgFillPrice"] = avg
+                    changed = True
+        except Exception:
+            pass
+
+        last_update = payload.get("updateTime")
+        if last_update is not None and leg_data.get("lastUpdateTs") != last_update:
+            leg_data["lastUpdateTs"] = last_update
+            changed = True
+
+        if changed:
+            pos["orders"] = orders
+        return changed
+
+    def _save_state_best_effort(where: str) -> None:
+        """Watchdog-only persistence: never crash the loop; throttle noise."""
+        try:
+            save_state(st)
+        except Exception as e:
+            next_s = 0.0
+            with suppress(Exception):
+                next_s = float(pos.get("sl_watchdog_save_error_next_s") or 0.0)
+            if now_s >= next_s:
+                pos["sl_watchdog_save_error_next_s"] = now_s + 60.0
+                # best-effort only; do not re-try save_state() here
+                log_event(
+                    "SL_WATCHDOG_SAVE_ERROR",
+                    mode="live",
+                    where=where,
+                    error=str(e),
+                )
+
+    def _cancel_ignore_unknown(order_id: int) -> Optional[Exception]:
+        try:
+            binance_api.cancel_order(symbol, int(order_id))
+            return None
+        except Exception as e:
+            err_code = None
+            with suppress(Exception):
+                if getattr(e, "code", None) is not None:
+                    err_code = int(getattr(e, "code"))
+            if err_code is None:
+                msg = str(e)
+                if '"code":-2011' in msg or '"code": -2011' in msg:
+                    err_code = -2011
+                elif '"code":-2013' in msg or '"code": -2013' in msg:
+                    err_code = -2013
+            if err_code in (-2011, -2013):
+                return None
+            return e
 
     def _status_is_filled(order_id: int) -> bool:
         try:
@@ -876,6 +1011,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             "side": pos.get("side"),
             "entry": (pos.get("prices") or {}).get("entry"),
         }
+        with suppress(Exception):
+            reporting.report_trade_close(st, pos, reason)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
@@ -887,6 +1024,42 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     tp2_id = int(pos["orders"].get("tp2") or 0)
     sl_id = int(pos["orders"].get("sl") or 0)
     sl_prev = int(pos["orders"].get("sl_prev") or 0)
+
+    if pos.get("exit_cleanup_pending"):
+        next_cleanup = float(pos.get("exit_cleanup_next_s") or 0.0)
+        if now_s < next_cleanup:
+            return
+        if now_s >= next_cleanup:
+            retry_ids = pos.get("exit_cleanup_order_ids") or []
+            failed_ids: List[int] = []
+            for oid in retry_ids:
+                err = _cancel_ignore_unknown(oid)
+                if err is not None:
+                    failed_ids.append(int(oid))
+                    pos["exit_cleanup_last_error"] = str(err)
+            if not failed_ids:
+                reason = str(pos.get("exit_cleanup_reason") or "EXIT_CLEANUP_DONE")
+                pos["exit_cleanup_pending"] = False
+                pos["exit_cleanup_order_ids"] = []
+                pos["exit_cleanup_next_s"] = 0.0
+                pos.pop("exit_cleanup_reason", None)
+                st["position"] = pos
+                _save_state_best_effort("exit_cleanup_done")
+                log_event("EXIT_CLEANUP_DONE", mode="live", reason=reason)
+                _close_slot(reason)
+                return
+            pos["exit_cleanup_order_ids"] = failed_ids
+            pos["exit_cleanup_next_s"] = now_s + float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+            st["position"] = pos
+            _save_state_best_effort("exit_cleanup_retry_schedule")
+            log_event(
+                "EXIT_CLEANUP_RETRY_FAILED",
+                mode="live",
+                reason=pos.get("exit_cleanup_reason"),
+                failed_ids=failed_ids,
+                error=pos.get("exit_cleanup_last_error"),
+            )
+            return
 
     # Якщо після TP1 ми замінили SL на BE, але старий SL не скасувався (або cancel впав),
     # то треба повторювати cancel best-effort раз на N секунд (без перевірки openOrders).
@@ -906,8 +1079,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         # Do not gate FILLED detection on openOrders/open_ids; throttle via tp1_status_next_s
         if poll_due or (not orders):
             pos["tp1_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
-
-            if _status_is_filled(tp1_id):
+            tp1_status_payload = None
+            with suppress(Exception):
+                tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+            if isinstance(tp1_status_payload, dict):
+                if _update_order_fill(pos, "tp1", tp1_status_payload):
+                    st["position"] = pos
+                    _save_state_best_effort("tp1_fill_update")
+            tp1_filled = False
+            if isinstance(tp1_status_payload, dict):
+                tp1_filled = str(tp1_status_payload.get("status", "")).upper() == "FILLED"
+            if tp1_filled:
                 exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
                 be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
 
@@ -966,7 +1148,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # TP2 filled -> activate trailing SL for remaining qty3 (if configured)
     if tp2_id and not pos.get("tp2_done"):    
-        if _status_is_filled(tp2_id):
+        tp2_status_payload = None
+        with suppress(Exception):
+            tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+        if isinstance(tp2_status_payload, dict):
+            if _update_order_fill(pos, "tp2", tp2_status_payload):
+                st["position"] = pos
+                _save_state_best_effort("tp2_fill_update")
+        tp2_filled = False
+        if isinstance(tp2_status_payload, dict):
+            tp2_filled = str(tp2_status_payload.get("status", "")).upper() == "FILLED"
+        if tp2_filled:
             pos["tp2_done"] = True
             st["position"] = pos
             save_state(st)
@@ -994,9 +1186,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 desired = _trail_desired_stop_from_agg(pos)
                 if desired is None:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
+                    snapshot = price_snapshot.get_price_snapshot()
+                    min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+                    price_snapshot.refresh_price_snapshot(symbol, "trailing_activate", binance_api.get_mid_price, min_interval)
                     mid = 0.0
-                    with suppress(Exception):
-                        mid = float(binance_api.get_mid_price(symbol))
+                    if snapshot.ok:
+                        mid = float(snapshot.price_mid)
                     if mid > 0.0:
                         off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                         desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -1159,9 +1354,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             desired = _trail_desired_stop_from_agg(pos)
             if desired is None and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
+                snapshot = price_snapshot.get_price_snapshot()
+                min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+                price_snapshot.refresh_price_snapshot(symbol, "trailing_update", binance_api.get_mid_price, min_interval)
                 mid = 0.0
-                with suppress(Exception):
-                    mid = float(binance_api.get_mid_price(symbol))
+                if snapshot.ok:
+                    mid = float(snapshot.price_mid)
                 if mid > 0.0:
                     off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                     desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
@@ -1309,6 +1507,497 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             st["position"] = pos
             save_state(st)
 
+    sl_order_payload = None
+    if sl_id:
+        for _o in (orders or []):
+            if not isinstance(_o, dict):
+                continue
+            with suppress(Exception):
+                if int(_o.get("orderId")) == sl_id:
+                    sl_order_payload = _o
+                    break
+
+    sl_status_payload = sl_order_payload
+    if sl_id:
+        needs_status = (
+            (not isinstance(sl_order_payload, dict))
+            or ("status" not in sl_order_payload)
+            or ("executedQty" not in sl_order_payload)
+            or ("origQty" not in sl_order_payload)   # important for watchdog qty correctness
+        )
+        # Reuse main status throttle, and don't add extra polling.
+        next_status = float(pos.get("sl_status_next_s") or 0.0)
+        status_poll_due = now_s >= next_status
+        if needs_status and (status_poll_due or (not orders)) and now_s >= next_status:
+            pos["sl_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+            st["position"] = pos
+            _save_state_best_effort("sl_status_next_s_watchdog")
+            with suppress(Exception):
+                sl_status_payload = binance_api.check_order_status(symbol, sl_id)
+            if isinstance(sl_status_payload, dict):
+                if _update_order_fill(pos, "sl", sl_status_payload):
+                    st["position"] = pos
+                    _save_state_best_effort("sl_fill_update")
+
+    # SL watchdog only active when status == "OPEN" (entry filled, exits not yet tracked as filled)
+    status = str(pos.get("status") or "").strip().upper()
+    plan = None
+    if status == "OPEN":
+        # Watchdog must use only live exchange price (no aggregated.csv to avoid stale triggers).
+        min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+        price_snapshot.refresh_price_snapshot(symbol, "sl_watchdog", binance_api.get_mid_price, min_interval)
+        snapshot = price_snapshot.get_price_snapshot()
+        price_now = float("nan")
+        if snapshot.ok:
+            price_now = float(snapshot.price_mid)
+        else:
+            next_direct_s = float(pos.get("sl_watchdog_direct_next_s") or 0.0)
+            if now_s >= next_direct_s:
+                pos["sl_watchdog_direct_next_s"] = now_s + min_interval
+                # Persist throttle across ticks (state is reloaded every loop).
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_direct_throttle")
+                with suppress(Exception):
+                    price_now = float(binance_api.get_mid_price(symbol))
+
+        prev_trigger_s = pos.get("sl_watchdog_first_trigger_s")
+        prev_fired = bool(pos.get("sl_watchdog_fired"))
+        next_err_s = float(pos.get("sl_watchdog_error_next_s") or 0.0)
+        try:
+            plan = exit_safety.sl_watchdog_tick(
+                st,
+                pos,
+                ENV,
+                now_s,
+                price_now,
+                sl_status_payload,
+            )
+        except Exception as e:
+            if now_s >= next_err_s:
+                pos["sl_watchdog_error_next_s"] = now_s + 60.0
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_tick_error")
+                log_event("SL_WATCHDOG_ERROR", error=str(e), mode="live")
+
+        if prev_trigger_s is None and pos.get("sl_watchdog_first_trigger_s") is not None:
+            log_event("SL_WATCHDOG_TRIGGER", mode="live", order_id_sl=sl_id, price_now=price_now)
+
+        if prev_trigger_s != pos.get("sl_watchdog_first_trigger_s") or prev_fired != bool(pos.get("sl_watchdog_fired")):
+            st["position"] = pos
+            _save_state_best_effort("sl_watchdog_state_change")
+
+    if plan:
+        post_market_events: List[Dict[str, Any]] = []
+        for event in plan.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            name = event.get("name")
+            if not name:
+                continue
+            if name == "SL_PARTIAL_DETECTED":
+                payload = {k: v for k, v in event.items() if k != "name"}
+                log_event(name, mode="live", **payload)
+            elif name == "SL_MARKET_FALLBACK":
+                post_market_events.append(event)
+        plan_qty = float(plan.get("qty") or 0.0)
+        skip_market = plan_qty <= 0.0
+        market_attempted = False
+        market_ok = False
+        if skip_market:
+            is_dust = str(plan.get("action") or "").upper() == "DUST_REMAINDER" or str(plan.get("reason") or "") == "SL_DUST_REMAINDER"
+            # If planner classified it as dust remainder, persist it so exchange-truth reconciliation / alerts can see it.
+            if is_dust:
+                dust_payload = {
+                    "qty_raw": plan.get("dust_qty_raw"),
+                    "qty_quantized": plan.get("dust_qty_quantized"),
+                    "notional_raw": plan.get("dust_notional_raw"),
+                    "min_notional": plan.get("min_notional"),
+                    "min_qty": plan.get("min_qty"),
+                    "price_now": plan.get("price_now"),
+                }
+                log_event("SL_DUST_REMAINDER", mode="live", **{k: v for k, v in dust_payload.items() if v is not None})
+                pos["dust_remainder"] = True
+                pos["dust_reason"] = str(plan.get("reason") or "SL_DUST_REMAINDER")
+                with suppress(Exception):
+                    pos["dust_qty_raw"] = float(plan.get("dust_qty_raw") or 0.0)
+                with suppress(Exception):
+                    pos["dust_qty_q"] = float(plan.get("dust_qty_quantized") or 0.0)
+                with suppress(Exception):
+                    pos["dust_notional_raw"] = float(plan.get("dust_notional_raw") or 0.0)
+                with suppress(Exception):
+                    pos["dust_min_notional"] = float(plan.get("min_notional") or 0.0)
+                with suppress(Exception):
+                    pos["dust_min_qty"] = float(plan.get("min_qty") or 0.0)
+                with suppress(Exception):
+                    pos["dust_price_now"] = float(plan.get("price_now") or 0.0)
+                pos["dust_ts"] = now_s
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_dust_remainder")
+
+            next_noqty = float(pos.get("sl_watchdog_noqty_next_s") or 0.0)
+            if now_s >= next_noqty and not is_dust:
+                pos["sl_watchdog_noqty_next_s"] = now_s + 60.0
+                st["position"] = pos
+                _save_state_best_effort("sl_watchdog_no_qty")
+                log_event(
+                    "SL_WATCHDOG_NO_QTY",
+                    mode="live",
+                    reason=str(plan.get("reason") or ""),
+                    qty=plan_qty,
+                )
+            market_ok = True  # qty==0 -> safe to proceed with cleanup + close-slot
+        now_attempt = now_s
+        last_attempt = float(pos.get("sl_watchdog_last_market_attempt_s") or 0.0)
+        if (not skip_market) and plan_qty > 0.0:
+            close_side = str(plan.get("side") or "").upper()
+            if close_side in ("BUY", "SELL"):
+                retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+                if now_attempt - last_attempt >= retry_sec:
+                    market_attempted = True
+                    pos["sl_watchdog_last_market_attempt_s"] = now_attempt
+                    pos["sl_watchdog_last_market_ok"] = None
+                    pos.pop("sl_watchdog_last_market_error", None)
+                    st["position"] = pos
+                    _save_state_best_effort("sl_watchdog_pre_market")
+                    try:
+                        pos_side = str(pos.get("side") or "").upper()
+                        if pos_side not in ("LONG", "SHORT"):
+                            pos_side = "SHORT" if close_side == "BUY" else "LONG"
+                        binance_api.flatten_market(symbol, pos_side, plan_qty, client_id=f"EX_SL_WD_{int(time.time())}")
+                        market_ok = True
+                        pos["sl_watchdog_last_market_ok"] = True
+                        pos.pop("sl_watchdog_last_market_error", None)
+                        st["position"] = pos
+                        _save_state_best_effort("sl_watchdog_market_ok")
+                    except Exception as e:
+                        market_ok = False
+                        pos["sl_watchdog_last_market_ok"] = False
+                        pos["sl_watchdog_last_market_error"] = str(e)
+                        st["position"] = pos
+                        _save_state_best_effort("sl_watchdog_market_err")
+                        log_event("SL_WATCHDOG_MARKET_ERROR", error=str(e), mode="live", qty=plan_qty)
+                else:
+                    # Optional observability: record skip without spamming disk writes.
+                    last_skip = float(pos.get("sl_watchdog_last_skip_s") or 0.0)
+                    if (not last_skip) or (now_s - last_skip) >= 60.0:
+                        pos["sl_watchdog_last_skip_s"] = now_s
+                        pos["sl_watchdog_last_skip_reason"] = "RETRY_WINDOW"
+                        st["position"] = pos
+                        _save_state_best_effort("sl_watchdog_skip_retry_window")
+                    # IMPORTANT: do not cancel/close-slot until MARKET is actually attempted.
+                    return
+            else:
+                # If close_side is invalid, do nothing (planner bug / bad data).
+                return
+        if not market_ok:
+            return
+        if (not skip_market) and plan_qty > 0.0 and market_attempted and market_ok:
+            if post_market_events:
+                for event in post_market_events:
+                    payload = {k: v for k, v in event.items() if k != "name"}
+                    log_event("SL_MARKET_FALLBACK", mode="live", **payload)
+            else:
+                log_event("SL_MARKET_FALLBACK", mode="live")
+        if plan.get("set_fired_on_success"):
+            pos["sl_watchdog_fired"] = True
+            st["position"] = pos
+            _save_state_best_effort("sl_watchdog_set_fired")
+        cancel_ids = plan.get("cancel_order_ids") or []
+        failed_ids: List[int] = []
+        for oid in cancel_ids:
+            err = _cancel_ignore_unknown(oid)
+            if err is not None:
+                failed_ids.append(int(oid))
+                log_event("SL_WATCHDOG_CANCEL_ERROR", error=str(err), mode="live", order_id=oid)
+        if failed_ids:
+            pos["exit_cleanup_pending"] = True
+            pos["exit_cleanup_order_ids"] = failed_ids
+            pos["exit_cleanup_next_s"] = now_s + float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+            pos["exit_cleanup_reason"] = str(plan.get("reason") or "SL_WATCHDOG")
+            st["position"] = pos
+            _save_state_best_effort("exit_cleanup_pending_schedule")
+            log_event("EXIT_CLEANUP_PENDING", mode="live", reason=pos["exit_cleanup_reason"], failed_ids=failed_ids)
+            return
+        _close_slot(str(plan.get("reason") or "SL_WATCHDOG"))
+        return
+
+    def _is_unknown_order_error(e: Exception) -> bool:
+        # Binance "unknown order" can surface with various strings; keep heuristic minimal.
+        msg = str(e or "")
+        msg_u = msg.upper()
+        return (
+            "UNKNOWN ORDER" in msg_u
+            or "UNKNOWN_ORDER" in msg_u
+            or "ORDER DOES NOT EXIST" in msg_u
+            or "ORDER_NOT_FOUND" in msg_u
+            or "NO SUCH ORDER" in msg_u
+        )
+
+    # TP watchdog: handle TP1/TP2 partial fills, missing orders, and synthetic trailing
+    tp1_status_payload = None
+    tp2_status_payload = None
+    if tp1_id or tp2_id:
+        # Reuse existing openOrders data from snapshot for TP status
+        for _o in (orders or []):
+            if not isinstance(_o, dict):
+                continue
+            with suppress(Exception):
+                oid = int(_o.get("orderId"))
+                if tp1_id and oid == tp1_id:
+                    tp1_status_payload = _o
+                if tp2_id and oid == tp2_id:
+                    tp2_status_payload = _o
+
+        # Throttled status polling if needed (reuse LIVE_STATUS_POLL_EVERY pattern)
+        if tp1_id and not pos.get("tp1_done"):
+            needs_tp1_status = (
+                (not isinstance(tp1_status_payload, dict))
+                or ("status" not in tp1_status_payload)
+                or ("executedQty" not in tp1_status_payload)
+                or ("origQty" not in tp1_status_payload)
+            )
+            next_tp1_status = float(pos.get("tp1_watchdog_status_next_s") or 0.0)
+            if needs_tp1_status and (now_s >= next_tp1_status or (not orders)):
+                pos["tp1_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+                st["position"] = pos
+                _save_state_best_effort("tp1_watchdog_status_poll")
+                try:
+                    tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+                    if isinstance(tp1_status_payload, dict):
+                        if _update_order_fill(pos, "tp1", tp1_status_payload):
+                            st["position"] = pos
+                            _save_state_best_effort("tp1_watchdog_fill_update")
+                except Exception as e:
+                    # If order is missing on exchange, inject synthetic status for planner.
+                    if _is_unknown_order_error(e):
+                        tp1_status_payload = {"status": "MISSING"}
+
+        if tp2_id and not pos.get("tp2_done") and not pos.get("tp2_synthetic"):
+            needs_tp2_status = (
+                (not isinstance(tp2_status_payload, dict))
+                or ("status" not in tp2_status_payload)
+            )
+            next_tp2_status = float(pos.get("tp2_watchdog_status_next_s") or 0.0)
+            if needs_tp2_status and (now_s >= next_tp2_status or (not orders)):
+                pos["tp2_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+                st["position"] = pos
+                _save_state_best_effort("tp2_watchdog_status_poll")
+                try:
+                    tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+                    if isinstance(tp2_status_payload, dict):
+                        if _update_order_fill(pos, "tp2", tp2_status_payload):
+                            st["position"] = pos
+                            _save_state_best_effort("tp2_watchdog_fill_update")
+                except Exception as e:
+                    if _is_unknown_order_error(e):
+                        tp2_status_payload = {"status": "MISSING"}
+
+    # Execute TP watchdog (OPEN or OPEN_FILLED status)
+    tp_plan = None
+    if status in ("OPEN", "OPEN_FILLED"):
+        min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+        price_snapshot.refresh_price_snapshot(symbol, "tp_watchdog", binance_api.get_mid_price, min_interval)
+        snapshot = price_snapshot.get_price_snapshot()
+        price_now_tp = float("nan")
+        if snapshot.ok:
+            price_now_tp = float(snapshot.price_mid)
+        else:
+            next_direct_s = float(pos.get("tp_watchdog_direct_next_s") or 0.0)
+            if now_s >= next_direct_s:
+                pos["tp_watchdog_direct_next_s"] = now_s + min_interval
+                # Persist throttle across ticks (state is reloaded every loop).
+                st["position"] = pos
+                _save_state_best_effort("tp_watchdog_direct_throttle")
+                with suppress(Exception):
+                    price_now_tp = float(binance_api.get_mid_price(symbol))
+
+        next_err_s = float(pos.get("tp_watchdog_error_next_s") or 0.0)
+        try:
+            tp_plan = exit_safety.tp_watchdog_tick(
+                st,
+                pos,
+                ENV,
+                now_s,
+                price_now_tp,
+                tp1_status_payload,
+                tp2_status_payload,
+            )
+        except Exception as e:
+            if now_s >= next_err_s:
+                pos["tp_watchdog_error_next_s"] = now_s + 60.0
+                st["position"] = pos
+                _save_state_best_effort("tp_watchdog_tick_error")
+                log_event("TP_WATCHDOG_ERROR", error=str(e), mode="live")
+
+    if tp_plan:
+        action = str(tp_plan.get("action") or "").upper()
+        reason = str(tp_plan.get("reason") or "")
+
+        # Log events from plan
+        post_market_events: List[Dict[str, Any]] = []
+        for event in tp_plan.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            name = event.get("name")
+            if not name:
+                continue
+            if name in ("TP1_PARTIAL_DETECTED", "TP1_MISSING_PRICE_CROSSED", "TP2_MISSING_SYNTHETIC_TRAILING"):
+                # One-shot detection events (no log spam)
+                flag_key = None
+                if name == "TP1_PARTIAL_DETECTED":
+                    flag_key = "tp1_wd_partial_logged"
+                elif name == "TP1_MISSING_PRICE_CROSSED":
+                    flag_key = "tp1_wd_missing_logged"
+                elif name == "TP2_MISSING_SYNTHETIC_TRAILING":
+                    flag_key = "tp2_wd_missing_logged"
+
+                already = bool(pos.get(flag_key)) if flag_key else False
+                if not already:
+                    payload = {k: v for k, v in event.items() if k != "name"}
+                    log_event(name, mode="live", **payload)
+                    if flag_key:
+                        pos[flag_key] = True
+                        st["position"] = pos
+                        _save_state_best_effort("tp_watchdog_event_flag_set")
+            elif name in ("TP1_MARKET_FALLBACK", "TP1_MARKET_FALLBACK_PARTIAL", "TP1_PARTIAL_DUST", "TP1_MISSING_DUST"):
+                post_market_events.append(event)
+
+        # Handle MARKET_FLATTEN actions
+        if action == "MARKET_FLATTEN":
+            plan_qty = float(tp_plan.get("qty") or 0.0)
+            close_side = str(tp_plan.get("side") or "").upper()
+
+            if plan_qty > 0.0 and close_side in ("BUY", "SELL"):
+                retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+                last_attempt = float(pos.get("tp_watchdog_last_market_attempt_s") or 0.0)
+
+                if (now_s - last_attempt) >= retry_sec:
+                    pos["tp_watchdog_last_market_attempt_s"] = now_s
+                    st["position"] = pos
+                    _save_state_best_effort("tp_watchdog_pre_market")
+
+                    market_ok = False
+                    try:
+                        pos_side = str(pos.get("side") or "").upper()
+                        if pos_side not in ("LONG", "SHORT"):
+                            pos_side = "SHORT" if close_side == "BUY" else "LONG"
+                        binance_api.flatten_market(symbol, pos_side, plan_qty, client_id=f"EX_TP_WD_{int(time.time())}")
+                        market_ok = True
+                        st["position"] = pos
+                        _save_state_best_effort("tp_watchdog_market_ok")
+
+                        # Log post-market events
+                        if post_market_events:
+                            for event in post_market_events:
+                                payload = {k: v for k, v in event.items() if k != "name"}
+                                log_event(event.get("name"), mode="live", **payload)
+                    except Exception as e:
+                        pos["tp_watchdog_last_market_error"] = str(e)
+                        st["position"] = pos
+                        _save_state_best_effort("tp_watchdog_market_err")
+                        log_event("TP_WATCHDOG_MARKET_ERROR", error=str(e), mode="live", qty=plan_qty)
+                        return
+
+                    if not market_ok:
+                        return
+                else:
+                    # Still in retry window
+                    return
+
+        # Handle dust cases (TP1_PARTIAL_DUST, TP1_MISSING_DUST)
+        elif action in ("TP1_PARTIAL_DUST", "TP1_MISSING_DUST"):
+            dust_payload = {
+                "qty_raw": tp_plan.get("dust_qty_raw"),
+                "qty_quantized": tp_plan.get("dust_qty_quantized"),
+                "notional_raw": tp_plan.get("dust_notional_raw"),
+                "min_notional": tp_plan.get("min_notional"),
+                "min_qty": tp_plan.get("min_qty"),
+                "price_now": tp_plan.get("price_now"),
+            }
+            log_event(action, mode="live", **{k: v for k, v in dust_payload.items() if v is not None})
+
+        # Handle ACTIVATE_SYNTHETIC_TRAILING
+        elif action == "ACTIVATE_SYNTHETIC_TRAILING":
+            if tp_plan.get("set_tp2_synthetic"):
+                pos["tp2_synthetic"] = True
+            if tp_plan.get("activate_trail"):
+                pos["trail_active"] = True
+                pos["trail_qty"] = float(tp_plan.get("trail_qty") or 0.0)
+            st["position"] = pos
+            _save_state_best_effort("tp2_synthetic_trailing")
+            log_event("TP2_SYNTHETIC_TRAILING_ACTIVATED", mode="live", trail_qty=pos.get("trail_qty"))
+
+        # Apply state transitions
+        if tp_plan.get("set_tp1_done"):
+            pos["tp1_done"] = True
+
+            # Move SL to BE for remaining qty2+qty3
+            if tp_plan.get("move_sl_to_be"):
+                exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
+                be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
+
+                qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
+                qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
+                rem_qty = float(round_qty(qty2 + qty3))
+
+                if be_stop > 0.0 and rem_qty > 0.0:
+                    tick = float(ENV["TICK_SIZE"])
+                    gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
+                    gap = tick * float(gap_ticks)
+                    be_limit = (be_stop - gap) if exit_side == "SELL" else (be_stop + gap)
+                    be_stop_s = fmt_price(be_stop)
+                    be_limit_s = fmt_price(be_limit)
+                    if be_limit_s == be_stop_s:
+                        be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
+
+                    try:
+                        sl_new = binance_api.place_order_raw({
+                            "symbol": symbol,
+                            "side": exit_side,
+                            "type": "STOP_LOSS_LIMIT",
+                            "quantity": fmt_qty(rem_qty),
+                            "price": be_limit_s,
+                            "stopPrice": be_stop_s,
+                            "timeInForce": "GTC",
+                            "newClientOrderId": f"EX_SL_BE_TP1WD_{int(time.time())}",
+                        })
+                        sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+                        if sl_id:
+                            pos["orders"]["sl_prev"] = sl_id
+                            pos["sl_prev_next_cancel_s"] = _now_s()
+                        pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
+                        log_event("TP1_WATCHDOG_SL_TO_BE", mode="live", new_sl_order_id=sl_new.get("orderId"))
+                        send_webhook({"event": "TP1_WATCHDOG_SL_TO_BE", "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
+                        if sl_id:
+                            with suppress(Exception):
+                                binance_api.cancel_order(symbol, sl_id)
+                    except Exception as e:
+                        log_event("TP1_WATCHDOG_SL_TO_BE_ERROR", error=str(e), mode="live")
+
+            st["position"] = pos
+            _save_state_best_effort("tp1_watchdog_done")
+
+        # Cancel orders from plan
+        cancel_ids = tp_plan.get("cancel_order_ids") or []
+        failed_ids: List[int] = []
+        for oid in cancel_ids:
+            err = _cancel_ignore_unknown(oid)
+            if err is not None:
+                failed_ids.append(int(oid))
+                log_event("TP_WATCHDOG_CANCEL_ERROR", error=str(err), mode="live", order_id=oid)
+
+        if failed_ids:
+            pos["exit_cleanup_pending"] = True
+            pos["exit_cleanup_order_ids"] = failed_ids
+            pos["exit_cleanup_next_s"] = now_s + float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+            pos["exit_cleanup_reason"] = reason or "TP_WATCHDOG"
+            st["position"] = pos
+            _save_state_best_effort("exit_cleanup_pending_schedule_tp")
+            log_event("EXIT_CLEANUP_PENDING", mode="live", reason=pos["exit_cleanup_reason"], failed_ids=failed_ids)
+
+        st["position"] = pos
+        _save_state_best_effort("tp_watchdog_complete")
+
     # SL filled -> close slot
     sl_id2 = int((pos.get("orders") or {}).get("sl") or 0)
     if sl_id2 and not pos.get("sl_done"):
@@ -1317,8 +2006,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         # Do not gate FILLED detection on openOrders/open_ids; throttle via sl_status_next_s
         if poll_due or (not orders):
             pos["sl_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
+            sl_status = ""
+            if isinstance(sl_status_payload, dict):
+                sl_status = str(sl_status_payload.get("status", "")).upper()
+            sl_filled = sl_status == "FILLED" if sl_status else _status_is_filled(sl_id2)
 
-            if _status_is_filled(sl_id2):
+            if sl_filled:
                 pos["sl_done"] = True
                 st["position"] = pos
                 save_state(st)
@@ -1362,11 +2055,17 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
     return trail._trail_desired_stop_from_agg(pos)
 
 def get_usdt_usdc_k() -> float:
+    """Get USDC/USDT conversion ratio.
+
+    Note: Uses direct API calls (not PriceSnapshot) because we need two different
+    symbols simultaneously and PriceSnapshot is a singleton holding one symbol.
+    This is called only during signal processing, not in tight loops.
+    """
     mid_usdt = binance_api.get_mid_price("BTCUSDT")
     mid_usdc = binance_api.get_mid_price("BTCUSDC")
     return mid_usdc / mid_usdt
 
-def sync_from_binance(st: Dict[str, Any]) -> None:
+def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
     """Best-effort reconciliation of executor state with Binance.
 
     Why:
@@ -1378,17 +2077,49 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
       - Look at *tagged* openOrders (clientOrderId starts with 'EX_')
       - If we see tagged orders and local state is empty -> create/attach a live position shell
       - If local state says OPEN/PENDING but Binance has no tagged orders -> clear slot (assume closed/canceled)
+      
+    GATED: Only run on BOOT/MANUAL/RECOVERY or at most once per SYNC_BINANCE_THROTTLE_SEC.
+    Prefer using snapshot if fresh to avoid duplicate openOrders calls.
 
     This avoids accidental double-opening after restarts.
     """
     if str(ENV.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
-
-    try:
-        orders = binance_api.open_orders(ENV["SYMBOL"])
-    except Exception as e:
-        log_event("SYNC_ERR_OPENORDERS", error=str(e))
-        return
+    
+    # GATE: Throttle sync_from_binance unless reason is BOOT/MANUAL/RECOVERY
+    pos = st.get("position") or {}
+    now_s = time.time()
+    
+    if reason not in ("BOOT", "MANUAL", "RECOVERY"):
+        # Check if we have a live position - if yes, throttle sync
+        if pos and pos.get("mode") == "live":
+            last_sync = float(st.get("last_sync_from_binance_s") or 0.0)
+            throttle_sec = float(ENV.get("SYNC_BINANCE_THROTTLE_SEC", 300))
+            if now_s - last_sync < throttle_sec:
+                log_event("SYNC_SKIP_THROTTLED", reason=reason, throttle_sec=throttle_sec, age_sec=now_s - last_sync)
+                return
+    
+    st["last_sync_from_binance_s"] = now_s
+    
+    # Try to use fresh snapshot first to avoid duplicate openOrders call
+    snapshot = get_snapshot()
+    if snapshot.is_fresh(float(ENV.get("SNAPSHOT_MIN_SEC", 5))) and snapshot.ok:
+        orders = snapshot.get_orders()
+        log_event("SYNC_USE_SNAPSHOT", reason=reason, age_sec=snapshot.freshness_sec(), order_count=len(orders))
+    else:
+        try:
+            orders = binance_api.open_orders(ENV["SYMBOL"])
+            # Update snapshot while we're here
+            snapshot.ts_updated = now_s
+            snapshot.ok = True
+            snapshot.error = None
+            snapshot.open_orders = orders
+            snapshot.source = f"sync:{reason}"
+            snapshot.symbol = ENV["SYMBOL"]
+            log_event("SYNC_FETCH_OPENORDERS", reason=reason, order_count=len(orders or []))
+        except Exception as e:
+            log_event("SYNC_ERR_OPENORDERS", reason=reason, error=str(e))
+            return
 
     tagged = [o for o in (orders or []) if str(o.get("clientOrderId", "")).startswith("EX_")]
     pos = st.get("position") or {}
@@ -1786,7 +2517,7 @@ def main() -> None:
     with suppress(Exception):
         _preflight_margin_cross_usdc()
     with suppress(Exception):
-        sync_from_binance(st)
+        sync_from_binance(st, reason="BOOT")
 
     # Optional: one-shot connectivity/auth check (useful before going live)
     if ENV.get("LIVE_VALIDATE_ONLY"):
@@ -2103,7 +2834,7 @@ def main() -> None:
                         log_event("SKIP_PEAK", reason="stale_peak", age_sec=round(age, 3), evt_ts=str(evt.get("ts")))
                         continue
             with suppress(Exception):
-                sync_from_binance(st)
+                sync_from_binance(st, reason="PEAK_EVENT")
 
             if locked(st):
                 log_event("SKIP_PEAK", reason="position_lock")
@@ -2237,6 +2968,35 @@ def main() -> None:
                         "tp2_usdt": tp2_usdt,
                     },
                 }
+                baseline_log = None
+                baseline = st.get("baseline")
+                if not isinstance(baseline, dict):
+                    baseline = {}
+                active_snap = baseline.get("active")
+                active_key = active_snap.get("trade_key") if isinstance(active_snap, dict) else None
+                trade_key = st["position"].get("trade_key") or st["position"].get("client_id")
+                if active_snap is None or active_key != trade_key:
+                    try:
+                        snap = baseline_policy.take_snapshot(
+                            binance_api,
+                            ENV,
+                            ENV["SYMBOL"],
+                            trade_key,
+                            "pre_trade",
+                        )
+                        baseline["active"] = snap
+                        if baseline.get("truth") is not None and not isinstance(baseline.get("truth"), dict):
+                            baseline["truth"] = None
+                        baseline.setdefault("truth", None)
+                        st["baseline"] = baseline
+                        baseline_log = {
+                            "which": "active",
+                            "trade_key": trade_key,
+                            "symbol": snap.get("symbol"),
+                            "trade_mode": snap.get("trade_mode"),
+                        }
+                    except Exception as e:
+                        log_event("BASELINE_ERROR", which="active", trade_key=trade_key, error=str(e))
                 if status0 == "OPEN_FILLED":
                     pos0 = st.get("position") or {}
                     with suppress(Exception):
@@ -2244,6 +3004,8 @@ def main() -> None:
                     if (not pos0.get("orders")) and pos0.get("prices"):
                         exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                 save_state(st)
+                if baseline_log is not None:
+                    log_event("BASELINE_TAKEN", **baseline_log)
 
                 log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
                 send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
