@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 from unittest.mock import patch, MagicMock
 
 # Import the module under test
@@ -60,6 +61,16 @@ class TestBinanceApiSmoke(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             binance_api.place_spot_market("BTCUSDC", "BUY", 0.001)
+
+    def test_fmt_amount_no_sci(self):
+        self.assertEqual(binance_api._fmt_amount_no_sci(1e-7), "0.0000001")
+        self.assertEqual(binance_api._fmt_amount_no_sci(Decimal("1E-8")), "0.00000001")
+        self.assertEqual(binance_api._fmt_amount_no_sci(" 0.0100 "), "0.01")
+        self.assertEqual(binance_api._fmt_amount_no_sci(Decimal("0E-8")), "0")
+        with self.assertRaises(ValueError):
+            binance_api._fmt_amount_no_sci(None)
+        with self.assertRaises(ValueError):
+            binance_api._fmt_amount_no_sci("abc")
 
     def test_place_order_raw_spot_endpoint_and_symbol_default(self):
         env = _spot_env()

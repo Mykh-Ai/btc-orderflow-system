@@ -109,7 +109,7 @@ ENV: Dict[str, Any] = {
 "STRICT_SOURCE": _get_bool("STRICT_SOURCE", True),
 
 # sizing
-"SYMBOL": os.getenv("SYMBOL", "BTCUSDC"),
+"SYMBOL": _get_str("SYMBOL", "BTCUSDC").strip().upper(),
 "QTY_USD": _get_float("QTY_USD", 100.0),
 "QTY_STEP": Decimal(os.getenv("QTY_STEP", "0.00001")),
 "MIN_QTY": Decimal(os.getenv("MIN_QTY", "0.00001")),
