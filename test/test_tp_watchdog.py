@@ -380,10 +380,10 @@ class TestTPWatchdog(unittest.TestCase):
 
         self.assertIsNone(plan)
 
-    def test_no_action_when_status_not_open_filled(self):
-        """Test no action when position status is not OPEN_FILLED."""
+    def test_no_action_when_status_not_open_or_open_filled(self):
+        """Test no action when position status is neither OPEN nor OPEN_FILLED."""
         pos = deepcopy(self.pos_long)
-        pos["status"] = "OPEN"  # Not OPEN_FILLED
+        pos["status"] = "PENDING"  # not OPEN / OPEN_FILLED
         st = {"position": pos}
 
         tp1_status = {
@@ -404,6 +404,7 @@ class TestTPWatchdog(unittest.TestCase):
         )
 
         self.assertIsNone(plan)
+
 
     def test_no_action_when_tp1_already_done(self):
         """Test no action when TP1 already marked done."""
