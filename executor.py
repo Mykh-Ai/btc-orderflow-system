@@ -2268,6 +2268,31 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
                 and has_tp1_price
                 and orders_qty1 > 0.0
             )
+            tp2_done = bool(pos.get("tp2_done"))
+            tp2_synthetic = bool(pos.get("tp2_synthetic"))
+            orders_qty2 = 0.0
+            with suppress(Exception):
+                orders_qty2 = float((orders or {}).get("qty2") or 0.0)
+            has_tp2_price = False
+            with suppress(Exception):
+                has_tp2_price = float(prices.get("tp2") or 0.0) > 0.0
+            preserve_tp2 = (
+                key == "tp2"
+                and pos.get("status") in ("OPEN", "OPEN_FILLED")
+                and (not tp2_done)
+                and (not tp2_synthetic)
+                and has_tp2_price
+                and orders_qty2 > 0.0
+            )
+            has_sl_price = False
+            with suppress(Exception):
+                has_sl_price = float(prices.get("sl") or 0.0) > 0.0
+            preserve_sl = (
+                key == "sl"
+                and pos.get("status") in ("OPEN", "OPEN_FILLED")
+                and has_sl_price
+            )
+            preserve = preserve_tp1 or preserve_tp2 or preserve_sl
             try:
                 od = binance_api.get_order(ENV["SYMBOL"], oid)
                 status = str((od or {}).get("status", "")).upper()
@@ -2279,11 +2304,18 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
 
                 # Binance often returns -2013 "Order does not exist." / "Unknown order"
                 if ("-2013" in err_l) or ("order does not exist" in err_l) or ("unknown order" in err_l):
-                    if not preserve_tp1:
+                    if not preserve:
                         orders.pop(key, None)
                     else:
-                        recon["tp1_status"] = "NOT_FOUND"
-                        recon.setdefault("tp1_status_ts", iso_utc())
+                        if preserve_tp1:
+                            recon["tp1_status"] = "NOT_FOUND"
+                            recon.setdefault("tp1_status_ts", iso_utc())
+                        if preserve_tp2:
+                            recon["tp2_status"] = "NOT_FOUND"
+                            recon.setdefault("tp2_status_ts", iso_utc())
+                        if preserve_sl:
+                            recon["sl_status"] = "NOT_FOUND"
+                            recon.setdefault("sl_status_ts", iso_utc())
                     recon.setdefault(f"{key}_missing_ts", iso_utc())
                     recon[f"{key}_missing_reason"] = "NOT_FOUND"
                     updated = True
@@ -2333,11 +2365,18 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
                 continue
 
             if status in ("CANCELED", "EXPIRED", "REJECTED"):
-                if not preserve_tp1:
+                if not preserve:
                     orders.pop(key, None)
                 else:
-                    recon["tp1_status"] = status
-                    recon.setdefault("tp1_status_ts", iso_utc())
+                    if preserve_tp1:
+                        recon["tp1_status"] = status
+                        recon.setdefault("tp1_status_ts", iso_utc())
+                    if preserve_tp2:
+                        recon["tp2_status"] = status
+                        recon.setdefault("tp2_status_ts", iso_utc())
+                    if preserve_sl:
+                        recon["sl_status"] = status
+                        recon.setdefault("sl_status_ts", iso_utc())
                 recon.setdefault(f"{key}_missing_ts", iso_utc())
                 recon[f"{key}_missing_reason"] = status
                 updated = True
