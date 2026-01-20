@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 def _install_requests_failfast_stub() -> None:
@@ -65,9 +66,15 @@ class TestEnrichTradesWithFees(unittest.TestCase):
 
         out = enrich_trades_with_fees._enrich_record(rec, cache={})
 
+        self.assertIsNone(out.get("pnl_gross_quote"))
+        self.assertIsNone(out.get("roi_gross_pct"))
+        self.assertIsNone(out.get("pnl_net_quote"))
+        self.assertIsNone(out.get("roi_net_pct"))
         self.assertIsNone(out.get("pnl_quote"))
         self.assertIsNone(out.get("roi_pct"))
+        self.assertEqual(out.get("fee_status"), "MISSING")
         self.assertIn("pnl_blocked_no_filled_exit", _notes_text(out))
+        self.assertNotIn("pnl_missing_inputs", _notes_text(out))
 
     def test_allows_pnl_when_exit_leg_filled(self):
         rec = {
@@ -92,9 +99,72 @@ class TestEnrichTradesWithFees(unittest.TestCase):
 
         out = enrich_trades_with_fees._enrich_record(rec, cache=cache)
 
+        self.assertIsNotNone(out.get("pnl_gross_quote"))
+        self.assertIsNotNone(out.get("roi_gross_pct"))
+        self.assertIsNotNone(out.get("pnl_net_quote"))
+        self.assertIsNotNone(out.get("roi_net_pct"))
         self.assertIsNotNone(out.get("pnl_quote"))
         self.assertIsNotNone(out.get("roi_pct"))
+        self.assertEqual(out.get("fee_status"), "OK")
         self.assertNotIn("pnl_blocked_no_filled_exit", _notes_text(out))
+
+    def test_fee_status_api_error_priority(self):
+        rec = {
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "entry_price": "100",
+            "qty_base_total": "1",
+            "exit_leg_orders": {
+                "tp1": {
+                    "orderId": 789,
+                    "executedQty": "1",
+                    "cummulativeQuoteQty": "120",
+                    "status": "FILLED",
+                }
+            },
+        }
+
+        with mock.patch.object(
+            enrich_trades_with_fees, "_fetch_trades_with_retry", side_effect=RuntimeError("boom")
+        ):
+            out = enrich_trades_with_fees._enrich_record(rec, cache={})
+
+        self.assertEqual(out.get("fee_status"), "API_ERROR")
+
+    def test_fee_status_mismatch_beats_missing(self):
+        rec = {
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "entry_price": "100",
+            "qty_base_total": "1",
+            "exit_leg_orders": {
+                "tp1": {
+                    "orderId": 111,
+                    "executedQty": "1",
+                    "cummulativeQuoteQty": "110",
+                    "status": "FILLED",
+                },
+                "tp2": {
+                    "orderId": 222,
+                    "executedQty": "1",
+                    "cummulativeQuoteQty": "10",
+                    "status": "FILLED",
+                },
+            },
+        }
+        cache = {
+            ("BTCUSDT", 111): [{}],
+            ("BTCUSDT", 222): [{}],
+        }
+
+        with mock.patch.object(
+            enrich_trades_with_fees,
+            "_sum_commission_quote",
+            side_effect=[(None, "commission_asset_mismatch"), (None, "no_commission")],
+        ):
+            out = enrich_trades_with_fees._enrich_record(rec, cache=cache)
+
+        self.assertEqual(out.get("fee_status"), "MISMATCH_ASSET")
 
 
 if __name__ == "__main__":
