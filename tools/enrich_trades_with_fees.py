@@ -140,6 +140,8 @@ def _compute_exit_quote_total(rec: Dict[str, Any]) -> Optional[float]:
         leg_data = exit_leg_orders.get(leg)
         if not isinstance(leg_data, dict):
             continue
+        if not _leg_is_filled(leg_data):
+            continue
         leg_val = _safe_float(leg_data.get("cummulativeQuoteQty"))
         if leg_val is None:
             continue
@@ -170,6 +172,7 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
 
     fees_total_quote: Optional[float] = 0.0
     fees_allowed = True
+    fee_status = "OK"
     had_leg = False
     filled_exit_legs = 0
     for leg in ("tp1", "tp2", "sl", "trail"):
@@ -189,15 +192,27 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
         cache_key = (symbol, oid)
         trades = cache.get(cache_key)
         if trades is None:
-            trades = _fetch_trades_with_retry(symbol, oid)
-            cache[cache_key] = trades
+            try:
+                trades = _fetch_trades_with_retry(symbol, oid)
+                cache[cache_key] = trades
+            except Exception as exc:
+                fees_allowed = False
+                if fee_status != "API_ERROR":
+                    fee_status = "API_ERROR"
+                leg_data["feeQuote"] = None
+                _append_note(rec, f"fee_{leg}_api_error:{exc}")
+                continue
         fee, fee_err = _sum_commission_quote(trades, quote_asset)
         if fee_err:
             fees_allowed = False
             leg_data["feeQuote"] = None
             if fee_err == "no_commission":
+                if fee_status == "OK":
+                    fee_status = "MISSING"
                 _append_note(rec, f"fee_{leg}_missing_commission_on_filled_leg")
             else:
+                if fee_status in ("OK", "MISSING"):
+                    fee_status = "MISMATCH_ASSET"
                 _append_note(rec, f"fee_{leg}_{fee_err}")
         else:
             leg_data["feeQuote"] = fee
@@ -205,28 +220,43 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
 
     if had_leg and filled_exit_legs == 0:
         rec["fees_total_quote"] = None
+        rec["exit_quote_total"] = None
+        rec["pnl_gross_quote"] = None
+        rec["roi_gross_pct"] = None
+        rec["pnl_net_quote"] = None
+        rec["roi_net_pct"] = None
         rec["pnl_quote"] = None
         rec["roi_pct"] = None
+        fee_status = "MISSING"
+        rec["fee_status"] = "MISSING"
         _append_note(rec, "pnl_blocked_no_filled_exit")
         return rec
 
     if not had_leg:
         fees_allowed = False
+        fee_status = "MISSING"
         _append_note(rec, "no_exit_legs")
 
     if not fees_allowed:
         rec["fees_total_quote"] = None
-        rec["pnl_quote"] = None
-        rec["roi_pct"] = None
-        return rec
+        rec["pnl_net_quote"] = None
+        rec["roi_net_pct"] = None
+        rec["fee_status"] = fee_status
 
-    rec["fees_total_quote"] = fees_total_quote
     entry_price = _safe_float(rec.get("entry_price"))
     qty_base_total = _safe_float(rec.get("qty_base_total"))
     exit_quote_total = _compute_exit_quote_total(rec)
     if entry_price is None or qty_base_total is None or exit_quote_total is None:
-        rec["pnl_quote"] = None
-        rec["roi_pct"] = None
+        if fees_allowed:
+            rec["fees_total_quote"] = fees_total_quote
+            rec["pnl_quote"] = None
+            rec["roi_pct"] = None
+        else:
+            rec["pnl_quote"] = None
+            rec["roi_pct"] = None
+        rec["fee_status"] = fee_status
+        rec["pnl_gross_quote"] = None
+        rec["roi_gross_pct"] = None
         _append_note(rec, "pnl_missing_inputs")
         return rec
 
@@ -236,9 +266,19 @@ def _enrich_record(rec: Dict[str, Any], cache: Dict[Tuple[str, int], List[Dict[s
         gross = entry_cost - float(exit_quote_total)
     else:
         gross = float(exit_quote_total) - entry_cost
-    pnl_quote = gross - float(fees_total_quote or 0.0)
-    rec["pnl_quote"] = pnl_quote
-    rec["roi_pct"] = (pnl_quote / entry_cost) * 100.0 if entry_cost > 0 else None
+    rec["pnl_gross_quote"] = gross
+    rec["roi_gross_pct"] = (gross / entry_cost) * 100.0 if entry_cost > 0 else None
+    rec["fees_total_quote"] = fees_total_quote if fees_allowed else None
+    rec["fee_status"] = fee_status
+    if fees_allowed:
+        pnl_quote = gross - float(fees_total_quote or 0.0)
+        rec["pnl_net_quote"] = pnl_quote
+        rec["roi_net_pct"] = (pnl_quote / entry_cost) * 100.0 if entry_cost > 0 else None
+        rec["pnl_quote"] = pnl_quote
+        rec["roi_pct"] = rec["roi_net_pct"]
+    else:
+        rec["pnl_quote"] = None
+        rec["roi_pct"] = None
     return rec
 
 
@@ -287,10 +327,15 @@ def main() -> int:
             except Exception as exc:
                 out_rec = dict(rec)
                 out_rec["fees_total_quote"] = None
+                out_rec["pnl_gross_quote"] = None
+                out_rec["roi_gross_pct"] = None
+                out_rec["pnl_net_quote"] = None
+                out_rec["roi_net_pct"] = None
                 out_rec["pnl_quote"] = None
                 out_rec["roi_pct"] = None
+                out_rec["fee_status"] = "API_ERROR"
                 _append_note(out_rec, f"enrich_error:{exc}")
-        if out_rec.get("pnl_quote") is not None:
+        if out_rec.get("pnl_gross_quote") is not None:
             pnl_ok += 1
         enriched.append(out_rec)
 
