@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import executor
+from executor_mod import exit_safety
 from executor_mod.exchange_snapshot import reset_snapshot_for_tests
 from copy import deepcopy
 
@@ -240,3 +241,170 @@ class TestExecutorV15(unittest.TestCase):
         self.assertGreaterEqual(calls["n"], 2)
         self.assertEqual(st["position"]["status"], "OPEN")
         self.assertTrue(st["position"]["orders"].get("sl"))
+
+    def test_sync_preserves_tp1_before_done_and_watchdog_short(self):
+        env = {
+            "MIN_QTY": 0.001,
+            "MIN_NOTIONAL": 5.0,
+            "QTY_STEP": 0.001,
+            "TICK_SIZE": 0.1,
+        }
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "SHORT",
+                           "qty": 0.3,
+                           "prices": {"entry": 100.0, "tp1": 98.0, "tp2": 96.0, "sl": 102.0},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.1, "qty2": 0.1, "qty3": 0.1}}}
+        open_orders = [
+            {"orderId": 222, "clientOrderId": "EX_TP2_1"},
+            {"orderId": 333, "clientOrderId": "EX_SL_1"},
+        ]
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDT"
+            with patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+                 patch.object(executor.binance_api, "get_order", return_value={"status": "CANCELED"}), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.sync_from_binance(st, reason="MANUAL")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+
+        self.assertEqual(st["position"]["orders"]["tp1"], 111)
+        self.assertEqual(st["position"]["recon"]["tp1_status"], "CANCELED")
+
+        plan = exit_safety.tp_watchdog_tick(
+            st=st,
+            pos=st["position"],
+            env=env,
+            now_s=1000.0,
+            price_now=97.0,
+            tp1_status_payload={"status": "CANCELED"},
+            tp2_status_payload=None,
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["action"], "MARKET_FLATTEN")
+        self.assertEqual(plan["side"], "BUY")
+        self.assertTrue(plan["set_tp1_done"])
+        self.assertTrue(plan["move_sl_to_be"])
+
+    def test_sync_preserves_tp1_before_done_and_watchdog_long(self):
+        env = {
+            "MIN_QTY": 0.001,
+            "MIN_NOTIONAL": 5.0,
+            "QTY_STEP": 0.001,
+            "TICK_SIZE": 0.1,
+        }
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.3,
+                           "prices": {"entry": 100.0, "tp1": 102.0, "tp2": 104.0, "sl": 98.0},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.1, "qty2": 0.1, "qty3": 0.1}}}
+        open_orders = [
+            {"orderId": 222, "clientOrderId": "EX_TP2_1"},
+            {"orderId": 333, "clientOrderId": "EX_SL_1"},
+        ]
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDT"
+            with patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+                 patch.object(executor.binance_api, "get_order", return_value={"status": "CANCELED"}), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.sync_from_binance(st, reason="MANUAL")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+
+        self.assertEqual(st["position"]["orders"]["tp1"], 111)
+        self.assertEqual(st["position"]["recon"]["tp1_status"], "CANCELED")
+
+        plan = exit_safety.tp_watchdog_tick(
+            st=st,
+            pos=st["position"],
+            env=env,
+            now_s=1000.0,
+            price_now=103.0,
+            tp1_status_payload={"status": "CANCELED"},
+            tp2_status_payload=None,
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["action"], "MARKET_FLATTEN")
+        self.assertEqual(plan["side"], "SELL")
+        self.assertTrue(plan["set_tp1_done"])
+        self.assertTrue(plan["move_sl_to_be"])
+
+    def test_sync_keeps_tp1_for_dust_and_watchdog_marks_done(self):
+        env = {
+            "MIN_QTY": 0.001,
+            "MIN_NOTIONAL": 5.0,
+            "QTY_STEP": 0.001,
+            "TICK_SIZE": 0.1,
+        }
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.3,
+                           "prices": {"entry": 100.0, "tp1": 102.0, "tp2": 104.0, "sl": 98.0},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.0001, "qty2": 0.1, "qty3": 0.1}}}
+        open_orders = [
+            {"orderId": 222, "clientOrderId": "EX_TP2_1"},
+            {"orderId": 333, "clientOrderId": "EX_SL_1"},
+        ]
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDT"
+            with patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+                 patch.object(executor.binance_api, "get_order", return_value={"status": "CANCELED"}), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.sync_from_binance(st, reason="MANUAL")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+
+        plan = exit_safety.tp_watchdog_tick(
+            st=st,
+            pos=st["position"],
+            env=env,
+            now_s=1000.0,
+            price_now=103.0,
+            tp1_status_payload={"status": "CANCELED"},
+            tp2_status_payload=None,
+        )
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["action"], "TP1_MISSING_DUST")
+        self.assertTrue(plan["set_tp1_done"])
+        self.assertTrue(plan["move_sl_to_be"])
+
+    def test_sync_allows_tp1_pop_after_done(self):
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.3,
+                           "tp1_done": True,
+                           "prices": {"entry": 100.0, "tp1": 102.0, "tp2": 104.0, "sl": 98.0},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.1, "qty2": 0.1, "qty3": 0.1}}}
+        open_orders = [
+            {"orderId": 222, "clientOrderId": "EX_TP2_1"},
+            {"orderId": 333, "clientOrderId": "EX_SL_1"},
+        ]
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDT"
+            with patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+                 patch.object(executor.binance_api, "get_order", return_value={"status": "CANCELED"}), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.sync_from_binance(st, reason="MANUAL")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+
+        self.assertNotIn("tp1", st["position"]["orders"])
