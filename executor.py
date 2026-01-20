@@ -114,6 +114,11 @@ ENV: Dict[str, Any] = {
 "QTY_STEP": Decimal(os.getenv("QTY_STEP", "0.00001")),
 "MIN_QTY": Decimal(os.getenv("MIN_QTY", "0.00001")),
 "MIN_NOTIONAL": _get_float("MIN_NOTIONAL", 5.0),
+"ASSET_STEP_SIZE_USDC": os.getenv("ASSET_STEP_SIZE_USDC"),
+"ASSET_STEP_SIZES": os.getenv("ASSET_STEP_SIZES"),
+"QUOTE_STEP": os.getenv("QUOTE_STEP"),
+"QUOTE_ASSET_STEP": os.getenv("QUOTE_ASSET_STEP"),
+"QUOTE_STEP_SIZE": os.getenv("QUOTE_STEP_SIZE"),
 
 # price formatting
 "TICK_SIZE": Decimal(os.getenv("TICK_SIZE", "0.01")),
