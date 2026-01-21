@@ -242,7 +242,8 @@ class TestExecutorV15(unittest.TestCase):
         prev_retry = executor.ENV["SL_WATCHDOG_RETRY_SEC"]
         executor.ENV["SL_WATCHDOG_RETRY_SEC"] = 0
         try:
-            with patch.object(executor, "_now_s", return_value=1000.0), \
+            now = {"t": 1000.0}
+            with patch.object(executor, "_now_s", side_effect=lambda: now["t"]), \
                 patch.object(executor.binance_api, "open_orders", return_value=[]), \
                 patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
                 patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
@@ -254,8 +255,10 @@ class TestExecutorV15(unittest.TestCase):
                 patch.object(executor, "save_state", lambda *_: None), \
                 patch.object(executor, "send_webhook", lambda *_: None), \
                 patch.object(executor, "log_event", lambda *_ , **__: None):
+                now["t"] = 1000.0
                 executor.manage_v15_position(executor.ENV["SYMBOL"], st)
                 self.assertEqual(m_place.call_count, 0)
+                now["t"] = 1003.0
                 executor.manage_v15_position(executor.ENV["SYMBOL"], st)
         finally:
             executor.ENV["SL_WATCHDOG_RETRY_SEC"] = prev_retry
