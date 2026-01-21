@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from unittest import mock
+from unittest.mock import patch
 import importlib
 
 
@@ -65,3 +66,54 @@ class TestNotifications(unittest.TestCase):
                 objs = [json.loads(x) for x in f.readlines()]
 
             self.assertTrue(any(o.get("action") == "WEBHOOK_ERROR" for o in objs))
+
+    def test_send_trade_closed_emits_once_with_trade_key(self):
+        import executor_mod.notifications as n
+        st = {}
+        pos = {"trade_key": "TK1", "symbol": "BTCUSDC", "side": "SELL", "entry_price": 100.0, "qty": 0.01}
+        sent = []
+
+        with patch.object(n, "send_webhook", side_effect=lambda p: sent.append(p)), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].get("event"), "TRADE_CLOSED")
+        self.assertEqual(sent[0].get("trade_key"), "TK1")
+        self.assertEqual(st.get("last_notified_close_trade_key"), "TK1")
+
+    def test_send_trade_closed_dedup_same_trade_key(self):
+        import executor_mod.notifications as n
+        st = {}
+        pos = {"trade_key": "TK2", "symbol": "BTCUSDC", "side": "SELL"}
+        sent = []
+
+        with patch.object(n, "send_webhook", side_effect=lambda p: sent.append(p)), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
+            n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
+
+        self.assertEqual(len(sent), 1, "Must emit TRADE_CLOSED only once per trade_key")
+
+    def test_send_trade_closed_no_trade_key_still_emits(self):
+        import executor_mod.notifications as n
+        st = {}
+        pos = {"symbol": "BTCUSDC", "side": "SELL"}
+        sent = []
+
+        with patch.object(n, "send_webhook", side_effect=lambda p: sent.append(p)), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].get("event"), "TRADE_CLOSED")
+        self.assertIsNone(sent[0].get("trade_key"))
+
+    def test_send_trade_closed_fail_soft(self):
+        import executor_mod.notifications as n
+        st = {}
+        pos = {"trade_key": "TK3", "symbol": "BTCUSDC", "side": "SELL"}
+
+        with patch.object(n, "send_webhook", side_effect=RuntimeError("boom")), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
