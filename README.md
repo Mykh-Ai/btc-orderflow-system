@@ -137,6 +137,9 @@ Executor/
 - `open_flow()` — повний цикл відкриття позиції
 - `close_position()` — закриття позиції з cooldown
 - `failsafe_flatten()` — аварійне закриття market ордером
+- `_finalize_close(reason, tag)` — централізоване закриття з cleanup (v2.1+)
+- `_cancel_sibling_exits_best_effort(tag)` — throttled cleanup залишкових exit ордерів (v2.1+)
+- `_tp1_be_transition(exit_side, be_stop, rem_qty, source)` — перехід SL до breakeven після TP1 з retry (v2.2+)
 
 #### Синхронізація та відновлення
 - `sync_from_binance(st, reason)` — синхронізація стану з біржею (attach до існуючої позиції)
@@ -159,6 +162,17 @@ Executor/
 6. **Exchange/Price Snapshots**: in-memory кеш openOrders та mid-price для зменшення API викликів
 7. **Trade Reporting**: автоматична генерація trade reports для offline аналізу та fee enrichment
 8. **Синхронізація стану**: можливість attach до існуючої позиції на біржі через `sync_from_binance()`
+9. **Cleanup Refactoring (v2.1+)**: централізований механізм cancel залишкових exits при закритті
+   - `_finalize_close()` — cleanup НІКОЛИ не блокує закриття позиції (`with suppress(Exception)`)
+   - Throttling через `CLOSE_CLEANUP_RETRY_SEC` для захисту від rate limits
+   - Логування через `CLOSE_CLEANUP_BEST_EFFORT` події
+10. **TP1→BE Retry (v2.2+)**: надійний перехід SL до breakeven після TP1
+   - Max attempts через `TP1_BE_MAX_ATTEMPTS` (default 5) для запобігання infinite loops
+   - Strict old SL cancel verification (підтримка -2013/Unknown order/FILLED)
+   - Insufficient balance handling з retry логікою
+   - State sync: оновлює `pos["prices"]["sl"]`, `sl_status_next_s`, очищає `sl_done`
+   - Webhook alerts: `TP1_BE_MAX_ATTEMPTS_REACHED` при досягненні max
+   - 1h cooldown після max attempts (`tp1_be_disabled` flag)
 
 ---
 
@@ -679,16 +693,20 @@ split_qty_3legs_place(qty_total_r) -> (qty1, qty2, qty3)
       "tp2": 791,
       "qty1": 0.0003,
       "qty2": 0.0003,
-      "qty3": 0.0004
+      "qty3": 0.0004,
+      "sl_prev": 788        # старий SL після TP1→BE (v2.2+)
     },
     "prices": {
       "entry": 95000.0,
-      "sl": 94800.0,
+      "sl": 94800.0,        # оновлюється до be_stop після TP1 (v2.2+)
       "tp1": 95200.0,
       "tp2": 95400.0
     },
     "trail_active": true,
     "trail_sl_price": 95100.0,
+    "tp1_done": false,       # flag TP1 заповнення
+    "tp1_be_disabled": false, # flag після max_attempts (v2.2+)
+    "close_cleanup_next_s": 1234567890.0,  # throttle cleanup (v2.1+)
     ...
   },
   "last_closed": {...},      # остання закрита позиція
@@ -891,6 +909,11 @@ AGG_CSV=/data/feed/aggregated.csv          # aggregated market data
 STATE_FN=/data/state/executor_state.json   # стан executor
 EXEC_LOG=/data/logs/executor.log           # лог executor
 
+# Cleanup & TP1→BE (v2.1+, v2.2+)
+CLOSE_CLEANUP_RETRY_SEC=2.0                # throttle між cleanup спробами
+TP1_BE_MAX_ATTEMPTS=5                       # max спроб TP1→BE переходу
+SL_RECON_FRESH_SEC=60                       # freshness gate для SL fallback (sec)
+
 # Символ та sizing
 SYMBOL=BTCUSDC
 QTY_USD=100.0
@@ -1049,7 +1072,22 @@ MARGIN_BORROW_MODE=manual
 
 13 детекторів аномалій стану з throttling та severity (WARN/ERROR)
 
-### 6. Атомарний запис стану
+### 6. Cleanup Guards (v2.1+)
+
+- **AK-47 Contract**: `_finalize_close()` ЗАВЖДИ викликає `_close_slot()` навіть якщо cleanup fails
+- **Throttling**: cleanup не спамить API через `CLOSE_CLEANUP_RETRY_SEC` (default 2s)
+- **Best-effort**: cleanup wrapped у `with suppress(Exception)` — ніколи не блокує close
+
+### 7. TP1→BE Safety (v2.2+)
+
+- **Max attempts**: `TP1_BE_MAX_ATTEMPTS` (default 5) запобігає infinite loops
+- **Strict verification**: old SL перевіряється на CANCELED/REJECTED/EXPIRED/NOT_FOUND перед new SL
+- **FILLED handling**: якщо old SL filled → abort transition, normal SL-filled path обробить
+- **Insufficient balance**: retry якщо -2010 error (old SL ще блокує qty)
+- **State sync**: оновлює `prices["sl"]`, `sl_status_next_s`, `sl_done`, `sl_prev`
+- **1h cooldown**: після max attempts → `tp1_be_disabled=True` на 3600s
+
+### 8. Атомарний запис стану
 
 ```python
 tmp = STATE_FN + ".tmp"
