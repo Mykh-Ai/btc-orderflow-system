@@ -255,6 +255,7 @@ class TestExecutorV15(unittest.TestCase):
                 patch.object(executor, "send_webhook", lambda *_: None), \
                 patch.object(executor, "log_event", lambda *_ , **__: None):
                 executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+                self.assertEqual(m_place.call_count, 0)
                 executor.manage_v15_position(executor.ENV["SYMBOL"], st)
         finally:
             executor.ENV["SL_WATCHDOG_RETRY_SEC"] = prev_retry
