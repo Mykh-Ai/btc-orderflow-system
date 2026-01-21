@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
 from executor_mod import baseline_policy
-from executor_mod.notifications import log_event, send_webhook
+from executor_mod.notifications import log_event, send_trade_closed, send_webhook
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
 import executor_mod.trail as trail
@@ -1020,6 +1020,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         }
         with suppress(Exception):
             reporting.report_trade_close(st, pos, reason)
+        send_trade_closed(st, pos, reason, mode="live")
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0

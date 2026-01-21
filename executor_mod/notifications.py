@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -110,3 +111,71 @@ def send_webhook(payload: Dict[str, Any]) -> None:
         requests.post(url, json=payload, timeout=5, auth=auth)
     except Exception as e:
         log_event("WEBHOOK_ERROR", error=str(e), payload=payload)
+
+
+def _extract_trade_key(st: Dict[str, Any], pos: Dict[str, Any]) -> Optional[str]:
+    """Best-effort trade_key extraction for dedup. Returns None if not available."""
+    try:
+        tk = None
+        if isinstance(pos, dict):
+            tk = pos.get("trade_key") or pos.get("tradeKey")
+        if not tk and isinstance(st, dict):
+            tk = st.get("trade_key")
+            if not tk and isinstance(st.get("position"), dict):
+                tk = st["position"].get("trade_key")
+            if not tk and isinstance(st.get("last_closed"), dict):
+                tk = st["last_closed"].get("trade_key")
+        return str(tk) if tk is not None else None
+    except Exception:
+        return None
+
+
+def send_trade_closed(st: Dict[str, Any], pos: Dict[str, Any], close_reason: str, mode: str = "live") -> None:
+    """
+    Single source of truth for TRADE_CLOSED webhook emission.
+    - Dedup by trade_key persisted in state: st["last_notified_close_trade_key"]
+    - Fail-soft: never raises; must not block close.
+    """
+    try:
+        st = st if isinstance(st, dict) else {}
+        pos = pos if isinstance(pos, dict) else {}
+
+        trade_key = _extract_trade_key(st, pos)
+        last_sent = st.get("last_notified_close_trade_key")
+        if trade_key and last_sent == trade_key:
+            return
+
+        symbol = str(pos.get("symbol") or st.get("symbol") or os.getenv("SYMBOL", "") or "")
+        side = str(pos.get("side") or "")
+        payload: Dict[str, Any] = {
+            "event": "TRADE_CLOSED",
+            "mode": mode,
+            "symbol": symbol,
+            "side": side,
+            "trade_key": trade_key,
+            "close_reason": str(close_reason or ""),
+        }
+
+        for k_src, k_out in (
+            ("qty", "qty"),
+            ("qty_base_total", "qty_base_total"),
+            ("entry", "entry"),
+            ("entry_price", "entry_price"),
+            ("avg_exit_price", "avg_exit_price"),
+            ("exit_price", "exit_price"),
+        ):
+            v = pos.get(k_src)
+            if v is not None:
+                payload[k_out] = v
+
+        with suppress(Exception):
+            log_event("TRADE_CLOSED", **{k: v for k, v in payload.items() if v is not None})
+
+        send_webhook(payload)
+
+        if trade_key:
+            st["last_notified_close_trade_key"] = trade_key
+    except Exception as e:
+        with suppress(Exception):
+            log_event("TRADE_CLOSED_NOTIFY_ERROR", error=str(e), close_reason=str(close_reason or ""))
+        return

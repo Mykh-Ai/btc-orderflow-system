@@ -1,7 +1,9 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import executor
+from executor_mod import notifications
 from executor_mod import exit_safety
 from executor_mod.exchange_snapshot import reset_snapshot_for_tests
 from copy import deepcopy
@@ -201,6 +203,108 @@ class TestExecutorV15(unittest.TestCase):
         self.assertEqual(st["position"]["order_id"], 200)
         self.assertGreater(st["position"]["opened_s"], 0.0)
         self.assertNotEqual(st["position"]["opened_at"], "2025-01-01T00:00:00Z")
+
+    def test_sl_watchdog_market_close_emits_trade_closed_once(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "trade_key": "TK-1",
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+            }
+        }
+
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+            patch.object(executor, "refresh_snapshot", return_value=False), \
+            patch.object(executor, "get_snapshot", return_value=snapshot), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+            patch.object(executor.binance_api, "flatten_market", return_value=None), \
+            patch.object(executor.binance_api, "check_order_status", return_value={"status": "NEW", "executedQty": "0", "origQty": "0.1"}), \
+            patch.object(executor.margin_guard, "on_after_position_closed", lambda *_a, **_k: None), \
+            patch.object(executor.reporting, "report_trade_close", lambda *_a, **_k: None), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_a, **_k: None), \
+            patch.object(notifications, "send_webhook") as m_webhook, \
+            patch.object(notifications, "log_event", lambda *_a, **_k: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        self.assertEqual(m_webhook.call_count, 1)
+        payload = m_webhook.call_args[0][0]
+        self.assertEqual(payload.get("event"), "TRADE_CLOSED")
+
+    def test_trade_closed_dedup_same_trade_key(self):
+        def make_state():
+            return {
+                "position": {
+                    "mode": "live",
+                    "status": "OPEN",
+                    "side": "LONG",
+                    "qty": 0.1,
+                    "trade_key": "TK-DEDUP",
+                    "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                    "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+                }
+            }
+
+        st = make_state()
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+            patch.object(executor, "refresh_snapshot", return_value=False), \
+            patch.object(executor, "get_snapshot", return_value=snapshot), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+            patch.object(executor.binance_api, "flatten_market", return_value=None), \
+            patch.object(executor.binance_api, "check_order_status", return_value={"status": "NEW", "executedQty": "0", "origQty": "0.1"}), \
+            patch.object(executor.margin_guard, "on_after_position_closed", lambda *_a, **_k: None), \
+            patch.object(executor.reporting, "report_trade_close", lambda *_a, **_k: None), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_a, **_k: None), \
+            patch.object(notifications, "send_webhook") as m_webhook, \
+            patch.object(notifications, "log_event", lambda *_a, **_k: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+            st["position"] = make_state()["position"]
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        self.assertEqual(m_webhook.call_count, 1)
 
     def test_place_exits_retry_after_single_failure(self):
         st = {"position": {"mode": "live", "status": "OPEN_FILLED",
