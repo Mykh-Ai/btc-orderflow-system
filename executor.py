@@ -1010,6 +1010,159 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         except Exception:
             return False
 
+    def _cancel_sibling_exits_best_effort(tag: str, throttle_sec: float = 2.0) -> None:
+        """
+        Best-effort sibling exit cleanup (tp1/tp2/sl/sl_prev) with simple throttling.
+        Important: keep _close_slot() pure; network calls live here.
+        """
+        try:
+            next_s = float(pos.get("close_cleanup_next_s") or 0.0)
+        except Exception:
+            next_s = 0.0
+        if now_s < next_s:
+            return
+
+        attempted = []
+        for key in ("tp1", "tp2", "sl", "sl_prev"):
+            try:
+                oid = int((pos.get("orders") or {}).get(key) or 0)
+            except Exception:
+                oid = 0
+            if oid:
+                attempted.append((key, oid))
+
+        # No real action -> no throttle/state/log (prevents log spam).
+        if not attempted:
+            return
+
+        # throttle (default 2s; reuse watchdog retry if present)
+        try:
+            retry_sec = float(ENV.get("CLOSE_CLEANUP_RETRY_SEC") or 0.0)
+        except Exception:
+            retry_sec = 0.0
+        if retry_sec <= 0.0:
+            try:
+                retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
+            except Exception:
+                retry_sec = 0.0
+        if retry_sec <= 0.0:
+            retry_sec = float(throttle_sec)
+
+        pos["close_cleanup_next_s"] = now_s + retry_sec
+        st["position"] = pos
+        _save_state_best_effort("close_cleanup_throttle_set")
+
+        for key, oid in attempted:
+            _cancel_ignore_unknown(oid)
+
+        # Log only when we actually attempted cancels.
+        log_event(
+            "CLOSE_CLEANUP_BEST_EFFORT",
+            mode="live",
+            tag=tag,
+            count=len(attempted),
+            keys=[k for (k, _) in attempted],
+        )
+
+    def _finalize_close(reason: str, tag: str) -> None:
+        """
+        AK-47 contract:
+        - best-effort cleanup is allowed here (throttled)
+        - _close_slot() stays pure (state/report/margin-hook only)
+        - close must never be blocked by cleanup failures
+        """
+        with suppress(Exception):
+            _cancel_sibling_exits_best_effort(tag=tag)
+        _close_slot(reason)
+
+    def _tp1_be_transition(exit_side: str, be_stop: float, rem_qty: float, source: str) -> bool:
+        """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed."""
+        retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 2.0)
+        if retry_sec <= 0.0:
+            retry_sec = 2.0
+        next_s = float(pos.get("tp1_be_next_s") or 0.0)
+        if now_s < next_s:
+            return False
+
+        if not pos.get("tp1_be_pending"):
+            old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+            pos["tp1_be_pending"] = True
+            pos["tp1_be_old_sl"] = old_sl_id
+            pos["tp1_be_source"] = source
+            pos["tp1_be_attempts"] = int(pos.get("tp1_be_attempts") or 0)
+            pos["tp1_be_next_s"] = now_s
+            st["position"] = pos
+            _save_state_best_effort("tp1_be_pending_set")
+
+        old_sl_id = int(pos.get("tp1_be_old_sl") or 0)
+        if old_sl_id:
+            _cancel_ignore_unknown(old_sl_id)
+            od_c = None
+            with suppress(Exception):
+                od_c = binance_api.check_order_status(symbol, old_sl_id)
+            st_c = str((od_c or {}).get("status", "")).upper()
+            if st_c not in ("CANCELED", "REJECTED", "EXPIRED"):
+                pos["tp1_be_last_status"] = st_c or "UNKNOWN"
+                pos["tp1_be_next_s"] = now_s + retry_sec
+                st["position"] = pos
+                _save_state_best_effort("tp1_be_wait_cancel")
+                log_event("TP1_BE_WAIT_CANCEL", mode="live", order_id_sl=old_sl_id, status=st_c or "UNKNOWN")
+                return False
+
+        if be_stop <= 0.0 or rem_qty <= 0.0:
+            pos["tp1_be_last_error"] = "invalid_be_inputs"
+            pos["tp1_be_next_s"] = now_s + retry_sec
+            st["position"] = pos
+            _save_state_best_effort("tp1_be_invalid_inputs")
+            log_event("TP1_BE_INVALID_INPUTS", mode="live", be_stop=be_stop, rem_qty=rem_qty)
+            return False
+
+        tick = float(ENV["TICK_SIZE"])
+        gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
+        gap = tick * float(gap_ticks)
+        be_limit = (be_stop - gap) if exit_side == "SELL" else (be_stop + gap)
+        be_stop_s = fmt_price(be_stop)
+        be_limit_s = fmt_price(be_limit)
+        if be_limit_s == be_stop_s:
+            be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
+
+        pos["tp1_be_attempts"] = int(pos.get("tp1_be_attempts") or 0) + 1
+        client_suffix = "TP1WD" if source == "TP1_WATCHDOG" else "TP1"
+        try:
+            sl_new = binance_api.place_order_raw({
+                "symbol": symbol,
+                "side": exit_side,
+                "type": "STOP_LOSS_LIMIT",
+                "quantity": fmt_qty(rem_qty),
+                "price": be_limit_s,
+                "stopPrice": be_stop_s,
+                "timeInForce": "GTC",
+                "newClientOrderId": f"EX_SL_BE_{client_suffix}_{int(time.time())}",
+            })
+        except Exception as e:
+            pos["tp1_be_last_error"] = str(e)
+            pos["tp1_be_next_s"] = now_s + retry_sec
+            st["position"] = pos
+            _save_state_best_effort("tp1_be_place_error")
+            log_event("TP1_BE_PLACE_ERROR", error=str(e), mode="live", source=source)
+            send_webhook({"event": "TP1_BE_PLACE_ERROR", "mode": "live", "symbol": symbol, "error": str(e), "source": source})
+            return False
+
+        pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
+        pos["tp1_done"] = True
+        pos.pop("tp1_be_pending", None)
+        pos.pop("tp1_be_old_sl", None)
+        pos.pop("tp1_be_last_status", None)
+        pos.pop("tp1_be_last_error", None)
+        pos.pop("tp1_be_source", None)
+        pos.pop("tp1_be_next_s", None)
+        st["position"] = pos
+        save_state(st)
+        event_name = "TP1_WATCHDOG_SL_TO_BE" if source == "TP1_WATCHDOG" else "TP1_DONE_SL_TO_BE"
+        log_event(event_name, mode="live", order_id_tp1=tp1_id, new_sl_order_id=sl_new.get("orderId"))
+        send_webhook({"event": event_name, "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
+        return True
+
     def _close_slot(reason: str) -> None:
         st["last_closed"] = {
             "ts": iso_utc(),
@@ -1054,7 +1207,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 st["position"] = pos
                 _save_state_best_effort("exit_cleanup_done")
                 log_event("EXIT_CLEANUP_DONE", mode="live", reason=reason)
-                _close_slot(reason)
+                _finalize_close(reason, tag="EXIT_CLEANUP_DONE")
                 return
             pos["exit_cleanup_order_ids"] = failed_ids
             pos["exit_cleanup_next_s"] = now_s + float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
@@ -1104,46 +1257,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
                 qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
                 rem_qty = float(round_qty(qty2 + qty3))
-
-                tick = float(ENV["TICK_SIZE"])
-                gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
-                gap = tick * float(gap_ticks)
-                be_limit = (be_stop - gap) if exit_side == "SELL" else (be_stop + gap)
-                be_stop_s = fmt_price(be_stop)
-                be_limit_s = fmt_price(be_limit)
-                # Ensure price != stopPrice even after rounding
-                if be_limit_s == be_stop_s:
-                    be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
-                try:
-                    sl_new = binance_api.place_order_raw({
-                        "symbol": symbol,
-                        "side": exit_side,
-                        "type": "STOP_LOSS_LIMIT",
-                        "quantity": fmt_qty(rem_qty),
-                        "price": be_limit_s,
-                        "stopPrice": be_stop_s,
-                        "timeInForce": "GTC",
-                        "newClientOrderId": f"EX_SL_BE_{int(time.time())}",
-                    })
-                except Exception as e:
-                    log_event("TP1_SL_TO_BE_ERROR", error=str(e), mode="live", order_id_tp1=tp1_id)
-                    send_webhook({"event": "TP1_SL_TO_BE_ERROR", "mode": "live", "symbol": symbol, "order_id_tp1": tp1_id, "error": str(e)})
-                else:
-                    sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-                    # Keep old SL id for best-effort cleanup even if cancel fails.
-                    if sl_id:
-                        pos["orders"]["sl_prev"] = sl_id
-                        pos["sl_prev_next_cancel_s"] = _now_s()
-                    pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
-                    pos["tp1_done"] = True
-                    st["position"] = pos
-                    save_state(st)
-                    log_event("TP1_DONE_SL_TO_BE", mode="live", order_id_tp1=tp1_id, new_sl_order_id=sl_new.get("orderId"))
-                    send_webhook({"event": "TP1_DONE_SL_TO_BE", "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
-                    # Best-effort cancel of old SL (do not depend on openOrders).
-                    if sl_id:
-                        with suppress(Exception):
-                            binance_api.cancel_order(symbol, sl_id)
+                _tp1_be_transition(exit_side, be_stop, rem_qty, source="TP1")
             else:
                 # Log once to avoid spam; can happen if order exists but is not filled yet.
                 miss = pos.setdefault("missing_not_filled", {})
@@ -1156,16 +1270,24 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # TP2 filled -> activate trailing SL for remaining qty3 (if configured)
     if tp2_id and not pos.get("tp2_done"):    
-        tp2_status_payload = None
-        with suppress(Exception):
-            tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
-        if isinstance(tp2_status_payload, dict):
-            if _update_order_fill(pos, "tp2", tp2_status_payload):
-                st["position"] = pos
-                _save_state_best_effort("tp2_fill_update")
-        tp2_filled = False
-        if isinstance(tp2_status_payload, dict):
-            tp2_filled = str(tp2_status_payload.get("status", "")).upper() == "FILLED"
+        poll_due = now_s >= float(pos.get("tp2_status_next_s") or 0.0)
+        if poll_due or (not orders):
+            pos["tp2_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
+            st["position"] = pos
+            _save_state_best_effort("tp2_status_next_s")
+
+            tp2_status_payload = None
+            with suppress(Exception):
+                tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+            if isinstance(tp2_status_payload, dict):
+                if _update_order_fill(pos, "tp2", tp2_status_payload):
+                    st["position"] = pos
+                    _save_state_best_effort("tp2_fill_update")
+            tp2_filled = False
+            if isinstance(tp2_status_payload, dict):
+                tp2_filled = str(tp2_status_payload.get("status", "")).upper() == "FILLED"
+        else:
+            tp2_filled = False
         if tp2_filled:
             pos["tp2_done"] = True
             st["position"] = pos
@@ -1330,19 +1452,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 return
 
             # No remaining qty -> close slot like before
-
-            sl_now = int((pos.get("orders") or {}).get("sl") or 0)
-            if sl_now:
-                with suppress(Exception):
-                    binance_api.cancel_order(symbol, sl_now)
-            if tp1_id:
-                with suppress(Exception):
-                    binance_api.cancel_order(symbol, tp1_id)
-            sl_prev2 = int((pos.get("orders") or {}).get("sl_prev") or 0)
-            if sl_prev2:
-                with suppress(Exception):
-                    binance_api.cancel_order(symbol, sl_prev2)
-            _close_slot("TP2")
+            _finalize_close("TP2", tag="TP2_DONE")
             return
         else:
             miss = pos.setdefault("missing_not_filled", {})
@@ -1726,7 +1836,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _save_state_best_effort("exit_cleanup_pending_schedule")
             log_event("EXIT_CLEANUP_PENDING", mode="live", reason=pos["exit_cleanup_reason"], failed_ids=failed_ids)
             return
-        _close_slot(str(plan.get("reason") or "SL_WATCHDOG"))
+        _finalize_close(str(plan.get("reason") or "SL_WATCHDOG"), tag="SL_WATCHDOG_DONE")
         return
 
     def _is_unknown_order_error(e: Exception) -> bool:
@@ -1937,9 +2047,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
         # Apply state transitions
         if tp_plan.get("set_tp1_done"):
-            pos["tp1_done"] = True
-
-            # Move SL to BE for remaining qty2+qty3
+            # Move SL to BE for remaining qty2+qty3 (cancel-first, throttled).
             if tp_plan.get("move_sl_to_be"):
                 exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
                 be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
@@ -1947,43 +2055,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
                 qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
                 rem_qty = float(round_qty(qty2 + qty3))
-
-                if be_stop > 0.0 and rem_qty > 0.0:
-                    tick = float(ENV["TICK_SIZE"])
-                    gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
-                    gap = tick * float(gap_ticks)
-                    be_limit = (be_stop - gap) if exit_side == "SELL" else (be_stop + gap)
-                    be_stop_s = fmt_price(be_stop)
-                    be_limit_s = fmt_price(be_limit)
-                    if be_limit_s == be_stop_s:
-                        be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
-
-                    try:
-                        sl_new = binance_api.place_order_raw({
-                            "symbol": symbol,
-                            "side": exit_side,
-                            "type": "STOP_LOSS_LIMIT",
-                            "quantity": fmt_qty(rem_qty),
-                            "price": be_limit_s,
-                            "stopPrice": be_stop_s,
-                            "timeInForce": "GTC",
-                            "newClientOrderId": f"EX_SL_BE_TP1WD_{int(time.time())}",
-                        })
-                        sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-                        if sl_id:
-                            pos["orders"]["sl_prev"] = sl_id
-                            pos["sl_prev_next_cancel_s"] = _now_s()
-                        pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
-                        log_event("TP1_WATCHDOG_SL_TO_BE", mode="live", new_sl_order_id=sl_new.get("orderId"))
-                        send_webhook({"event": "TP1_WATCHDOG_SL_TO_BE", "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
-                        if sl_id:
-                            with suppress(Exception):
-                                binance_api.cancel_order(symbol, sl_id)
-                    except Exception as e:
-                        log_event("TP1_WATCHDOG_SL_TO_BE_ERROR", error=str(e), mode="live")
-
-            st["position"] = pos
-            _save_state_best_effort("tp1_watchdog_done")
+                _tp1_be_transition(exit_side, be_stop, rem_qty, source="TP1_WATCHDOG")
+            else:
+                pos["tp1_done"] = True
+                st["position"] = pos
+                _save_state_best_effort("tp1_watchdog_done")
 
         # Cancel orders from plan
         cancel_ids = tp_plan.get("cancel_order_ids") or []
@@ -2008,6 +2084,22 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # SL filled -> close slot
     sl_id2 = int((pos.get("orders") or {}).get("sl") or 0)
+    if not sl_id2 and not pos.get("sl_done"):
+        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
+        sl_recon_status = str(recon.get("sl_status") or "").upper()
+        # Freshness gate: avoid stale recon closing the wrong slot
+        fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
+        ts = str(recon.get("sl_status_ts") or "")
+        is_fresh = False
+        with suppress(Exception):
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            is_fresh = (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
+
+        if sl_recon_status == "FILLED" and is_fresh:
+            log_event("SL_FILLED_MISSING_ID_FALLBACK", mode="live", status=sl_recon_status)
+            send_webhook({"event": "SL_FILLED_MISSING_ID_FALLBACK", "mode": "live", "symbol": symbol, "status": sl_recon_status})
+            _finalize_close("SL", tag="SL_FILLED_MISSING_ID_FALLBACK")
+            return
     if sl_id2 and not pos.get("sl_done"):
         poll_due = now_s >= float(pos.get("sl_status_next_s") or 0.0)
 
@@ -2025,21 +2117,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 save_state(st)
                 log_event("SL_DONE", mode="live", order_id_sl=sl_id2)
                 send_webhook({"event": "SL_DONE", "mode": "live", "symbol": symbol})
-
-                # cancel any remaining exits (best-effort) to avoid orphan orders
-                if tp1_id:
-                    with suppress(Exception):
-                        binance_api.cancel_order(symbol, tp1_id)
-                if tp2_id:
-                    with suppress(Exception):
-                        binance_api.cancel_order(symbol, tp2_id)
-
-                sl_prev3 = int((pos.get("orders") or {}).get("sl_prev") or 0)
-                if sl_prev3:
-                    with suppress(Exception):
-                        binance_api.cancel_order(symbol, sl_prev3)
-
-                _close_slot("SL")
+                _finalize_close("SL", tag="SL_FILLED")
             else:
                 miss = pos.setdefault("missing_not_filled", {})
                 key = f"sl:{sl_id2}"
@@ -2259,43 +2337,49 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
 
             status = ""
             executed_qty = 0.0
+            prices = pos.get("prices") or {}
+            st_open = pos.get("status") in ("OPEN", "OPEN_FILLED")
+
+            # Nuanced preserve to avoid recon noise / false triggers
             tp1_done = bool(pos.get("tp1_done"))
+            tp2_done = bool(pos.get("tp2_done"))
+            tp2_synthetic = bool(pos.get("tp2_synthetic"))
+
             orders_qty1 = 0.0
+            orders_qty2 = 0.0
             with suppress(Exception):
                 orders_qty1 = float((orders or {}).get("qty1") or 0.0)
-            prices = pos.get("prices") or {}
+            with suppress(Exception):
+                orders_qty2 = float((orders or {}).get("qty2") or 0.0)
+
             has_tp1_price = False
+            has_tp2_price = False
+            has_sl_price = False
             with suppress(Exception):
                 has_tp1_price = float(prices.get("tp1") or 0.0) > 0.0
+            with suppress(Exception):
+                has_tp2_price = float(prices.get("tp2") or 0.0) > 0.0
+            with suppress(Exception):
+                has_sl_price = float(prices.get("sl") or 0.0) > 0.0
+
             preserve_tp1 = (
                 key == "tp1"
-                and pos.get("status") in ("OPEN", "OPEN_FILLED")
+                and st_open
                 and (not tp1_done)
                 and has_tp1_price
                 and orders_qty1 > 0.0
             )
-            tp2_done = bool(pos.get("tp2_done"))
-            tp2_synthetic = bool(pos.get("tp2_synthetic"))
-            orders_qty2 = 0.0
-            with suppress(Exception):
-                orders_qty2 = float((orders or {}).get("qty2") or 0.0)
-            has_tp2_price = False
-            with suppress(Exception):
-                has_tp2_price = float(prices.get("tp2") or 0.0) > 0.0
             preserve_tp2 = (
                 key == "tp2"
-                and pos.get("status") in ("OPEN", "OPEN_FILLED")
+                and st_open
                 and (not tp2_done)
                 and (not tp2_synthetic)
                 and has_tp2_price
                 and orders_qty2 > 0.0
             )
-            has_sl_price = False
-            with suppress(Exception):
-                has_sl_price = float(prices.get("sl") or 0.0) > 0.0
             preserve_sl = (
                 key == "sl"
-                and pos.get("status") in ("OPEN", "OPEN_FILLED")
+                and st_open
                 and has_sl_price
             )
             preserve = preserve_tp1 or preserve_tp2 or preserve_sl
@@ -2313,15 +2397,8 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
                     if not preserve:
                         orders.pop(key, None)
                     else:
-                        if preserve_tp1:
-                            recon["tp1_status"] = "NOT_FOUND"
-                            recon.setdefault("tp1_status_ts", iso_utc())
-                        if preserve_tp2:
-                            recon["tp2_status"] = "NOT_FOUND"
-                            recon.setdefault("tp2_status_ts", iso_utc())
-                        if preserve_sl:
-                            recon["sl_status"] = "NOT_FOUND"
-                            recon.setdefault("sl_status_ts", iso_utc())
+                        recon[f"{key}_status"] = "NOT_FOUND"
+                        recon.setdefault(f"{key}_status_ts", iso_utc())
                     recon.setdefault(f"{key}_missing_ts", iso_utc())
                     recon[f"{key}_missing_reason"] = "NOT_FOUND"
                     updated = True
@@ -2355,6 +2432,9 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
                 continue
 
             if status == "FILLED":
+                if preserve:
+                    recon[f"{key}_status"] = "FILLED"
+                    recon.setdefault(f"{key}_status_ts", iso_utc())
                 recon.setdefault(f"{key}_filled_seen_ts", iso_utc())
                 updated = True
                 _emit(
@@ -2374,15 +2454,8 @@ def sync_from_binance(st: Dict[str, Any], reason: str = "unknown") -> None:
                 if not preserve:
                     orders.pop(key, None)
                 else:
-                    if preserve_tp1:
-                        recon["tp1_status"] = status
-                        recon.setdefault("tp1_status_ts", iso_utc())
-                    if preserve_tp2:
-                        recon["tp2_status"] = status
-                        recon.setdefault("tp2_status_ts", iso_utc())
-                    if preserve_sl:
-                        recon["sl_status"] = status
-                        recon.setdefault("sl_status_ts", iso_utc())
+                    recon[f"{key}_status"] = status
+                    recon.setdefault(f"{key}_status_ts", iso_utc())
                 recon.setdefault(f"{key}_missing_ts", iso_utc())
                 recon[f"{key}_missing_reason"] = status
                 updated = True
