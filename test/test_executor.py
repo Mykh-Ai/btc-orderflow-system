@@ -144,6 +144,126 @@ class TestExecutorV15(unittest.TestCase):
         self.assertIn(111, called)
         self.assertGreaterEqual(m_place.call_count, 1)
 
+    def test_recon_preserves_exit_ids_open(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+            }
+        }
+
+        snapshot = SimpleNamespace(
+            ok=False,
+            error="stale",
+            is_fresh=lambda *_: False,
+            get_orders=lambda: [],
+            freshness_sec=lambda: 999.0,
+        )
+
+        def fake_get_order(_symbol, _oid):
+            raise Exception('{"code":-2013, "msg":"Order does not exist."}')
+
+        prev_mode = executor.ENV["TRADE_MODE"]
+        executor.ENV["TRADE_MODE"] = "margin"
+        try:
+            with patch.object(executor, "get_snapshot", return_value=snapshot), \
+                patch.object(executor.binance_api, "open_orders", return_value=[{"orderId": 999, "clientOrderId": "EX_EN_1"}]), \
+                patch.object(executor.binance_api, "get_order", side_effect=fake_get_order), \
+                patch.object(executor, "save_state", lambda *_: None), \
+                patch.object(executor, "send_webhook", lambda *_: None), \
+                patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.sync_from_binance(st, reason="MANUAL")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+
+        orders = st["position"]["orders"]
+        recon = st["position"]["recon"]
+        self.assertEqual(orders["tp1"], 111)
+        self.assertEqual(orders["tp2"], 222)
+        self.assertEqual(orders["sl"], 333)
+        self.assertEqual(recon["sl_status"], "NOT_FOUND")
+
+    def test_sl_filled_missing_id_fallback_closes(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222},
+                "tp1_done": True,
+                "tp2_done": True,
+                "recon": {"sl_status": "FILLED"},
+            }
+        }
+
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.binance_api, "check_order_status", return_value={"status": "NEW"}), \
+            patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=False, price_mid=0.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        called = [c.args[1] for c in m_cancel.call_args_list]
+        self.assertIn(111, called)
+        self.assertIn(222, called)
+
+    def test_tp1_be_cancel_first_then_place(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty2": 0.05, "qty3": 0.05},
+            }
+        }
+
+        sl_calls = {"n": 0}
+        def fake_status(_symbol, oid):
+            oid = int(oid)
+            if oid == 111:
+                return {"status": "FILLED"}
+            if oid == 333:
+                sl_calls["n"] += 1
+                return {"status": "NEW"} if sl_calls["n"] == 1 else {"status": "CANCELED"}
+            return {"status": "NEW"}
+
+        prev_retry = executor.ENV["SL_WATCHDOG_RETRY_SEC"]
+        executor.ENV["SL_WATCHDOG_RETRY_SEC"] = 0
+        try:
+            with patch.object(executor, "_now_s", return_value=1000.0), \
+                patch.object(executor.binance_api, "open_orders", return_value=[]), \
+                patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+                patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
+                patch.object(executor.binance_api, "place_order_raw", return_value={"orderId": 444}) as m_place, \
+                patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+                patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None), \
+                patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+                patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=False, price_mid=0.0)), \
+                patch.object(executor, "save_state", lambda *_: None), \
+                patch.object(executor, "send_webhook", lambda *_: None), \
+                patch.object(executor, "log_event", lambda *_ , **__: None):
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+        finally:
+            executor.ENV["SL_WATCHDOG_RETRY_SEC"] = prev_retry
+
+        self.assertEqual(m_place.call_count, 1)
+        called = [c.args[1] for c in m_cancel.call_args_list]
+        self.assertIn(333, called)
+        self.assertEqual(int(st["position"]["orders"]["sl"]), 444)
+
     def test_limit_timeout_market_fallback_updates_opened_s_opened_at(self):
         # run 1 iteration of main loop
         canceled = {"limit100": False}
