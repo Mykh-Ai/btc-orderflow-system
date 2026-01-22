@@ -1112,8 +1112,18 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if not pos.get("tp1_be_pending"):
             return False
 
+        # Check tp1_be_disabled with auto-clear after cooldown
         if pos.get("tp1_be_disabled"):
-            return False
+            # If cooldown expired, clear flag and give second chance
+            if now_s >= next_s:
+                pos.pop("tp1_be_disabled", None)
+                pos["tp1_be_attempts"] = 0  # Reset attempts after cooldown
+                st["position"] = pos
+                _save_state_best_effort("tp1_be_cooldown_expired")
+                log_event("TP1_BE_COOLDOWN_EXPIRED", mode="live", source=str(pos.get("tp1_be_source") or "UNKNOWN"))
+            else:
+                # Still in cooldown
+                return False
 
         try:
             attempts = int(pos.get("tp1_be_attempts") or 0)
@@ -1122,10 +1132,16 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if attempts >= max_attempts:
             source = str(pos.get("tp1_be_source") or "UNKNOWN")
             pos["tp1_be_disabled"] = True
-            pos["tp1_be_next_s"] = now_s + 3600.0  # stop hammering for 1h
+            try:
+                cooldown_sec = float(ENV.get("TP1_BE_COOLDOWN_SEC") or 300.0)
+            except Exception:
+                cooldown_sec = 300.0
+            if cooldown_sec <= 0.0:
+                cooldown_sec = 300.0
+            pos["tp1_be_next_s"] = now_s + cooldown_sec
             st["position"] = pos
             _save_state_best_effort("tp1_be_max_attempts_reached")
-            log_event("TP1_BE_MAX_ATTEMPTS_REACHED", mode="live", attempts=attempts, max_attempts=max_attempts, source=source)
+            log_event("TP1_BE_MAX_ATTEMPTS_REACHED", mode="live", attempts=attempts, max_attempts=max_attempts, source=source, cooldown_sec=cooldown_sec)
             send_webhook({
                 "event": "TP1_BE_MAX_ATTEMPTS_REACHED",
                 "mode": "live",
@@ -1133,6 +1149,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 "attempts": attempts,
                 "max_attempts": max_attempts,
                 "source": source,
+                "cooldown_sec": cooldown_sec,
             })
             return False
 

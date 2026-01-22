@@ -172,7 +172,8 @@ Executor/
    - Insufficient balance handling з retry логікою
    - State sync: оновлює `pos["prices"]["sl"]`, `sl_status_next_s`, очищає `sl_done`
    - Webhook alerts: `TP1_BE_MAX_ATTEMPTS_REACHED` при досягненні max
-   - 1h cooldown після max attempts (`tp1_be_disabled` flag)
+   - **BE SL retry cooldown** (v2.2.1+): If BE placement fails repeatedly, the executor pauses attempts for `TP1_BE_COOLDOWN_SEC` seconds (default 300s = 5 min) after `TP1_BE_MAX_ATTEMPTS` retries, then automatically resumes (cooldown is time-limited, not permanent)
+   - `tp1_be_disabled` auto-clears after cooldown, attempts reset to 0
 
 ### TP1 → BE Behavior
 
@@ -209,13 +210,27 @@ Executor/
 4. **Independent Execution**: `_tp1_be_transition_tick()` виконується незалежно в кінці `manage_v15_position()` після всіх watchdog операцій
    - Читає параметри зі state (`tp1_be_exit_side`, `tp1_be_stop`, `tp1_be_rem_qty`)
    - Retry логіка з throttling через `tp1_be_next_s`
-   - Max attempts capture через `TP1_BE_MAX_ATTEMPTS`
+   - Max attempts capture через `TP1_BE_MAX_ATTEMPTS` (default 5)
+
+5. **Auto-Recovery Cooldown** (v2.2.1+): Після досягнення max attempts система **не блокується назавжди**:
+   - `tp1_be_disabled` встановлюється на `TP1_BE_COOLDOWN_SEC` (default 300s = 5 хв)
+   - Після cooldown flag **автоматично очищається**, attempts скидається до 0
+   - Система отримує другий шанс для BE переходу
+   - Захищає від тимчасових збоїв API/біржі
+   ```python
+   # Auto-clear після cooldown
+   if pos.get("tp1_be_disabled") and now_s >= pos["tp1_be_next_s"]:
+       pos.pop("tp1_be_disabled", None)
+       pos["tp1_be_attempts"] = 0  # Fresh start
+       log_event("TP1_BE_COOLDOWN_EXPIRED", mode="live")
+   ```
 
 **Переваги підходу**:
 - ✅ TP1 FILLED fact фіксується негайно (критично для звітності)
 - ✅ BE transition може retry при помилках без блокування TP1 detection
 - ✅ State machine виживає restart executor
 - ✅ Backward compatibility через підтримку обох plan keys
+- ✅ Auto-recovery від тимчасових збоїв API через cooldown механізм
 
 ---
 
