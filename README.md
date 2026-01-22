@@ -174,6 +174,49 @@ Executor/
    - Webhook alerts: `TP1_BE_MAX_ATTEMPTS_REACHED` при досягненні max
    - 1h cooldown після max attempts (`tp1_be_disabled` flag)
 
+### TP1 → BE Behavior
+
+**Decoupled State Machine** (v2.2+): Перехід Stop Loss до Break-Even після TP1 FILLED є асинхронним процесом, що керується state machine.
+
+#### Ключові принципи:
+
+1. **Immediate TP1 Detection**: `tp1_done` встановлюється **одразу** при виявленні TP1 FILLED, незалежно від успіху BE переходу
+   ```python
+   # executor.py, при TP1 FILLED
+   pos["tp1_done"] = True
+   log_event("TP1_DONE", mode="live", order_id_tp1=tp1_id)
+   ```
+
+2. **Separate BE State Machine**: Перенесення SL у BE керується окремою state machine через `tp1_be_pending`
+   ```python
+   # Ініціалізація state machine
+   pos["tp1_be_pending"] = True
+   pos["tp1_be_old_sl"] = old_sl_id
+   pos["tp1_be_exit_side"] = exit_side
+   pos["tp1_be_stop"] = be_stop
+   pos["tp1_be_rem_qty"] = rem_qty
+   pos["tp1_be_source"] = "TP1"  # або "TP1_WATCHDOG"
+   ```
+
+3. **Watchdog Plan Key**: `exit_safety.tp_watchdog_tick()` повертає новий ключ:
+   - **Новий**: `init_be_state_machine: True` — рекомендовано
+   - **Старий**: `move_sl_to_be: True` — підтримується для зворотної сумісності
+   ```python
+   # executor.py обробляє обидва варіанти
+   should_init_be = tp_plan.get("init_be_state_machine") or tp_plan.get("move_sl_to_be")
+   ```
+
+4. **Independent Execution**: `_tp1_be_transition_tick()` виконується незалежно в кінці `manage_v15_position()` після всіх watchdog операцій
+   - Читає параметри зі state (`tp1_be_exit_side`, `tp1_be_stop`, `tp1_be_rem_qty`)
+   - Retry логіка з throttling через `tp1_be_next_s`
+   - Max attempts capture через `TP1_BE_MAX_ATTEMPTS`
+
+**Переваги підходу**:
+- ✅ TP1 FILLED fact фіксується негайно (критично для звітності)
+- ✅ BE transition може retry при помилках без блокування TP1 detection
+- ✅ State machine виживає restart executor
+- ✅ Backward compatibility через підтримку обох plan keys
+
 ---
 
 ## Допоміжні модулі

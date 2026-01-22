@@ -1075,8 +1075,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _cancel_sibling_exits_best_effort(tag=tag)
         _close_slot(reason)
 
-    def _tp1_be_transition(exit_side: str, be_stop: float, rem_qty: float, source: str) -> bool:
-        """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed."""
+    def _tp1_be_transition_tick() -> bool:
+        """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed.
+        
+        Reads parameters from pos["tp1_be_*"] state-machine fields.
+        """
         def _is_insufficient_balance_error(e: Exception) -> bool:
             # Binance can return different shapes; keep heuristic minimal.
             msg = str(e or "").lower()
@@ -1106,6 +1109,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if now_s < next_s:
             return False
 
+        if not pos.get("tp1_be_pending"):
+            return False
+
         if pos.get("tp1_be_disabled"):
             return False
 
@@ -1114,6 +1120,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         except Exception:
             attempts = 0
         if attempts >= max_attempts:
+            source = str(pos.get("tp1_be_source") or "UNKNOWN")
             pos["tp1_be_disabled"] = True
             pos["tp1_be_next_s"] = now_s + 3600.0  # stop hammering for 1h
             st["position"] = pos
@@ -1129,16 +1136,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             })
             return False
 
-        if not pos.get("tp1_be_pending"):
-            old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-            pos["tp1_be_pending"] = True
-            pos["tp1_be_old_sl"] = old_sl_id
-            pos["tp1_be_source"] = source
-            pos["tp1_be_attempts"] = int(pos.get("tp1_be_attempts") or 0)
-            pos["tp1_be_next_s"] = now_s
-            st["position"] = pos
-            _save_state_best_effort("tp1_be_pending_set")
-
+        # Read parameters from state-machine
+        exit_side = str(pos.get("tp1_be_exit_side") or "")
+        be_stop = float(pos.get("tp1_be_stop") or 0.0)
+        rem_qty = float(pos.get("tp1_be_rem_qty") or 0.0)
+        source = str(pos.get("tp1_be_source") or "UNKNOWN")
         old_sl_id = int(pos.get("tp1_be_old_sl") or 0)
         if old_sl_id:
             # STRICT: do not place new BE SL until old SL is confirmed canceled/not-found,
@@ -1234,7 +1236,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return False
 
         pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
-        pos["tp1_done"] = True
         # Keep price-level in sync with new BE SL
         with suppress(Exception):
             (pos.setdefault("prices", {}))["sl"] = float(be_stop)
@@ -1250,15 +1251,20 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         pos.pop("tp1_be_disabled", None)
         pos.pop("tp1_be_pending", None)
         pos.pop("tp1_be_old_sl", None)
+        pos.pop("tp1_be_exit_side", None)
+        pos.pop("tp1_be_stop", None)
+        pos.pop("tp1_be_rem_qty", None)
         pos.pop("tp1_be_last_status", None)
         pos.pop("tp1_be_last_error", None)
         pos.pop("tp1_be_source", None)
+        pos.pop("tp1_be_attempts", None)
         pos.pop("tp1_be_next_s", None)
         st["position"] = pos
         save_state(st)
         event_name = "TP1_WATCHDOG_SL_TO_BE" if source == "TP1_WATCHDOG" else "TP1_DONE_SL_TO_BE"
-        log_event(event_name, mode="live", order_id_tp1=tp1_id, new_sl_order_id=sl_new.get("orderId"))
+        log_event(event_name, mode="live", new_sl_order_id=sl_new.get("orderId"))
         send_webhook({"event": event_name, "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
+        # Note: tp1_done is already set when TP1_FILLED detected, independent of BE success
         return True
 
     def _close_slot(reason: str) -> None:
@@ -1332,7 +1338,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             with suppress(Exception):
                 binance_api.cancel_order(symbol, sl_prev)
 
-    # TP1 filled -> move SL to BE (entry) for remaining qty2+qty3
+    # TP1 filled -> set tp1_done immediately, then initiate BE state-machine
     if tp1_id and not pos.get("tp1_done"):
         poll_due = now_s >= float(pos.get("tp1_status_next_s") or 0.0)
         # Do not gate FILLED detection on openOrders/open_ids; throttle via tp1_status_next_s
@@ -1349,13 +1355,31 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             if isinstance(tp1_status_payload, dict):
                 tp1_filled = str(tp1_status_payload.get("status", "")).upper() == "FILLED"
             if tp1_filled:
+                # TP1 FILLED is a fact - accept it immediately
+                pos["tp1_done"] = True
+                st["position"] = pos
+                _save_state_best_effort("tp1_done_set")
+                log_event("TP1_DONE", mode="live", order_id_tp1=tp1_id)
+                
+                # Now initiate BE state-machine (separate from tp1_done)
                 exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
                 be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
-
                 qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
                 qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
                 rem_qty = float(round_qty(qty2 + qty3))
-                _tp1_be_transition(exit_side, be_stop, rem_qty, source="TP1")
+                
+                # Initialize BE state-machine with parameters
+                old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+                pos["tp1_be_pending"] = True
+                pos["tp1_be_old_sl"] = old_sl_id
+                pos["tp1_be_exit_side"] = exit_side
+                pos["tp1_be_stop"] = be_stop
+                pos["tp1_be_rem_qty"] = rem_qty
+                pos["tp1_be_source"] = "TP1"
+                pos["tp1_be_attempts"] = 0
+                pos["tp1_be_next_s"] = now_s
+                st["position"] = pos
+                save_state(st)
             else:
                 # Log once to avoid spam; can happen if order exists but is not filled yet.
                 miss = pos.setdefault("missing_not_filled", {})
@@ -2145,19 +2169,35 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
         # Apply state transitions
         if tp_plan.get("set_tp1_done"):
-            # Move SL to BE for remaining qty2+qty3 (cancel-first, throttled).
-            if tp_plan.get("move_sl_to_be"):
-                exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
-                be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
-
-                qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
-                qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
-                rem_qty = float(round_qty(qty2 + qty3))
-                _tp1_be_transition(exit_side, be_stop, rem_qty, source="TP1_WATCHDOG")
-            else:
+            # TP1 FILLED is a fact - accept it immediately (independent of BE transition)
+            if not pos.get("tp1_done"):
                 pos["tp1_done"] = True
                 st["position"] = pos
                 _save_state_best_effort("tp1_watchdog_done")
+                log_event("TP1_DONE", mode="live", source="TP1_WATCHDOG")
+            
+            # Initiate BE state-machine (separate from tp1_done)
+            # Support both old and new plan keys for backward compatibility
+            should_init_be = tp_plan.get("init_be_state_machine") or tp_plan.get("move_sl_to_be")
+            if should_init_be and not pos.get("tp1_be_pending"):
+                exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
+                be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
+                qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
+                qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
+                rem_qty = float(round_qty(qty2 + qty3))
+                
+                # Initialize BE state-machine with parameters
+                old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+                pos["tp1_be_pending"] = True
+                pos["tp1_be_old_sl"] = old_sl_id
+                pos["tp1_be_exit_side"] = exit_side
+                pos["tp1_be_stop"] = be_stop
+                pos["tp1_be_rem_qty"] = rem_qty
+                pos["tp1_be_source"] = "TP1_WATCHDOG"
+                pos["tp1_be_attempts"] = 0
+                pos["tp1_be_next_s"] = now_s
+                st["position"] = pos
+                save_state(st)
 
         # Cancel orders from plan
         cancel_ids = tp_plan.get("cancel_order_ids") or []
@@ -2229,6 +2269,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     st["position"] = pos
                     save_state(st)
                     log_event("SL_NOT_FILLED", mode="live", order_id_sl=sl_id2)
+
+    # BE state-machine: run independently after all watchdog operations
+    # This transitions SL to break-even after TP1 FILLED (retries if needed)
+    if pos.get("tp1_be_pending"):
+        _tp1_be_transition_tick()
 
 
 # ===================== State =====================

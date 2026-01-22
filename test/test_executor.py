@@ -236,7 +236,7 @@ class TestExecutorV15(unittest.TestCase):
                 return {"status": "FILLED"}
             if oid == 333:
                 sl_calls["n"] += 1
-                return {"status": "NEW"} if sl_calls["n"] == 1 else {"status": "CANCELED"}
+                return {"status": "NEW"} if sl_calls["n"] <= 2 else {"status": "CANCELED"}
             return {"status": "NEW"}
 
         prev_retry = executor.ENV["SL_WATCHDOG_RETRY_SEC"]
@@ -516,7 +516,7 @@ class TestExecutorV15(unittest.TestCase):
         self.assertEqual(plan["action"], "MARKET_FLATTEN")
         self.assertEqual(plan["side"], "BUY")
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
     def test_sync_preserves_tp1_before_done_and_watchdog_long(self):
         env = {
@@ -564,7 +564,7 @@ class TestExecutorV15(unittest.TestCase):
         self.assertEqual(plan["action"], "MARKET_FLATTEN")
         self.assertEqual(plan["side"], "SELL")
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
     def test_sync_keeps_tp1_for_dust_and_watchdog_marks_done(self):
         env = {
@@ -608,7 +608,8 @@ class TestExecutorV15(unittest.TestCase):
         self.assertIsNotNone(plan)
         self.assertEqual(plan["action"], "TP1_MISSING_DUST")
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
+
 
     def test_sync_allows_tp1_pop_after_done(self):
         st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",

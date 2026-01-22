@@ -97,7 +97,7 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertEqual(plan["side"], "SELL")
         self.assertEqual(plan["cancel_order_ids"], [111])
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
         # Check events
         event_names = [e["name"] for e in plan["events"]]
@@ -131,7 +131,7 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertEqual(plan["action"], "TP1_PARTIAL_DUST")
         self.assertEqual(plan["qty"], 0.0)  # No market close
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
     def test_tp1_missing_price_crossed_triggers_market_qty1_and_sets_tp1_done(self):
         """Test TP1 missing + price crossed triggers market close of qty1 and sets tp1_done."""
@@ -160,7 +160,7 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertAlmostEqual(plan["qty"], 0.1, places=5)  # qty1
         self.assertEqual(plan["side"], "SELL")
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
         # Check events
         event_names = [e["name"] for e in plan["events"]]
@@ -217,7 +217,7 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertEqual(plan["action"], "TP1_MISSING_DUST")
         self.assertEqual(plan["qty"], 0.0)  # No market close
         self.assertTrue(plan["set_tp1_done"])
-        self.assertTrue(plan["move_sl_to_be"])
+        self.assertTrue(plan.get("init_be_state_machine"))
 
     def test_tp2_missing_activates_synthetic_trailing_q2q3_and_sets_flag(self):
         """Test TP2 missing activates synthetic trailing on q2+q3 and sets tp2_synthetic=True."""

@@ -404,12 +404,12 @@ def tp_watchdog_tick(
                     "price_now": price_now,
                     "cancel_order_ids": [int(tp1_id)],
                     "set_tp1_done": True,
-                    "move_sl_to_be": True,
-                    "events": [
-                        {"name": "TP1_PARTIAL_DETECTED", "executedQty": tp1_executed, "order_id": tp1_id},
-                        {"name": "TP1_PARTIAL_DUST", "qty_raw": qty_remaining_raw, "qty_quantized": qty_quantized},
-                    ],
-                }
+                "init_be_state_machine": True,
+                "events": [
+                    {"name": "TP1_PARTIAL_DETECTED", "executedQty": tp1_executed, "order_id": tp1_id},
+                    {"name": "TP1_PARTIAL_DUST", "qty_raw": qty_remaining_raw, "qty_quantized": qty_quantized},
+                ],
+            }
 
             return {
                 "action": "MARKET_FLATTEN",
@@ -418,7 +418,7 @@ def tp_watchdog_tick(
                 "side": "SELL" if is_long else "BUY",
                 "cancel_order_ids": [int(tp1_id)],
                 "set_tp1_done": True,
-                "move_sl_to_be": True,
+                "init_be_state_machine": True,
                 "events": [
                     {"name": "TP1_PARTIAL_DETECTED", "executedQty": tp1_executed, "order_id": tp1_id},
                     {"name": "TP1_MARKET_FALLBACK_PARTIAL"},
@@ -479,7 +479,7 @@ def tp_watchdog_tick(
                             "price_now": price_now,
                             "cancel_order_ids": [int(tp1_id)] if tp1_id else [],
                             "set_tp1_done": True,
-                            "move_sl_to_be": True,
+                            "init_be_state_machine": True,
                             "events": [
                                 {"name": "TP1_MISSING_PRICE_CROSSED", "order_id": tp1_id, "tp1_price": tp1_price, "price_now": price_now},
                                 {"name": "TP1_MISSING_DUST", "qty_raw": qty_to_close_raw, "qty_quantized": qty_quantized},
@@ -493,7 +493,7 @@ def tp_watchdog_tick(
                         "side": "SELL" if is_long else "BUY",
                         "cancel_order_ids": [int(tp1_id)] if tp1_id else [],
                         "set_tp1_done": True,
-                        "move_sl_to_be": True,
+                        "init_be_state_machine": True,
                         "events": [
                             {"name": "TP1_MISSING_PRICE_CROSSED", "order_id": tp1_id, "tp1_price": tp1_price, "price_now": price_now},
                             {"name": "TP1_MARKET_FALLBACK"},
