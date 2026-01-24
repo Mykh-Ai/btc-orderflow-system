@@ -1906,6 +1906,47 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         now_attempt = now_s
         last_attempt = float(pos.get("sl_watchdog_last_market_attempt_s") or 0.0)
         if (not skip_market) and plan_qty > 0.0:
+            # Guard: if SL is already FILLED, do NOT attempt MARKET flatten.
+            # This prevents a second close attempt (and -2010 insufficient balance) when SL already closed the position.
+            sl_filled_cached = False
+            try:
+                fills = ((pos.get("orders") or {}).get("fills") or {})
+                if isinstance(fills, dict):
+                    sl_fill = fills.get("sl")
+                    if isinstance(sl_fill, dict):
+                        sl_st = str(sl_fill.get("status") or "").upper()
+                        if sl_st == "FILLED":
+                            sl_filled_cached = True
+            except Exception:
+                sl_filled_cached = False
+
+            sl_filled_payload = False
+            try:
+                if isinstance(sl_status_payload, dict):
+                    sl_st2 = str(sl_status_payload.get("status") or "").upper()
+                    if sl_st2 == "FILLED":
+                        sl_filled_payload = True
+            except Exception:
+                sl_filled_payload = False
+
+            if sl_filled_cached or sl_filled_payload:
+                if not pos.get("sl_done"):
+                    pos["sl_done"] = True
+                if not pos.get("sl_watchdog_market_suppressed_logged"):
+                    pos["sl_watchdog_market_suppressed_logged"] = True
+                    st["position"] = pos
+                    _save_state_best_effort("sl_watchdog_market_suppressed")
+                    log_event(
+                        "SL_WATCHDOG_MARKET_SUPPRESSED",
+                        mode="live",
+                        reason="SL_ALREADY_FILLED",
+                        sl_filled_cached=bool(sl_filled_cached),
+                        sl_filled_payload=bool(sl_filled_payload),
+                        qty=plan_qty,
+                    )
+                _finalize_close("SL", tag="SL_FILLED_PRE_MARKET")
+                return
+
             close_side = str(plan.get("side") or "").upper()
             if close_side in ("BUY", "SELL"):
                 retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
