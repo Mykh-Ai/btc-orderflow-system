@@ -336,7 +336,7 @@ def tp_watchdog_tick(
     Handles:
     A) TP1 partial fill -> cancel remainder, market close TP1 portion, set tp1_done
     B) TP1 missing/canceled/expired + price crossed -> market close TP1 portion, set tp1_done
-    C) TP2 missing/canceled/expired -> cancel TP2, activate synthetic trailing on q2+q3
+    C) TP2 missing/canceled/expired -> price gate then activate synthetic trailing on q2+q3
     """
     if not pos:
         return None
@@ -509,6 +509,39 @@ def tp_watchdog_tick(
                 tp2_missing = True
 
         if tp2_missing:
+            tp2_price = _tp_price(pos, "tp2")
+            if tp2_price is None:
+                return {
+                    "action": "TP2_MISSING_GATE_UNCERTAIN",
+                    "reason": "TP2_MISSING_GATE_UNCERTAIN",
+                    "qty": 0.0,
+                    "tp2_status": tp2_status,
+                    "price_now": price_now,
+                    "events": [
+                        {"name": "TP2_MISSING_GATE_UNCERTAIN", "order_id": tp2_id, "status": tp2_status},
+                    ],
+                }
+
+            price_crossed = (price_now >= tp2_price) if is_long else (price_now <= tp2_price)
+            if not price_crossed:
+                return {
+                    "action": "TP2_MISSING_NOT_IN_ZONE",
+                    "reason": "TP2_MISSING_NOT_IN_ZONE",
+                    "qty": 0.0,
+                    "tp2_status": tp2_status,
+                    "price_now": price_now,
+                    "tp2_price": tp2_price,
+                    "events": [
+                        {
+                            "name": "TP2_MISSING_NOT_IN_ZONE",
+                            "order_id": tp2_id,
+                            "status": tp2_status,
+                            "tp2_price": tp2_price,
+                            "price_now": price_now,
+                        },
+                    ],
+                }
+
             # Activate synthetic trailing ONLY on q2+q3 (per spec)
             trail_qty = (qty2 + qty3)
             if trail_qty <= 0.0:
@@ -522,6 +555,10 @@ def tp_watchdog_tick(
                 "set_tp2_synthetic": True,
                 "activate_trail": True,
                 "trail_qty": trail_qty,
+                "tp2_status": tp2_status,
+                "price_now": price_now,
+                "tp2_price": tp2_price,
+                "require_price_gate": True,
                 "events": [
                     {"name": "TP2_MISSING_SYNTHETIC_TRAILING", "order_id": tp2_id, "trail_qty": trail_qty},
                 ],

@@ -219,6 +219,34 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertTrue(plan["set_tp1_done"])
         self.assertTrue(plan.get("init_be_state_machine"))
 
+    def test_tp2_missing_gate_not_crossed_returns_not_in_zone(self):
+        """Test TP2 missing without price cross returns not-in-zone plan."""
+        pos = deepcopy(self.pos_long)
+        pos["tp1_done"] = True  # TP1 already done
+        st = {"position": pos}
+
+        tp2_status = {
+            "orderId": 222,
+            "status": "MISSING",
+        }
+
+        plan = exit_safety.tp_watchdog_tick(
+            st=st,
+            pos=pos,
+            env=self.env,
+            now_s=1000.0,
+            price_now=103.0,
+            tp1_status_payload=None,
+            tp2_status_payload=tp2_status,
+        )
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["action"], "TP2_MISSING_NOT_IN_ZONE")
+        self.assertEqual(plan["reason"], "TP2_MISSING_NOT_IN_ZONE")
+        self.assertEqual(plan["tp2_status"], "MISSING")
+        self.assertEqual(plan["tp2_price"], 104.0)
+        self.assertEqual(plan["price_now"], 103.0)
+
     def test_tp2_missing_activates_synthetic_trailing_q2q3_and_sets_flag(self):
         """Test TP2 missing activates synthetic trailing on q2+q3 and sets tp2_synthetic=True."""
         pos = deepcopy(self.pos_long)
@@ -235,7 +263,7 @@ class TestTPWatchdog(unittest.TestCase):
             pos=pos,
             env=self.env,
             now_s=1000.0,
-            price_now=103.0,
+            price_now=104.5,
             tp1_status_payload=None,
             tp2_status_payload=tp2_status,
         )
@@ -248,6 +276,10 @@ class TestTPWatchdog(unittest.TestCase):
         self.assertTrue(plan["set_tp2_synthetic"])
         self.assertTrue(plan["activate_trail"])
         self.assertAlmostEqual(plan["trail_qty"], 0.2, places=5)  # qty2 + qty3 = 0.1 + 0.1
+        self.assertTrue(plan["require_price_gate"])
+        self.assertEqual(plan["tp2_status"], "CANCELED")
+        self.assertEqual(plan["tp2_price"], 104.0)
+        self.assertEqual(plan["price_now"], 104.5)
 
         # Check events
         event_names = [e["name"] for e in plan["events"]]
@@ -269,7 +301,7 @@ class TestTPWatchdog(unittest.TestCase):
             pos=pos,
             env=self.env,
             now_s=1000.0,
-            price_now=103.0,
+            price_now=105.0,
             tp1_status_payload=None,
             tp2_status_payload=tp2_status,
         )
