@@ -145,7 +145,7 @@ class TestExecutorV15(unittest.TestCase):
         self.assertIn(111, called)
         self.assertGreaterEqual(m_place.call_count, 1)
 
-    def test_tp2_gate_notice_dedup(self):
+    def test_tp2_gate_missing_zone_notice_once(self):
         st = {
             "position": {
                 "mode": "live",
@@ -171,23 +171,29 @@ class TestExecutorV15(unittest.TestCase):
             patch.object(executor, "save_state", lambda *_: None), \
             patch.object(executor, "send_webhook") as m_webhook, \
             patch.object(executor, "log_event") as m_log:
-            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
-            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+            for _ in range(3):
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
-        # manage_v15_position() can emit other log_event() calls per tick.
-        # We only assert the TP2 gate notice itself is one-shot (anti-spam).
-        action = "TP2_MISSING_NOT_IN_ZONE"
-        tp2_log_n = sum(
-            1 for c in m_log.call_args_list
-            if getattr(c, "args", None) and len(c.args) >= 1 and c.args[0] == action
-        )
-        tp2_webhook_n = sum(
-            1 for c in m_webhook.call_args_list
-            if getattr(c, "args", None) and len(c.args) >= 1
-            and isinstance(c.args[0], dict) and c.args[0].get("event") == action
-        )
-        self.assertEqual(tp2_log_n, 1)
-        self.assertEqual(tp2_webhook_n, 1)
+            # manage_v15_position() can emit multiple log_event() per tick.
+            # We only assert TP2 gate notice itself is one-shot (anti-spam).
+            action = "TP2_MISSING_NOT_IN_ZONE"
+            tp2_log_n = sum(
+                1 for c in m_log.call_args_list
+                if getattr(c, "args", None) and len(c.args) >= 1 and c.args[0] == action
+            )
+            tp2_webhook_n = sum(
+                1 for c in m_webhook.call_args_list
+                if getattr(c, "args", None)
+                and len(c.args) >= 1
+                and isinstance(c.args[0], dict)
+                and c.args[0].get("event") == action
+            )
+            self.assertEqual(tp2_log_n, 1)
+            self.assertEqual(tp2_webhook_n, 1)
+
+            # Optional: ensure the dedup flag is set in position state after first tick
+            self.assertTrue(st["position"].get("tp2_missing_not_in_zone_notified"))
 
     def test_recon_preserves_exit_ids_open(self):
         st = {
