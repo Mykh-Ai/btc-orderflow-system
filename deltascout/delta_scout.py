@@ -453,7 +453,6 @@ class Scout:
             curr = {"kind":"long","price":ap,"vol":vol,"vwap":vwap_now,"imb":imba}
 
             # --- базові перевірки ---
-           # --- базові перевірки ---
             if not self.prev_peak:
                 self.prev_peak = curr; return
             if curr["kind"] != self.prev_peak["kind"]:
