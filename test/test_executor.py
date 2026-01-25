@@ -174,8 +174,20 @@ class TestExecutorV15(unittest.TestCase):
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
-        self.assertEqual(m_webhook.call_count, 1)
-        self.assertEqual(m_log.call_count, 1)
+        # manage_v15_position() can emit other log_event() calls per tick.
+        # We only assert the TP2 gate notice itself is one-shot (anti-spam).
+        action = "TP2_MISSING_NOT_IN_ZONE"
+        tp2_log_n = sum(
+            1 for c in m_log.call_args_list
+            if getattr(c, "args", None) and len(c.args) >= 1 and c.args[0] == action
+        )
+        tp2_webhook_n = sum(
+            1 for c in m_webhook.call_args_list
+            if getattr(c, "args", None) and len(c.args) >= 1
+            and isinstance(c.args[0], dict) and c.args[0].get("event") == action
+        )
+        self.assertEqual(tp2_log_n, 1)
+        self.assertEqual(tp2_webhook_n, 1)
 
     def test_recon_preserves_exit_ids_open(self):
         st = {
