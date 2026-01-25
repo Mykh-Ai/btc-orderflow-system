@@ -36,6 +36,7 @@ AVG9_MAX        = float(os.getenv("AVG9_MAX", "1"))
 PRINT_EVERY     = int(os.getenv("PRINT_EVERY", "1"))
 STARTUP_LOOKBACK_MIN = int(os.getenv("STARTUP_LOOKBACK_MIN", "180"))
 CHOP30_MAX = float(os.getenv("CHOP30_MAX", "2.6"))
+VWAP_MAX_DIST_USD = float(os.getenv("VWAP_MAX_DIST_USD", "1000"))
 
 COH10_MIN  = float(os.getenv("COH10_MIN", "0.30"))
 IMB_MIN    = float(os.getenv("IMB_MIN", "0.55"))
@@ -62,6 +63,7 @@ ENV = {
     "AGG_CSV": FILE_PATH,
     "ROLL_WINDOW_MIN": ROLL_WINDOW_MIN,
     "VWAP_WINDOW_MIN": VWAP_WINDOW_MIN,
+    "VWAP_MAX_DIST_USD": VWAP_MAX_DIST_USD,
     "POC_STEP_USD": POC_STEP_USD,
     "ZERO_QTY_TH": ZERO_QTY_TH,
     "AVG9_MAX": AVG9_MAX,
@@ -458,6 +460,10 @@ class Scout:
                 self.prev_peak = curr; return
             if vwap_now is not None and curr["price"] < vwap_now:
                 self.prev_peak = curr; return
+            if vwap_now is not None:
+                vwap_f = float(vwap_now)
+                if (price_now - vwap_f) > VWAP_MAX_DIST_USD:
+                    self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
 
@@ -516,6 +522,10 @@ class Scout:
                 self.prev_peak = curr; return
             if vwap_now is not None and curr["price"] > vwap_now:
                 self.prev_peak = curr; return
+            if vwap_now is not None:
+                vwap_f = float(vwap_now)
+                if (vwap_f - price_now) > VWAP_MAX_DIST_USD:
+                    self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
 
