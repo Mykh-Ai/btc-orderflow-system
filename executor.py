@@ -2237,21 +2237,52 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             price_now = tp_plan.get("price_now")
             tp2_price = tp_plan.get("tp2_price")
             require_price_gate = bool(tp_plan.get("require_price_gate", True))
+
+            def _finite_float(x):
+                try:
+                    xf = float(x)
+                except (TypeError, ValueError):
+                    return None
+                return xf if math.isfinite(xf) else None
+
+            # Fallbacks: if planner didn't provide numbers (or NaN), use freshest values we have.
+            price_now_f = _finite_float(price_now)
+            if price_now_f is None:
+                # price_now_tp is computed earlier in this manage tick (the same one used for tp_watchdog_tick)
+                with suppress(Exception):
+                    price_now_f = _finite_float(price_now_tp)
+                if price_now_f is not None:
+                    price_now = price_now_f
+
+            tp2_price_f = _finite_float(tp2_price)
+            if tp2_price_f is None:
+                tp2_price_f = _finite_float((pos.get("prices") or {}).get("tp2"))
+                if tp2_price_f is not None:
+                    tp2_price = tp2_price_f
             if require_price_gate:
                 gate_ok = False
-                try:
-                    price_now_f = float(price_now)
-                    tp2_price_f = float(tp2_price)
-                except (TypeError, ValueError):
-                    gate_ok = False
-                else:
-                    if math.isfinite(price_now_f) and math.isfinite(tp2_price_f) and tp2_price_f > 0.0:
-                        if pos.get("side") == "LONG":
-                            gate_ok = price_now_f >= tp2_price_f
-                        elif pos.get("side") == "SHORT":
-                            gate_ok = price_now_f <= tp2_price_f
+                price_now_f = _finite_float(price_now)
+                tp2_price_f = _finite_float(tp2_price)
+                if price_now_f is not None and tp2_price_f is not None and tp2_price_f > 0.0:
+                    if pos.get("side") == "LONG":
+                        gate_ok = price_now_f >= tp2_price_f
+                    elif pos.get("side") == "SHORT":
+                        gate_ok = price_now_f <= tp2_price_f
                 if not gate_ok:
-                    payload = {k: v for k, v in {"tp2_status": tp2_status, "price_now": price_now, "tp2_price": tp2_price}.items() if v is not None}
+                    # one-shot dedup for reject spam
+                    dedup_key = "tp2_missing_gate_rejected_notified"
+                    if pos.get(dedup_key):
+                        return
+                    pos[dedup_key] = iso_utc()
+                    st["position"] = pos
+                    save_state(st)
+
+                    payload = {k: v for k, v in {
+                        "tp2_status": tp2_status,
+                        "price_now": price_now,
+                        "tp2_price": tp2_price,
+                        "side": pos.get("side"),
+                    }.items() if v is not None}
                     log_event("TP2_MISSING_GATE_REJECTED", mode="live", **payload)
                     send_webhook({"event": "TP2_MISSING_GATE_REJECTED", "mode": "live", "symbol": symbol, **payload})
                     return
