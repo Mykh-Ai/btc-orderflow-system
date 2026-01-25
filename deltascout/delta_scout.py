@@ -461,7 +461,7 @@ class Scout:
                 self.prev_peak = curr; return
             if vwap_now is not None:
                 vwap_f = float(vwap_now)
-                if (price_now - vwap_f) > VWAP_MAX_DIST_USD:
+                if (float(curr["price"]) - vwap_f) > VWAP_MAX_DIST_USD:
                     self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
@@ -523,7 +523,7 @@ class Scout:
                 self.prev_peak = curr; return
             if vwap_now is not None:
                 vwap_f = float(vwap_now)
-                if (vwap_f - price_now) > VWAP_MAX_DIST_USD:
+                if (vwap_f - float(curr["price"])) > VWAP_MAX_DIST_USD:
                     self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
                 self.prev_peak = curr; return
