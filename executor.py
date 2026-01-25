@@ -2214,8 +2214,51 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             }
             log_event(action, mode="live", **{k: v for k, v in dust_payload.items() if v is not None})
 
+        # Handle TP2 missing gate failures (fail-loud, no state changes besides dedup flag)
+        elif action in ("TP2_MISSING_NOT_IN_ZONE", "TP2_MISSING_GATE_UNCERTAIN"):
+            tp2_status = tp_plan.get("tp2_status")
+            price_now = tp_plan.get("price_now")
+            tp2_price = tp_plan.get("tp2_price")
+            dedup_key = "tp2_missing_not_in_zone_notified" if action == "TP2_MISSING_NOT_IN_ZONE" else "tp2_missing_gate_uncertain_notified"
+            first_time = False
+            if not pos.get(dedup_key):
+                first_time = True
+                pos[dedup_key] = iso_utc()
+                st["position"] = pos
+                save_state(st)
+            # Anti-spam: only notify on first transition into this failure state
+            if not first_time:
+                return
+            payload = {k: v for k, v in {"tp2_status": tp2_status, "price_now": price_now, "tp2_price": tp2_price}.items() if v is not None}
+            log_event(action, mode="live", **payload)
+            send_webhook({"event": action, "mode": "live", "symbol": symbol, **payload})
+            return
+
         # Handle ACTIVATE_SYNTHETIC_TRAILING
         elif action == "ACTIVATE_SYNTHETIC_TRAILING":
+            tp2_status = tp_plan.get("tp2_status")
+            price_now = tp_plan.get("price_now")
+            tp2_price = tp_plan.get("tp2_price")
+            require_price_gate = bool(tp_plan.get("require_price_gate", True))
+            if require_price_gate:
+                gate_ok = False
+                try:
+                    price_now_f = float(price_now)
+                    tp2_price_f = float(tp2_price)
+                except (TypeError, ValueError):
+                    gate_ok = False
+                else:
+                    if math.isfinite(price_now_f) and math.isfinite(tp2_price_f) and tp2_price_f > 0.0:
+                        side_u = str(pos.get("side") or "").upper()
+                        if side_u == "LONG":
+                            gate_ok = price_now_f >= tp2_price_f
+                        elif side_u == "SHORT":
+                            gate_ok = price_now_f <= tp2_price_f
+                if not gate_ok:
+                    payload = {k: v for k, v in {"tp2_status": tp2_status, "price_now": price_now, "tp2_price": tp2_price}.items() if v is not None}
+                    log_event("TP2_MISSING_GATE_REJECTED", mode="live", **payload)
+                    send_webhook({"event": "TP2_MISSING_GATE_REJECTED", "mode": "live", "symbol": symbol, **payload})
+                    return
             if tp_plan.get("set_tp2_synthetic"):
                 pos["tp2_synthetic"] = True
             if tp_plan.get("activate_trail"):
