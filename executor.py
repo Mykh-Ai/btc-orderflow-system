@@ -2220,10 +2220,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             price_now = tp_plan.get("price_now")
             tp2_price = tp_plan.get("tp2_price")
             dedup_key = "tp2_missing_not_in_zone_notified" if action == "TP2_MISSING_NOT_IN_ZONE" else "tp2_missing_gate_uncertain_notified"
-            if not pos.get(dedup_key):
-                pos[dedup_key] = iso_utc()
-                st["position"] = pos
-                save_state(st)
+            # one-shot: if we've already notified for this gate action, do nothing
+            if pos.get(dedup_key):
+                return
+            pos[dedup_key] = iso_utc()
+            st["position"] = pos
+            save_state(st)
             payload = {k: v for k, v in {"tp2_status": tp2_status, "price_now": price_now, "tp2_price": tp2_price}.items() if v is not None}
             log_event(action, mode="live", **payload)
             send_webhook({"event": action, "mode": "live", "symbol": symbol, **payload})

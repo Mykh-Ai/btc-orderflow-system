@@ -118,6 +118,7 @@ class TestExecutorV15(unittest.TestCase):
 
         executor.ENV["TRAIL_ACTIVATE_AFTER_TP2"] = True
         executor.ENV["TRAIL_OFFSET_USD"] = 10.0
+
         executor.ENV["TRAIL_STEP_USD"] = 1.0
         executor.ENV["TRAIL_UPDATE_EVERY_SEC"] = 20
 
@@ -143,6 +144,38 @@ class TestExecutorV15(unittest.TestCase):
         self.assertIn(333, called)
         self.assertIn(111, called)
         self.assertGreaterEqual(m_place.call_count, 1)
+
+    def test_tp2_gate_notice_dedup(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+            }
+        }
+        plan = {
+            "action": "TP2_MISSING_NOT_IN_ZONE",
+            "tp2_status": "MISSING",
+            "price_now": 100.0,
+            "tp2_price": 105.0,
+        }
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.binance_api, "check_order_status", return_value={"status": "NEW"}), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook") as m_webhook, \
+            patch.object(executor, "log_event") as m_log:
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertEqual(m_webhook.call_count, 1)
+        self.assertEqual(m_log.call_count, 1)
 
     def test_recon_preserves_exit_ids_open(self):
         st = {
