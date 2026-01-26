@@ -263,8 +263,13 @@ class TestExecutorV15(unittest.TestCase):
             "trail_qty": 0.15,
             "cancel_order_ids": [222],
         }
+        def _fake_status(_symbol, oid):
+            if int(oid) in (222, 333):
+                return {"status": "CANCELED"}
+            return {"status": "CANCELED"}
         with patch.object(executor, "_now_s", return_value=1011.0), \
             patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.binance_api, "check_order_status", side_effect=_fake_status), \
             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
@@ -305,9 +310,14 @@ class TestExecutorV15(unittest.TestCase):
             "cancel_order_ids": [222],
         }
         open_orders = [{"orderId": 333}]
+        def _fake_status(_symbol, oid):
+            if int(oid) == 222:
+                return {"status": "CANCELED"}  # TP2 вже неактивний
+            return {"status": "NEW"}
         with patch.object(executor, "_now_s", return_value=1011.0), \
             patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
             patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
+            patch.object(executor.binance_api, "check_order_status", side_effect=_fake_status), \
             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
@@ -349,8 +359,13 @@ class TestExecutorV15(unittest.TestCase):
             "trail_qty": 0.2,
             "cancel_order_ids": [222],
         }
+        def _fake_status(_symbol, oid):
+            if int(oid) in (222, 333):
+                return {"status": "CANCELED"}
+            return {"status": "CANCELED"}
         with patch.object(executor, "_now_s", return_value=1011.0), \
             patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.binance_api, "check_order_status", side_effect=_fake_status), \
             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
