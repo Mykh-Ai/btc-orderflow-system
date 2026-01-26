@@ -1312,7 +1312,18 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if pos.get("exit_cleanup_pending"):
         next_cleanup = float(pos.get("exit_cleanup_next_s") or 0.0)
         if now_s < next_cleanup:
-            return
+            next_log = float(pos.get("exit_cleanup_wait_log_next_s") or 0.0)
+            if now_s >= next_log:
+                pos["exit_cleanup_wait_log_next_s"] = now_s + 30.0
+                st["position"] = pos
+                _save_state_best_effort("exit_cleanup_wait")
+                log_event(
+                    "EXIT_CLEANUP_WAIT",
+                    mode="live",
+                    next_cleanup_s=next_cleanup,
+                    wait_sec=max(0.0, next_cleanup - now_s),
+                )
+            # Do not return: allow SL/TP reconciliation while cleanup is throttled.
         if now_s >= next_cleanup:
             retry_ids = pos.get("exit_cleanup_order_ids") or []
             failed_ids: List[int] = []
@@ -1777,6 +1788,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     break
 
     sl_status_payload = sl_order_payload
+    sl_status_source = "open_orders" if isinstance(sl_order_payload, dict) else "none"
     if sl_id:
         needs_status = (
             (not isinstance(sl_order_payload, dict))
@@ -1793,6 +1805,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _save_state_best_effort("sl_status_next_s_watchdog")
             with suppress(Exception):
                 sl_status_payload = binance_api.check_order_status(symbol, sl_id)
+                sl_status_source = "status_api"
             if isinstance(sl_status_payload, dict):
                 if _update_order_fill(pos, "sl", sl_status_payload):
                     st["position"] = pos
@@ -2523,6 +2536,13 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             sl_status = ""
             if isinstance(sl_status_payload, dict):
                 sl_status = str(sl_status_payload.get("status", "")).upper()
+            log_event(
+                "SL_STATUS_POLL",
+                mode="live",
+                order_id_sl=sl_id2,
+                source=sl_status_source,
+                status=sl_status or "UNKNOWN",
+            )
             sl_filled = sl_status == "FILLED" if sl_status else _status_is_filled(sl_id2)
 
             if sl_filled:
@@ -2532,6 +2552,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 log_event("SL_DONE", mode="live", order_id_sl=sl_id2)
                 send_webhook({"event": "SL_DONE", "mode": "live", "symbol": symbol})
                 _finalize_close("SL", tag="SL_FILLED")
+                return
             else:
                 miss = pos.setdefault("missing_not_filled", {})
                 key = f"sl:{sl_id2}"
