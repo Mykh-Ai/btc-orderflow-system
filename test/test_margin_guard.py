@@ -1,5 +1,6 @@
 # test/test_margin_guard.py
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import executor_mod.margin_guard as mg
@@ -112,6 +113,44 @@ class TestMarginGuard(unittest.TestCase):
         self.assertEqual(tk, "T2")
         self.assertEqual(plan_use["borrow_asset"], "USDC")
         self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45, places=8)
+
+    def test_prepare_plan_for_borrow_long_snapshot_refresh_used(self):
+        state = {}
+        symbol = "BTCUSDC"
+        side = "BUY"
+        qty = 0.03
+        plan = {"trade_key": "T2A"}  # no entry/price
+
+        refresh_state = {"refreshed": False}
+
+        def mock_refresh(*_args, **_kwargs):
+            refresh_state["refreshed"] = True
+
+        def mock_snapshot():
+            if refresh_state["refreshed"]:
+                return SimpleNamespace(ok=True, price_mid=250.0)
+            return SimpleNamespace(ok=False, price_mid=0.0)
+
+        with patch.object(mg.price_snapshot, "refresh_price_snapshot", side_effect=mock_refresh), \
+             patch.object(mg.price_snapshot, "get_price_snapshot", side_effect=mock_snapshot):
+            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
+
+        self.assertEqual(plan_use["borrow_asset"], "USDC")
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0, places=8)
+
+    def test_prepare_plan_for_borrow_long_snapshot_still_not_ok(self):
+        state = {}
+        symbol = "BTCUSDC"
+        side = "BUY"
+        qty = 0.03
+        plan = {"trade_key": "T2B"}  # no entry/price
+
+        with patch.object(mg.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(mg.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=False, price_mid=0.0)):
+            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
+
+        self.assertEqual(plan_use["borrow_asset"], "USDC")
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.0, places=12)
 
     def test_prepare_plan_for_borrow_short_derives_base_asset_and_amount_from_qty(self):
         """
