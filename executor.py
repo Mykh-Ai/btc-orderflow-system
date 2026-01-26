@@ -749,28 +749,75 @@ def _is_limit_maker_reject(exc: Exception) -> bool:
     )
 
 
+def _is_duplicate_client_order_id_error(e: Exception) -> bool:
+    """Check if exception is Binance 'duplicate newClientOrderId' error (-1015 or -2010)."""
+    msg = str(e).lower()
+    if "already in use" in msg or "newclientorderid" in msg:
+        return True
+    with suppress(Exception):
+        code = getattr(e, "code", None)
+        if code is not None and int(code) in (-1015, -2010):
+            # -1015: Too many new orders / duplicate clientOrderId
+            # -2010: sometimes returned for duplicate CID as well
+            return True
+    if '"-1015"' in str(e) or '"code":-1015' in str(e) or '"code": -1015' in str(e):
+        return True
+    return False
+
+
 def _place_limit_maker_then_limit(payload: dict) -> dict:
-    """Try LIMIT_MAKER first; if rejected, retry as LIMIT GTC."""
+    """Try LIMIT_MAKER first; if rejected, retry as LIMIT GTC.
+    
+    Handles duplicate clientOrderId by attaching to existing order (idempotency).
+    """
+    cid = str(payload.get("newClientOrderId") or "")
+    symbol = str(payload.get("symbol") or "")
+    
+    def _try_attach_existing(e: Exception, client_id: str) -> Optional[dict]:
+        """If duplicate CID, try to fetch existing order and attach."""
+        if not client_id or not _is_duplicate_client_order_id_error(e):
+            return None
+        try:
+            existing = binance_api.get_order_by_client_id(symbol, client_id)
+            if existing and existing.get("orderId"):
+                log_event("EXIT_ORDER_ATTACH", client_id=client_id, order_id=existing.get("orderId"), status=existing.get("status"))
+                return existing
+        except Exception:
+            pass
+        return None
+    
     try:
         return binance_api.place_order_raw(payload)
     except Exception as e:
+        # Try attach for duplicate CID first
+        attached = _try_attach_existing(e, cid)
+        if attached:
+            return attached
         if not _is_limit_maker_reject(e):
             raise
-        # fallback
+        # fallback to LIMIT GTC
         payload2 = dict(payload)
         payload2["type"] = "LIMIT"
         payload2["timeInForce"] = "GTC"
-        cid = str(payload.get("newClientOrderId") or "")
-        if cid:
-            payload2["newClientOrderId"] = (cid + "_GTC")[:36]
+        cid_gtc = (cid + "_GTC")[:36] if cid else ""
+        if cid_gtc:
+            payload2["newClientOrderId"] = cid_gtc
         log_event("LIMIT_MAKER_REJECT", reason=str(e))
-        return binance_api.place_order_raw(payload2)
+        try:
+            return binance_api.place_order_raw(payload2)
+        except Exception as e2:
+            # Try attach for duplicate CID on fallback
+            attached2 = _try_attach_existing(e2, cid_gtc)
+            if attached2:
+                return attached2
+            raise
 
-def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
+def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, float], exit_client_ids: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Place TP1 + TP2 + SL for V1.5 (no OCO).
 
     side: "LONG" | "SHORT"
     prices: {entry, sl, tp1, tp2} in *USDC* terms (already rounded)
+    exit_client_ids: optional dict with stable {"tp1": cid, "tp2": cid, "sl": cid} for idempotency
     """
     # Ensure qty is aligned to lot step before splitting
     qty_total_r = round_qty(qty_total)
@@ -787,6 +834,16 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     sl_s = fmt_price(float(prices["sl"]))
 
     exit_side = "SELL" if side == "LONG" else "BUY"
+    
+    # Use stable client IDs for idempotent placement (MUST be provided)
+    if not exit_client_ids:
+        raise ValueError("place_exits_v15 requires exit_client_ids for idempotent placement")
+    cids = exit_client_ids
+    cid_tp1 = cids.get("tp1")
+    cid_tp2 = cids.get("tp2")
+    cid_sl = cids.get("sl")
+    if not all([cid_tp1, cid_tp2, cid_sl]):
+        raise ValueError(f"exit_client_ids must contain tp1, tp2, sl keys, got: {cids}")
 
     tp1 = _place_limit_maker_then_limit({
         "symbol": symbol,
@@ -794,7 +851,7 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "type": "LIMIT_MAKER",
         "quantity": qty1_s,
         "price": tp1_s,
-        "newClientOrderId": f"EX_TP1_{int(time.time())}",
+        "newClientOrderId": cid_tp1,
     })
     tp2 = _place_limit_maker_then_limit({
         "symbol": symbol,
@@ -802,7 +859,7 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "type": "LIMIT_MAKER",
         "quantity": qty2_s,
         "price": tp2_s,
-        "newClientOrderId": f"EX_TP2_{int(time.time())}",
+        "newClientOrderId": cid_tp2,
     })
     # Stop-loss for the whole remaining position (we adjust after TP1 in manage_v15_position)
     #    # STOP_LOSS_LIMIT safety gap (limit price vs stop trigger)
@@ -816,16 +873,32 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     # Ensure price != stopPrice even after rounding to tick size
     if sl_price_s == sl_stop_s:
         sl_price_s = fmt_price((stop_p - tick) if exit_side == "SELL" else (stop_p + tick))
-    sl = binance_api.place_order_raw({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "STOP_LOSS_LIMIT",
-        "quantity": qty_total_s,
-        "stopPrice": sl_stop_s,
-        "price": sl_price_s,
-        "timeInForce": "GTC",
-        "newClientOrderId": f"EX_SL_{int(time.time())}",
-    })
+    
+    def _place_sl_with_attach(cid: str) -> dict:
+        """Place SL order with duplicate CID attach support."""
+        try:
+            return binance_api.place_order_raw({
+                "symbol": symbol,
+                "side": exit_side,
+                "type": "STOP_LOSS_LIMIT",
+                "quantity": qty_total_s,
+                "stopPrice": sl_stop_s,
+                "price": sl_price_s,
+                "timeInForce": "GTC",
+                "newClientOrderId": cid,
+            })
+        except Exception as e:
+            if _is_duplicate_client_order_id_error(e):
+                try:
+                    existing = binance_api.get_order_by_client_id(symbol, cid)
+                    if existing and existing.get("orderId"):
+                        log_event("EXIT_ORDER_ATTACH", client_id=cid, order_id=existing.get("orderId"), status=existing.get("status"))
+                        return existing
+                except Exception:
+                    pass
+            raise
+    
+    sl = _place_sl_with_attach(cid_sl)
 
     return {
         "tp1": tp1["orderId"],
@@ -834,6 +907,7 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "qty1": qty1,
         "qty2": qty2,
         "qty3": qty3,
+        "exit_client_ids": {"tp1": cid_tp1, "tp2": cid_tp2, "sl": cid_sl},
     }
 # Wire runtime dependencies for exits placement flow (keeps call sites unchanged).
 exits_flow.configure(

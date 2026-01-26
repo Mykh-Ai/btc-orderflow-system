@@ -994,3 +994,295 @@ class TestExecutorV15(unittest.TestCase):
             executor.ENV["SYMBOL"] = prev_symbol
 
         self.assertNotIn("tp1", st["position"]["orders"])
+    def test_exits_placement_uses_stable_client_ids_on_retry(self):
+        """Regression test: ensure_exits must use same clientOrderId on retry.
+        
+        Scenario: TP1 OK, TP2 OK, SL fails first time, then retry.
+        Expected: Same CIDs are used on retry, no duplicate TP orders created.
+        """
+        import hashlib
+        from executor_mod import exits_flow
+        
+        trade_key = "EX_EN_12345"
+        symbol = executor.ENV.get("SYMBOL", "BTCUSDC")
+        side = "LONG"
+        expected_suffix = hashlib.sha256(f"{trade_key}|{symbol}|{side}".encode()).hexdigest()[:12]
+        
+        st = {"position": {"mode": "live", "status": "OPEN_FILLED",
+                           "side": side, "qty": 0.1,
+                           "trade_key": trade_key,
+                           "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99}}}
+        pos = st["position"]
+        
+        placed_cids = {"calls": []}
+        
+        def mock_place_exits(symbol, side, qty, prices, exit_client_ids=None):
+            placed_cids["calls"].append(exit_client_ids.copy() if exit_client_ids else None)
+            call_num = len(placed_cids["calls"])
+            if call_num == 1:
+                # First call: simulate SL failure after TP1/TP2 success
+                raise RuntimeError("SL placement failed")
+            # Second call: success
+            return {"tp1": 101, "tp2": 102, "sl": 103, "qty1": 0.033, "qty2": 0.033, "qty3": 0.034,
+                    "exit_client_ids": exit_client_ids}
+        
+        saved_states = []
+        def mock_save_state(s):
+            import copy
+            saved_states.append(copy.deepcopy(s))
+        
+        # Configure exits_flow with mocks
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=mock_save_state,
+            log_event_fn=lambda *a, **k: None,
+            send_webhook_fn=lambda p: None,
+            validate_exit_plan_fn=lambda *a, **k: {"qty_total_r": 0.1, "prices": pos["prices"]},
+            place_exits_v15_fn=mock_place_exits,
+        )
+        
+        # First attempt: should fail (SL error)
+        result1 = exits_flow.ensure_exits(st, pos, reason="filled", best_effort=True)
+        self.assertFalse(result1)
+        
+        # Verify exit_client_ids were generated with collision-safe hash suffix
+        self.assertIn("exit_client_ids", pos)
+        first_cids = pos["exit_client_ids"].copy()
+        self.assertEqual(first_cids["tp1"], f"EX_TP1_{expected_suffix}")
+        self.assertEqual(first_cids["tp2"], f"EX_TP2_{expected_suffix}")
+        self.assertEqual(first_cids["sl"], f"EX_SL_{expected_suffix}")
+        
+        # Verify state was saved BEFORE placement
+        self.assertGreaterEqual(len(saved_states), 1)
+        self.assertIn("exit_client_ids", saved_states[0]["position"])
+        
+        # Second attempt (retry): should succeed with SAME CIDs
+        result2 = exits_flow.ensure_exits(st, pos, reason="retry", best_effort=True, attempt=2)
+        self.assertTrue(result2)
+        
+        # Verify same CIDs were used on retry
+        self.assertEqual(len(placed_cids["calls"]), 2)
+        self.assertEqual(placed_cids["calls"][0], placed_cids["calls"][1])
+        self.assertEqual(pos["exit_client_ids"], first_cids)
+        
+        # Verify orders are populated
+        self.assertIn("orders", pos)
+        self.assertEqual(pos["orders"]["tp1"], 101)
+        self.assertEqual(pos["orders"]["tp2"], 102)
+        self.assertEqual(pos["orders"]["sl"], 103)
+        
+        # Re-wire exits_flow back to executor functions
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=lambda st: executor.save_state(st),
+            log_event_fn=lambda *a, **k: executor.log_event(*a, **k),
+            send_webhook_fn=lambda p: executor.send_webhook(p),
+            validate_exit_plan_fn=lambda *a, **k: executor.validate_exit_plan(*a, **k),
+            place_exits_v15_fn=lambda *a, **k: executor.place_exits_v15(*a, **k),
+        )
+
+    def test_exits_client_ids_survive_restart_like_state_reload(self):
+        """Test that exit_client_ids persist across restart-like state reload."""
+        import hashlib
+        import json
+        from executor_mod import exits_flow
+        
+        trade_key = "EX_EN_RESTART_TEST"
+        symbol = executor.ENV.get("SYMBOL", "BTCUSDC")
+        side = "SHORT"
+        expected_suffix = hashlib.sha256(f"{trade_key}|{symbol}|{side}".encode()).hexdigest()[:12]
+        
+        # Simulate first boot: position exists but no exit_client_ids yet
+        st = {"position": {"mode": "live", "status": "OPEN_FILLED",
+                           "side": side, "qty": 0.1,
+                           "trade_key": trade_key,
+                           "prices": {"entry": 100, "tp1": 98, "tp2": 96, "sl": 102}}}
+        pos = st["position"]
+        
+        saved_json = {"data": None}
+        def mock_save_state(s):
+            # Simulate JSON serialize/deserialize (like real file persistence)
+            saved_json["data"] = json.loads(json.dumps(s))
+        
+        def mock_place_exits(symbol, side, qty, prices, exit_client_ids=None):
+            return {"tp1": 101, "tp2": 102, "sl": 103, "qty1": 0.033, "qty2": 0.033, "qty3": 0.034,
+                    "exit_client_ids": exit_client_ids}
+        
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=mock_save_state,
+            log_event_fn=lambda *a, **k: None,
+            send_webhook_fn=lambda p: None,
+            validate_exit_plan_fn=lambda *a, **k: {"qty_total_r": 0.1, "prices": pos["prices"]},
+            place_exits_v15_fn=mock_place_exits,
+        )
+        
+        # First call: generates and persists exit_client_ids
+        result1 = exits_flow.ensure_exits(st, pos, reason="filled", best_effort=True)
+        self.assertTrue(result1)
+        
+        original_cids = pos["exit_client_ids"].copy()
+        
+        # Simulate restart: reload state from "disk" (JSON)
+        reloaded_st = saved_json["data"]
+        reloaded_pos = reloaded_st["position"]
+        
+        # Verify CIDs survived JSON round-trip
+        self.assertEqual(reloaded_pos["exit_client_ids"], original_cids)
+        self.assertEqual(reloaded_pos["exit_client_ids"]["tp1"], f"EX_TP1_{expected_suffix}")
+        
+        # Simulate retry on reloaded state: should reuse same CIDs (not regenerate)
+        placed_cids = {"last": None}
+        def mock_place_exits_capture(symbol, side, qty, prices, exit_client_ids=None):
+            placed_cids["last"] = exit_client_ids
+            return {"tp1": 201, "tp2": 202, "sl": 203, "qty1": 0.033, "qty2": 0.033, "qty3": 0.034,
+                    "exit_client_ids": exit_client_ids}
+        
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=mock_save_state,
+            log_event_fn=lambda *a, **k: None,
+            send_webhook_fn=lambda p: None,
+            validate_exit_plan_fn=lambda *a, **k: {"qty_total_r": 0.1, "prices": reloaded_pos["prices"]},
+            place_exits_v15_fn=mock_place_exits_capture,
+        )
+        
+        result2 = exits_flow.ensure_exits(reloaded_st, reloaded_pos, reason="retry", best_effort=True)
+        self.assertTrue(result2)
+        
+        # Verify same CIDs were used (not regenerated)
+        self.assertEqual(placed_cids["last"], original_cids)
+        
+        # Re-wire exits_flow back to executor functions
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=lambda st: executor.save_state(st),
+            log_event_fn=lambda *a, **k: executor.log_event(*a, **k),
+            send_webhook_fn=lambda p: executor.send_webhook(p),
+            validate_exit_plan_fn=lambda *a, **k: executor.validate_exit_plan(*a, **k),
+            place_exits_v15_fn=lambda *a, **k: executor.place_exits_v15(*a, **k),
+        )
+
+    def test_exits_trade_key_none_uses_deterministic_fallback(self):
+        """Test that trade_key=None generates deterministic UUID fallback (not time-based)."""
+        from executor_mod import exits_flow
+        
+        # Position without trade_key, client_id, or order_id
+        st = {"position": {"mode": "live", "status": "OPEN_FILLED",
+                           "side": "LONG", "qty": 0.1,
+                           # No trade_key, client_id, or order_id
+                           "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99}}}
+        pos = st["position"]
+        
+        logged_events = []
+        def mock_log_event(*args, **kwargs):
+            logged_events.append((args, kwargs))
+        
+        saved_states = []
+        def mock_save_state(s):
+            import copy
+            saved_states.append(copy.deepcopy(s))
+        
+        def mock_place_exits(symbol, side, qty, prices, exit_client_ids=None):
+            return {"tp1": 101, "tp2": 102, "sl": 103, "qty1": 0.033, "qty2": 0.033, "qty3": 0.034,
+                    "exit_client_ids": exit_client_ids}
+        
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=mock_save_state,
+            log_event_fn=mock_log_event,
+            send_webhook_fn=lambda p: None,
+            validate_exit_plan_fn=lambda *a, **k: {"qty_total_r": 0.1, "prices": pos["prices"]},
+            place_exits_v15_fn=mock_place_exits,
+        )
+        
+        result = exits_flow.ensure_exits(st, pos, reason="filled", best_effort=True)
+        self.assertTrue(result)
+        
+        # Verify exit_client_ids were generated
+        self.assertIn("exit_client_ids", pos)
+        cids = pos["exit_client_ids"]
+        
+        # Verify format: EX_{leg}_{12-char-hex}
+        import re
+        self.assertRegex(cids["tp1"], r"^EX_TP1_[0-9a-f]{12}$")
+        self.assertRegex(cids["tp2"], r"^EX_TP2_[0-9a-f]{12}$")
+        self.assertRegex(cids["sl"], r"^EX_SL_[0-9a-f]{12}$")
+        
+        # Verify same suffix used for all three legs
+        suffix_tp1 = cids["tp1"].replace("EX_TP1_", "")
+        suffix_tp2 = cids["tp2"].replace("EX_TP2_", "")
+        suffix_sl = cids["sl"].replace("EX_SL_", "")
+        self.assertEqual(suffix_tp1, suffix_tp2)
+        self.assertEqual(suffix_tp1, suffix_sl)
+        
+        # Verify fallback was logged
+        fallback_logs = [e for e in logged_events if e[0] and "EXIT_CID_FALLBACK" in e[0]]
+        self.assertEqual(len(fallback_logs), 1)
+        
+        # Verify state was persisted BEFORE placement
+        self.assertGreaterEqual(len(saved_states), 1)
+        self.assertIn("exit_client_ids", saved_states[0]["position"])
+        
+        # Re-wire exits_flow back to executor functions
+        exits_flow.configure(
+            executor.ENV,
+            save_state_fn=lambda st: executor.save_state(st),
+            log_event_fn=lambda *a, **k: executor.log_event(*a, **k),
+            send_webhook_fn=lambda p: executor.send_webhook(p),
+            validate_exit_plan_fn=lambda *a, **k: executor.validate_exit_plan(*a, **k),
+            place_exits_v15_fn=lambda *a, **k: executor.place_exits_v15(*a, **k),
+        )
+
+    def test_place_exits_v15_fails_without_exit_client_ids(self):
+        """Test that place_exits_v15 raises ValueError if exit_client_ids not provided."""
+        with self.assertRaises(ValueError) as ctx:
+            executor.place_exits_v15("BTCUSDC", "LONG", 0.1, 
+                                     {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                                     exit_client_ids=None)
+        self.assertIn("exit_client_ids", str(ctx.exception))
+
+    def test_duplicate_client_order_id_attaches_existing_order(self):
+        """Test that duplicate clientOrderId error causes attach to existing order."""
+        from unittest.mock import MagicMock
+        
+        class DuplicateCIDError(Exception):
+            def __init__(self):
+                super().__init__('{"code":-1015,"msg":"This newClientOrderId is already in use."}')
+                self.code = -1015
+        
+        call_count = {"place": 0, "get": 0}
+        
+        def mock_place_order_raw(payload):
+            call_count["place"] += 1
+            if call_count["place"] == 1:
+                raise DuplicateCIDError()
+            return {"orderId": 999, "status": "NEW"}
+        
+        def mock_get_order_by_client_id(symbol, cid):
+            call_count["get"] += 1
+            return {"orderId": 888, "status": "NEW", "clientOrderId": cid}
+        
+        logged_events = []
+        
+        with patch.object(executor.binance_api, "place_order_raw", side_effect=mock_place_order_raw), \
+             patch.object(executor.binance_api, "get_order_by_client_id", side_effect=mock_get_order_by_client_id), \
+             patch.object(executor, "log_event", lambda *a, **k: logged_events.append((a, k))):
+            
+            result = executor._place_limit_maker_then_limit({
+                "symbol": "BTCUSDC",
+                "side": "SELL",
+                "type": "LIMIT_MAKER",
+                "quantity": "0.001",
+                "price": "100000.00",
+                "newClientOrderId": "EX_TP1_test123",
+            })
+        
+        # Should have attached to existing order
+        self.assertEqual(result["orderId"], 888)
+        self.assertEqual(call_count["place"], 1)
+        self.assertEqual(call_count["get"], 1)
+        
+        # Should have logged attach event
+        attach_logs = [e for e in logged_events if e[0] and "EXIT_ORDER_ATTACH" in e[0]]
+        self.assertEqual(len(attach_logs), 1)

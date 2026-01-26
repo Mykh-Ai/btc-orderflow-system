@@ -618,6 +618,19 @@ def get_order(symbol: str, order_id: int) -> Dict[str, Any]:
     return check_order_status(symbol, order_id)
 
 
+def get_order_by_client_id(symbol: str, orig_client_order_id: str) -> Dict[str, Any]:
+    """Fetch order by origClientOrderId (for idempotent placement attach)."""
+    env = _env()
+    mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
+    if mode == "margin":
+        return _binance_signed_request(
+            "GET",
+            "/sapi/v1/margin/order",
+            {"symbol": symbol, "isIsolated": _tf(env.get("MARGIN_ISOLATED", "FALSE")), "origClientOrderId": orig_client_order_id},
+        )
+    return _binance_signed_request("GET", "/api/v3/order", {"symbol": symbol, "origClientOrderId": orig_client_order_id})
+
+
 def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     env = _env()
     mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
