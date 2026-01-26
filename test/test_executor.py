@@ -95,6 +95,54 @@ class TestExecutorV15(unittest.TestCase):
         self.assertIn(111, called)
         self.assertIn(222, called)
 
+    def test_sl_filled_closes_even_when_exit_cleanup_pending(self):
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.1,
+                           "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+                           "sl_status_next_s": 0.0,
+                           "exit_cleanup_pending": True,
+                           "exit_cleanup_next_s": 2000.0,
+                           "exit_cleanup_order_ids": [111],
+                           "tp1_be_pending": True,
+                           "tp1_be_next_s": 1000.0,
+                           "tp1_be_exit_side": "SELL",
+                           "tp1_be_stop": 100.0,
+                           "tp1_be_rem_qty": 0.05,
+                           "tp1_be_old_sl": 444,
+                           "tp1_be_source": "TP1"}}
+
+        status_calls = []
+
+        def fake_status(_symbol, oid):
+            oid_i = int(oid)
+            status_calls.append(oid_i)
+            if oid_i == 333:
+                return {"status": "FILLED", "executedQty": "0.1"}
+            return {"status": "NEW"}
+
+        log_calls = []
+        def fake_log(event, *args, **kwargs):
+            log_calls.append(event)
+
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+             patch.object(executor.binance_api, "open_orders", return_value=[]), \
+             patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+             patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})), \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", side_effect=fake_log), \
+             patch.object(notifications, "log_event", side_effect=fake_log):
+
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        self.assertIn(333, status_calls)
+        self.assertNotIn(444, status_calls)
+        self.assertIn("TRADE_CLOSED", log_calls)
+        tp1_be_events = [event for event in log_calls if isinstance(event, str) and event.startswith("TP1_BE_")]
+        self.assertEqual(tp1_be_events, [])
+
     def test_tp2_filled_activates_trailing_and_cancels_sl_tp1_best_effort(self):
         # After TP2 FILLED we keep the remaining qty3 open and manage it via trailing SL.
         canceled = {"sl333": False}
