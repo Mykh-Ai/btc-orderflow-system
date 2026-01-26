@@ -195,6 +195,174 @@ class TestExecutorV15(unittest.TestCase):
             # Optional: ensure the dedup flag is set in position state after first tick
             self.assertTrue(st["position"].get("tp2_missing_not_in_zone_notified"))
 
+    def test_tp2_synthetic_trailing_phase_a_sets_pending_and_cancels(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.2,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.05, "qty2": 0.05, "qty3": 0.1},
+            }
+        }
+        plan = {
+            "action": "ACTIVATE_SYNTHETIC_TRAILING",
+            "tp2_status": "MISSING",
+            "price_now": 103.0,
+            "tp2_price": 102.0,
+            "require_price_gate": True,
+            "set_tp2_synthetic": True,
+            "activate_trail": True,
+            "trail_qty": 0.15,
+            "cancel_order_ids": [222],
+        }
+        open_orders = [{"orderId": 222}, {"orderId": 333}]
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+            patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+            patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=103.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertFalse(st["position"].get("trail_active"))
+        self.assertFalse(st["position"].get("tp2_synthetic"))
+        self.assertEqual(st["position"].get("trail_pending_cancel_tp2"), 222)
+        self.assertEqual(st["position"].get("trail_pending_cancel_sl"), 333)
+        called = [c.args[1] for c in m_cancel.call_args_list]
+        self.assertIn(222, called)
+        self.assertIn(333, called)
+
+    def test_tp2_synthetic_trailing_phase_b_confirms_and_activates(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.2,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.05, "qty2": 0.05, "qty3": 0.1},
+                "trail_pending_cancel_tp2": 222,
+                "trail_pending_cancel_sl": 333,
+                "trail_cancel_next_s": 1000.0,
+            }
+        }
+        plan = {
+            "action": "ACTIVATE_SYNTHETIC_TRAILING",
+            "tp2_status": "MISSING",
+            "price_now": 103.0,
+            "tp2_price": 102.0,
+            "require_price_gate": True,
+            "set_tp2_synthetic": True,
+            "activate_trail": True,
+            "trail_qty": 0.15,
+            "cancel_order_ids": [222],
+        }
+        with patch.object(executor, "_now_s", return_value=1011.0), \
+            patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=103.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertTrue(st["position"].get("trail_active"))
+        self.assertTrue(st["position"].get("tp2_synthetic"))
+        self.assertIsNone(st["position"].get("trail_pending_cancel_tp2"))
+        self.assertIsNone(st["position"].get("trail_pending_cancel_sl"))
+
+    def test_tp2_synthetic_trailing_waits_for_sl_cancel(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.2,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.05, "qty2": 0.05, "qty3": 0.1},
+                "trail_pending_cancel_tp2": 222,
+                "trail_pending_cancel_sl": 333,
+                "trail_cancel_next_s": 1000.0,
+            }
+        }
+        plan = {
+            "action": "ACTIVATE_SYNTHETIC_TRAILING",
+            "tp2_status": "MISSING",
+            "price_now": 103.0,
+            "tp2_price": 102.0,
+            "require_price_gate": True,
+            "set_tp2_synthetic": True,
+            "activate_trail": True,
+            "trail_qty": 0.15,
+            "cancel_order_ids": [222],
+        }
+        open_orders = [{"orderId": 333}]
+        with patch.object(executor, "_now_s", return_value=1011.0), \
+            patch.object(executor.binance_api, "open_orders", return_value=open_orders), \
+            patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})) as m_cancel, \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=103.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertFalse(st["position"].get("trail_active"))
+        self.assertTrue(st["position"].get("trail_pending_cancel_tp2"))
+        self.assertTrue(st["position"].get("trail_pending_cancel_sl"))
+        called = [c.args[1] for c in m_cancel.call_args_list]
+        self.assertIn(222, called)
+        self.assertIn(333, called)
+
+    def test_tp2_synthetic_trailing_clamps_trail_qty_to_remaining(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.05,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.02, "qty2": 0.02, "qty3": 0.01},
+                "trail_pending_cancel_tp2": 222,
+                "trail_pending_cancel_sl": 333,
+                "trail_cancel_next_s": 1000.0,
+            }
+        }
+        plan = {
+            "action": "ACTIVATE_SYNTHETIC_TRAILING",
+            "tp2_status": "MISSING",
+            "price_now": 103.0,
+            "tp2_price": 102.0,
+            "require_price_gate": True,
+            "set_tp2_synthetic": True,
+            "activate_trail": True,
+            "trail_qty": 0.2,
+            "cancel_order_ids": [222],
+        }
+        with patch.object(executor, "_now_s", return_value=1011.0), \
+            patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=103.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertTrue(st["position"].get("trail_active"))
+        self.assertEqual(st["position"].get("trail_qty"), 0.05)
+
     def test_recon_preserves_exit_ids_open(self):
         st = {
             "position": {

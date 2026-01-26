@@ -862,6 +862,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
     # During OPEN_FILLED, rely on place_order responses + retries, not polling
     orders = []
+    open_orders_ok = False
     if pos.get("status") == "OPEN":
         pos.pop("openorders_skip_logged", None)
         snapshot = get_snapshot()
@@ -889,6 +890,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 st["position"] = pos
                 save_state(st)
                 log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
+        open_orders_ok = bool(snapshot.ok)
     else:
         # OPEN_FILLED: skip openOrders polling (log once per position to avoid spam)
         if not pos.get("openorders_skip_logged"):
@@ -2287,36 +2289,120 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     send_webhook({"event": "TP2_MISSING_GATE_REJECTED", "mode": "live", "symbol": symbol, **payload})
                     return
 
-            pend_sl = int(pos.get("trail_pending_cancel_sl") or 0)
-            if pend_sl:
-                od_p = None
+            cancel_ids = tp_plan.get("cancel_order_ids") or []
+            tp2_id = int((pos.get("orders") or {}).get("tp2") or 0)
+            if cancel_ids:
                 with suppress(Exception):
-                    od_p = binance_api.check_order_status(symbol, pend_sl)
-                st_p = str((od_p or {}).get("status", "")).upper()
-                if st_p == "FILLED":
-                    _finalize_close("SL")
-                    return
-                if st_p not in ("CANCELED", "REJECTED", "EXPIRED"):
-                    return
-                pos["trail_pending_cancel_sl"] = 0
-                pos.setdefault("orders", {})["sl"] = 0
-                st["position"] = pos
-                save_state(st)
-
+                    tp2_id = int(cancel_ids[0])
             sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-            if sl_id:
-                _cancel_ignore_unknown(sl_id)
-                pos["trail_pending_cancel_sl"] = sl_id
+
+            pend_tp2 = int(pos.get("trail_pending_cancel_tp2") or 0)
+            pend_sl = int(pos.get("trail_pending_cancel_sl") or 0)
+            tp2_eff = tp2_id or pend_tp2
+            sl_eff = sl_id or pend_sl
+            next_check_s = float(pos.get("trail_cancel_next_s") or 0.0)
+            need_throttle = (pend_tp2 or pend_sl) and (now_s < next_check_s)
+
+            def _order_confirmed_inactive(order_id: int, pending_id: int) -> tuple[bool, str]:
+                if not order_id:
+                    return True, "NO_ID"
+                if open_orders_ok and order_id in open_ids:
+                    return False, "OPEN_ORDERS"
+                try:
+                    od = binance_api.check_order_status(symbol, order_id)
+                    st_o = str((od or {}).get("status", "")).upper()
+                except Exception as e:
+                    if _is_unknown_order_error(e) and pending_id:
+                        return True, "NOT_FOUND"
+                    return False, f"ERROR:{e}"
+                if st_o in ("CANCELED", "REJECTED", "EXPIRED", "FILLED"):
+                    return True, st_o or "INACTIVE"
+                return False, st_o or "UNKNOWN"
+
+            if need_throttle:
+                return
+
+            if not pend_tp2 and not pend_sl:
+                if not tp2_eff:
+                    log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="tp2_id_missing")
+                    send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "tp2_id_missing"})
+                    return
+                _cancel_ignore_unknown(tp2_eff)
+                pos["trail_pending_cancel_tp2"] = tp2_eff
+                if sl_eff:
+                    _cancel_ignore_unknown(sl_eff)
+                    pos["trail_pending_cancel_sl"] = sl_eff
+                    log_event("TP2_SYNTHETIC_TRAIL_CANCEL_SL", mode="live", order_id_sl=sl_eff)
+                pos["trail_cancel_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
                 st["position"] = pos
                 save_state(st)
-                log_event("TP2_SYNTHETIC_TRAIL_CANCEL_SL", mode="live", order_id_sl=sl_id)
                 return
+
+            tp2_inactive, tp2_reason = _order_confirmed_inactive(tp2_eff, pend_tp2)
+            if tp2_reason.startswith("ERROR"):
+                pos["trail_activation_uncertain_count"] = int(pos.get("trail_activation_uncertain_count") or 0) + 1
+                pos["trail_activation_uncertain_last_s"] = now_s
+                st["position"] = pos
+                _save_state_best_effort("trail_activation_uncertain_tp2")
+                if pos["trail_activation_uncertain_count"] >= 3:
+                    log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", order_id_tp2=tp2_eff, error=tp2_reason)
+                    send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "order_id_tp2": tp2_eff, "error": tp2_reason})
+                return
+
+            sl_inactive, sl_reason = _order_confirmed_inactive(sl_eff, pend_sl)
+            if sl_reason.startswith("ERROR"):
+                pos["trail_activation_uncertain_count"] = int(pos.get("trail_activation_uncertain_count") or 0) + 1
+                pos["trail_activation_uncertain_last_s"] = now_s
+                st["position"] = pos
+                _save_state_best_effort("trail_activation_uncertain_sl")
+                if pos["trail_activation_uncertain_count"] >= 3:
+                    log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", order_id_sl=sl_eff, error=sl_reason)
+                    send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "order_id_sl": sl_eff, "error": sl_reason})
+                return
+
+            if sl_reason == "FILLED":
+                _finalize_close("SL")
+                return
+
+            if not tp2_inactive or not sl_inactive:
+                if tp2_eff:
+                    _cancel_ignore_unknown(tp2_eff)
+                    pos["trail_pending_cancel_tp2"] = tp2_eff
+                if sl_eff:
+                    _cancel_ignore_unknown(sl_eff)
+                    pos["trail_pending_cancel_sl"] = sl_eff
+                    log_event("TP2_SYNTHETIC_TRAIL_CANCEL_SL", mode="live", order_id_sl=sl_eff)
+                pos["trail_cancel_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+                st["position"] = pos
+                save_state(st)
+                return
+
+            orders_map = pos.get("orders") or {}
+            try:
+                qty1 = float(orders_map.get("qty1") or 0.0)
+                qty2 = float(orders_map.get("qty2") or 0.0)
+                qty3 = float(orders_map.get("qty3") or 0.0)
+            except (TypeError, ValueError):
+                qty1 = qty2 = qty3 = 0.0
+            remaining_qty_f = (qty2 + qty3) if pos.get("tp1_done") else (qty1 + qty2 + qty3)
+            if remaining_qty_f is None or remaining_qty_f <= 0.0:
+                log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="remaining_qty_missing", remaining_qty=remaining_qty_f)
+                send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "remaining_qty_missing", "remaining_qty": remaining_qty_f})
+                return
+
+            trail_qty_plan = float(tp_plan.get("trail_qty") or 0.0)
+            trail_qty = min(trail_qty_plan, remaining_qty_f)
 
             if tp_plan.get("set_tp2_synthetic"):
                 pos["tp2_synthetic"] = True
             if tp_plan.get("activate_trail"):
                 pos["trail_active"] = True
-                pos["trail_qty"] = float(tp_plan.get("trail_qty") or 0.0)
+                pos["trail_qty"] = trail_qty
+            pos.pop("trail_pending_cancel_tp2", None)
+            pos.pop("trail_pending_cancel_sl", None)
+            pos.pop("trail_cancel_next_s", None)
+            pos.pop("trail_activation_uncertain_count", None)
+            pos.pop("trail_activation_uncertain_last_s", None)
             st["position"] = pos
             _save_state_best_effort("tp2_synthetic_trailing")
             log_event("TP2_SYNTHETIC_TRAILING_ACTIVATED", mode="live", trail_qty=pos.get("trail_qty"))
