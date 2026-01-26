@@ -2377,6 +2377,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 save_state(st)
                 return
 
+            try:
+                remaining_qty_f = float(pos.get("trail_qty_safe") or 0.0)
+            except (TypeError, ValueError):
+                remaining_qty_f = 0.0
             orders_map = pos.get("orders") or {}
             try:
                 qty1 = float(orders_map.get("qty1") or 0.0)
@@ -2384,7 +2388,33 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 qty3 = float(orders_map.get("qty3") or 0.0)
             except (TypeError, ValueError):
                 qty1 = qty2 = qty3 = 0.0
-            remaining_qty_f = (qty2 + qty3) if pos.get("tp1_done") else (qty1 + qty2 + qty3)
+            remaining_from_orders = (qty2 + qty3) if pos.get("tp1_done") else (qty1 + qty2 + qty3)
+            if (remaining_qty_f <= 0.0) and (pend_tp2 or pend_sl):
+                remaining_qty_f = remaining_from_orders
+                if remaining_qty_f <= 0.0:
+                    try:
+                        remaining_qty_f = float(pos.get("qty") or 0.0)
+                    except (TypeError, ValueError):
+                        remaining_qty_f = 0.0
+                    if remaining_qty_f > 0.0 and pos.get("tp1_done"):
+                        fills = orders_map.get("fills")
+                        tp1_fill = fills.get("tp1") if isinstance(fills, dict) else {}
+                        try:
+                            tp1_exec = float((tp1_fill or {}).get("executedQty") or 0.0)
+                        except (TypeError, ValueError):
+                            tp1_exec = 0.0
+                        remaining_qty_f = max(0.0, remaining_qty_f - tp1_exec)
+                if remaining_qty_f > 0.0:
+                    pos["trail_qty_safe"] = remaining_qty_f
+                else:
+                    log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="trail_qty_safe_missing", remaining_qty=remaining_qty_f)
+                    send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "trail_qty_safe_missing", "remaining_qty": remaining_qty_f})
+                    pos.pop("trail_pending_cancel_tp2", None)
+                    pos.pop("trail_pending_cancel_sl", None)
+                    pos.pop("trail_cancel_next_s", None)
+                    st["position"] = pos
+                    _save_state_best_effort("trail_activation_qty_missing")
+                    return
             if remaining_qty_f is None or remaining_qty_f <= 0.0:
                 log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="remaining_qty_missing", remaining_qty=remaining_qty_f)
                 send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "remaining_qty_missing", "remaining_qty": remaining_qty_f})
@@ -2401,6 +2431,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             pos.pop("trail_pending_cancel_tp2", None)
             pos.pop("trail_pending_cancel_sl", None)
             pos.pop("trail_cancel_next_s", None)
+            pos.pop("trail_qty_safe", None)
             pos.pop("trail_activation_uncertain_count", None)
             pos.pop("trail_activation_uncertain_last_s", None)
             st["position"] = pos

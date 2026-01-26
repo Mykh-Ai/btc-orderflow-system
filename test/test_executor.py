@@ -378,6 +378,57 @@ class TestExecutorV15(unittest.TestCase):
         self.assertTrue(st["position"].get("trail_active"))
         self.assertEqual(st["position"].get("trail_qty"), 0.05)
 
+    def test_tp2_synthetic_trailing_recomputes_missing_trail_qty_safe(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.05,
+                "tp1_done": False,
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333, "qty1": 0.02, "qty2": 0.02, "qty3": 0.01},
+                "trail_pending_cancel_tp2": 222,
+                "trail_pending_cancel_sl": 333,
+                "trail_cancel_next_s": 1000.0,
+            }
+        }
+        plan = {
+            "action": "ACTIVATE_SYNTHETIC_TRAILING",
+            "tp2_status": "MISSING",
+            "price_now": 103.0,
+            "tp2_price": 102.0,
+            "require_price_gate": True,
+            "set_tp2_synthetic": True,
+            "activate_trail": True,
+            "trail_qty": 0.2,
+            "cancel_order_ids": [222],
+        }
+
+        def _fake_status(_symbol, oid):
+            if int(oid) in (222, 333):
+                return {"status": "CANCELED"}
+            return {"status": "CANCELED"}
+
+        with patch.object(executor, "_now_s", return_value=1011.0), \
+            patch.object(executor.binance_api, "open_orders", return_value=[]), \
+            patch.object(executor.binance_api, "check_order_status", side_effect=_fake_status), \
+            patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+            patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=plan), \
+            patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+            patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=103.0)), \
+            patch.object(executor, "save_state", lambda *_: None), \
+            patch.object(executor, "send_webhook", lambda *_: None), \
+            patch.object(executor, "log_event", lambda *_ , **__: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertTrue(st["position"].get("trail_active"))
+        self.assertIsNone(st["position"].get("trail_qty_safe"))
+        self.assertEqual(st["position"].get("trail_qty"), 0.05)
+        self.assertIsNone(st["position"].get("trail_pending_cancel_tp2"))
+        self.assertIsNone(st["position"].get("trail_pending_cancel_sl"))
+        self.assertIsNone(st["position"].get("trail_cancel_next_s"))
+
     def test_recon_preserves_exit_ids_open(self):
         st = {
             "position": {
