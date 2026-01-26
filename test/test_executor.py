@@ -122,24 +122,35 @@ class TestExecutorV15(unittest.TestCase):
             return {"status": "NEW"}
 
         log_calls = []
+        webhook_calls = []
         def fake_log(event, *args, **kwargs):
             log_calls.append(event)
+        def capture_webhook(payload):
+            webhook_calls.append(payload)
 
         with patch.object(executor, "_now_s", return_value=1000.0), \
              patch.object(executor.binance_api, "open_orders", return_value=[]), \
              patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
              patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})), \
              patch.object(executor, "save_state", lambda *_: None), \
-             patch.object(executor, "send_webhook", lambda *_: None), \
              patch.object(executor, "log_event", side_effect=fake_log), \
-             patch.object(notifications, "log_event", side_effect=fake_log):
+             patch.object(notifications, "log_event", side_effect=fake_log), \
+             patch.object(executor, "send_webhook", side_effect=capture_webhook), \
+             patch.object(notifications, "send_webhook", side_effect=capture_webhook):
 
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
         self.assertIsNone(st["position"])
         self.assertIn(333, status_calls)
         self.assertNotIn(444, status_calls)
-        self.assertIn("TRADE_CLOSED", log_calls)
+        self.assertIn("SL_DONE", log_calls)
+        self.assertTrue(
+            any(
+                isinstance(payload, dict) and payload.get("event") == "TRADE_CLOSED"
+                for payload in webhook_calls
+            ),
+            "Expected TRADE_CLOSED webhook payload",
+        )
         tp1_be_events = [event for event in log_calls if isinstance(event, str) and event.startswith("TP1_BE_")]
         self.assertEqual(tp1_be_events, [])
 
