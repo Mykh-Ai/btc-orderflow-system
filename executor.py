@@ -2323,6 +2323,99 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 return
 
             if not pend_tp2 and not pend_sl:
+                orders_map = pos.get("orders") or {}
+                qty1_raw = orders_map.get("qty1")
+                qty2_raw = orders_map.get("qty2")
+                qty3_raw = orders_map.get("qty3")
+                leg_qty_missing = (qty1_raw is None) or (qty2_raw is None) or (qty3_raw is None)
+                tp1_done = bool(pos.get("tp1_done"))
+                tp2_done = bool(pos.get("tp2_done"))
+                base_qty_f = 0.0
+                with suppress(Exception):
+                    base_qty_f = float(pos.get("qty") or 0.0)
+                if leg_qty_missing and base_qty_f <= 0.0:
+                    log_event(
+                        "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                        mode="live",
+                        reason="remaining_qty_uncertain_pre_cancel",
+                        base_qty=base_qty_f,
+                        filled_qty=0.0,
+                        tp1_done=tp1_done,
+                    )
+                    send_webhook({
+                        "event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                        "mode": "live",
+                        "symbol": symbol,
+                        "reason": "remaining_qty_uncertain_pre_cancel",
+                        "base_qty": base_qty_f,
+                        "filled_qty": 0.0,
+                        "tp1_done": tp1_done,
+                    })
+                    return
+                try:
+                    qty1 = float(qty1_raw or 0.0)
+                    qty2 = float(qty2_raw or 0.0)
+                    qty3 = float(qty3_raw or 0.0)
+                except (TypeError, ValueError):
+                    qty1 = qty2 = qty3 = 0.0
+                remaining_qty_f = 0.0
+                filled_qty = 0.0
+                if leg_qty_missing:
+                    fills = orders_map.get("fills") if isinstance(orders_map.get("fills"), dict) else {}
+                    if isinstance(fills, dict):
+                        for leg in ("tp1", "tp2"):
+                            leg_fill = fills.get(leg)
+                            if not isinstance(leg_fill, dict):
+                                continue
+                            with suppress(Exception):
+                                exec_qty = float(leg_fill.get("executedQty") or 0.0)
+                                if exec_qty > 0.0:
+                                    filled_qty += exec_qty
+                    if filled_qty > 0.0:
+                        remaining_qty_f = max(base_qty_f - filled_qty, 0.0)
+                    elif tp1_done:
+                        log_event(
+                            "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                            mode="live",
+                            reason="remaining_qty_uncertain_pre_cancel",
+                            base_qty=base_qty_f,
+                            filled_qty=filled_qty,
+                            tp1_done=tp1_done,
+                        )
+                        send_webhook({
+                            "event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                            "mode": "live",
+                            "symbol": symbol,
+                            "reason": "remaining_qty_uncertain_pre_cancel",
+                            "base_qty": base_qty_f,
+                            "filled_qty": filled_qty,
+                            "tp1_done": tp1_done,
+                        })
+                        return
+                    else:
+                        remaining_qty_f = base_qty_f
+                else:
+                    remaining_qty_f = (qty2 + qty3) if tp1_done else (qty1 + qty2 + qty3)
+                if remaining_qty_f <= 0.0:
+                    log_event(
+                        "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                        mode="live",
+                        reason="remaining_qty_uncertain_pre_cancel",
+                        base_qty=base_qty_f,
+                        filled_qty=filled_qty,
+                        tp1_done=tp1_done,
+                    )
+                    send_webhook({
+                        "event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_QTY",
+                        "mode": "live",
+                        "symbol": symbol,
+                        "reason": "remaining_qty_uncertain_pre_cancel",
+                        "base_qty": base_qty_f,
+                        "filled_qty": filled_qty,
+                        "tp1_done": tp1_done,
+                    })
+                    return
+                pos["trail_qty_safe"] = remaining_qty_f
                 if not tp2_eff:
                     log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="tp2_id_missing")
                     send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "tp2_id_missing"})
@@ -2377,19 +2470,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 save_state(st)
                 return
 
-            orders_map = pos.get("orders") or {}
-            try:
-                qty1 = float(orders_map.get("qty1") or 0.0)
-                qty2 = float(orders_map.get("qty2") or 0.0)
-                qty3 = float(orders_map.get("qty3") or 0.0)
-            except (TypeError, ValueError):
-                qty1 = qty2 = qty3 = 0.0
-            remaining_qty_f = (qty2 + qty3) if pos.get("tp1_done") else (qty1 + qty2 + qty3)
-            if remaining_qty_f is None or remaining_qty_f <= 0.0:
-                log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="remaining_qty_missing", remaining_qty=remaining_qty_f)
-                send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "remaining_qty_missing", "remaining_qty": remaining_qty_f})
+            remaining_qty_f = float(pos.get("trail_qty_safe") or 0.0)
+            if remaining_qty_f <= 0.0:
+                log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="trail_qty_safe_missing", remaining_qty=remaining_qty_f)
+                send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "trail_qty_safe_missing", "remaining_qty": remaining_qty_f})
                 return
-
             trail_qty_plan = float(tp_plan.get("trail_qty") or 0.0)
             trail_qty = min(trail_qty_plan, remaining_qty_f)
 
@@ -2401,6 +2486,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             pos.pop("trail_pending_cancel_tp2", None)
             pos.pop("trail_pending_cancel_sl", None)
             pos.pop("trail_cancel_next_s", None)
+            pos.pop("trail_qty_safe", None)
             pos.pop("trail_activation_uncertain_count", None)
             pos.pop("trail_activation_uncertain_last_s", None)
             st["position"] = pos
