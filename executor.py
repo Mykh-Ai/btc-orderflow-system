@@ -1323,7 +1323,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     next_cleanup_s=next_cleanup,
                     wait_sec=max(0.0, next_cleanup - now_s),
                 )
-            # Do not return: allow SL/TP reconciliation while cleanup is throttled.
+            # Skip SL/TP/watchdog actions while cleanup is throttled.
+            return
         if now_s >= next_cleanup:
             retry_ids = pos.get("exit_cleanup_order_ids") or []
             failed_ids: List[int] = []
