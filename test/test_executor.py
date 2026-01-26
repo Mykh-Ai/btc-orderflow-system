@@ -267,6 +267,9 @@ class TestExecutorV15(unittest.TestCase):
             if int(oid) in (222, 333):
                 return {"status": "CANCELED"}
             return {"status": "CANCELED"}
+        self.assertEqual(st["position"].get("trail_pending_cancel_tp2"), 222)
+        self.assertEqual(st["position"].get("trail_pending_cancel_sl"), 333)
+        self.assertEqual(st["position"].get("trail_cancel_next_s"), 1000.0)
         with patch.object(executor, "_now_s", return_value=1011.0), \
             patch.object(executor.binance_api, "open_orders", return_value=[]), \
             patch.object(executor.binance_api, "check_order_status", side_effect=_fake_status), \
@@ -283,6 +286,8 @@ class TestExecutorV15(unittest.TestCase):
         self.assertTrue(st["position"].get("tp2_synthetic"))
         self.assertIsNone(st["position"].get("trail_pending_cancel_tp2"))
         self.assertIsNone(st["position"].get("trail_pending_cancel_sl"))
+        self.assertIsNone(st["position"].get("trail_cancel_next_s"))
+        self.assertIsNone(st["position"].get("trail_qty_safe"))
 
     def test_tp2_synthetic_trailing_waits_for_sl_cancel(self):
         st = {
@@ -377,6 +382,10 @@ class TestExecutorV15(unittest.TestCase):
 
         self.assertTrue(st["position"].get("trail_active"))
         self.assertEqual(st["position"].get("trail_qty"), 0.05)
+        self.assertIsNone(st["position"].get("trail_qty_safe"))
+        self.assertIsNone(st["position"].get("trail_pending_cancel_tp2"))
+        self.assertIsNone(st["position"].get("trail_pending_cancel_sl"))
+        self.assertIsNone(st["position"].get("trail_cancel_next_s"))
 
     def test_tp2_synthetic_trailing_recomputes_missing_trail_qty_safe(self):
         st = {
@@ -409,6 +418,10 @@ class TestExecutorV15(unittest.TestCase):
             if int(oid) in (222, 333):
                 return {"status": "CANCELED"}
             return {"status": "CANCELED"}
+        self.assertEqual(st["position"].get("trail_pending_cancel_tp2"), 222)
+        self.assertEqual(st["position"].get("trail_pending_cancel_sl"), 333)
+        self.assertEqual(st["position"].get("trail_cancel_next_s"), 1000.0)
+        self.assertIsNone(st["position"].get("trail_qty_safe"))
 
         with patch.object(executor, "_now_s", return_value=1011.0), \
             patch.object(executor.binance_api, "open_orders", return_value=[]), \
