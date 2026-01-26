@@ -112,8 +112,8 @@ def _prepare_plan_for_borrow(
                     # Use price snapshot (throttled) to reduce API calls
                     min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
                     if api_client and hasattr(api_client, "get_mid_price"):
-                        snapshot = price_snapshot.get_price_snapshot()
                         price_snapshot.refresh_price_snapshot(symbol, "margin_borrow", api_client.get_mid_price, min_interval)
+                        snapshot = price_snapshot.get_price_snapshot()
                         if snapshot.ok:
                             mid_price = float(snapshot.price_mid)
                             borrow_amount = float(qty or 0.0) * float(mid_price)

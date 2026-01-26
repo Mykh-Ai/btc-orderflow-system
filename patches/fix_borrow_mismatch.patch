@@ -1,0 +1,70 @@
+diff --git a/executor_mod/margin_guard.py b/executor_mod/margin_guard.py
+index 30583ef..226325c 100644
+--- a/executor_mod/margin_guard.py
++++ b/executor_mod/margin_guard.py
+@@ -112,8 +112,8 @@ def _prepare_plan_for_borrow(
+                     # Use price snapshot (throttled) to reduce API calls
+                     min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
+                     if api_client and hasattr(api_client, "get_mid_price"):
+-                        snapshot = price_snapshot.get_price_snapshot()
+                         price_snapshot.refresh_price_snapshot(symbol, "margin_borrow", api_client.get_mid_price, min_interval)
++                        snapshot = price_snapshot.get_price_snapshot()
+                         if snapshot.ok:
+                             mid_price = float(snapshot.price_mid)
+                             borrow_amount = float(qty or 0.0) * float(mid_price)
+diff --git a/test/test_margin_guard.py b/test/test_margin_guard.py
+index 6949d33..16b5260 100644
+--- a/test/test_margin_guard.py
++++ b/test/test_margin_guard.py
+@@ -1,5 +1,6 @@
+ # test/test_margin_guard.py
+ import unittest
++from types import SimpleNamespace
+ from unittest.mock import Mock, patch
+ 
+ import executor_mod.margin_guard as mg
+@@ -113,6 +114,44 @@ class TestMarginGuard(unittest.TestCase):
+         self.assertEqual(plan_use["borrow_asset"], "USDC")
+         self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45, places=8)
+ 
++    def test_prepare_plan_for_borrow_long_snapshot_refresh_used(self):
++        state = {}
++        symbol = "BTCUSDC"
++        side = "BUY"
++        qty = 0.03
++        plan = {"trade_key": "T2A"}  # no entry/price
++
++        refresh_state = {"refreshed": False}
++
++        def mock_refresh(*_args, **_kwargs):
++            refresh_state["refreshed"] = True
++
++        def mock_snapshot():
++            if refresh_state["refreshed"]:
++                return SimpleNamespace(ok=True, price_mid=250.0)
++            return SimpleNamespace(ok=False, price_mid=0.0)
++
++        with patch.object(mg.price_snapshot, "refresh_price_snapshot", side_effect=mock_refresh), \
++             patch.object(mg.price_snapshot, "get_price_snapshot", side_effect=mock_snapshot):
++            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
++
++        self.assertEqual(plan_use["borrow_asset"], "USDC")
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0, places=8)
++
++    def test_prepare_plan_for_borrow_long_snapshot_still_not_ok(self):
++        state = {}
++        symbol = "BTCUSDC"
++        side = "BUY"
++        qty = 0.03
++        plan = {"trade_key": "T2B"}  # no entry/price
++
++        with patch.object(mg.price_snapshot, "refresh_price_snapshot", return_value=None), \
++             patch.object(mg.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=False, price_mid=0.0)):
++            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
++
++        self.assertEqual(plan_use["borrow_asset"], "USDC")
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.0, places=12)
++
+     def test_prepare_plan_for_borrow_short_derives_base_asset_and_amount_from_qty(self):
+         """
+         SELL BTCUSDC:
