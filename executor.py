@@ -1383,9 +1383,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     sl_id = int(pos["orders"].get("sl") or 0)
     sl_prev = int(pos["orders"].get("sl_prev") or 0)
 
+    # Cleanup throttling: block active mutations but allow passive reconciliation
+    cleanup_throttled = False
     if pos.get("exit_cleanup_pending"):
         next_cleanup = float(pos.get("exit_cleanup_next_s") or 0.0)
         if now_s < next_cleanup:
+            cleanup_throttled = True
             next_log = float(pos.get("exit_cleanup_wait_log_next_s") or 0.0)
             if now_s >= next_log:
                 pos["exit_cleanup_wait_log_next_s"] = now_s + 30.0
@@ -1432,7 +1435,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # Якщо після TP1 ми замінили SL на BE, але старий SL не скасувався (або cancel впав),
     # то треба повторювати cancel best-effort раз на N секунд (без перевірки openOrders).
-    if sl_prev and pos.get("tp1_done"):
+    if sl_prev and pos.get("tp1_done") and (not cleanup_throttled):
         now_s = _now_s()
         next_s = float(pos.get("sl_prev_next_cancel_s") or 0.0)
         if now_s >= next_s:
@@ -1528,7 +1531,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 with suppress(Exception):
                     tp1_filled_now = _status_is_filled(tp1_id)
             open_qty = qty3 if tp1_filled_now else (qty1 + qty3)
-            if ENV.get("TRAIL_ACTIVATE_AFTER_TP2", True) and open_qty > 0.0:
+            if ENV.get("TRAIL_ACTIVATE_AFTER_TP2", True) and open_qty > 0.0 and (not cleanup_throttled):
 
                 # cancel TP1 best-effort (should already be filled, but do not assume)
                 if tp1_id:
@@ -1690,7 +1693,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 log_event("TP2_NOT_FILLED", mode="live", order_id_tp2=tp2_id)
 
     # Trailing SL maintenance (after TP2) — emulate trailing by cancel/replace, prefer aggregated.csv swings
-    if pos.get("trail_active"):
+    if pos.get("trail_active") and (not cleanup_throttled):
         last_u = float(pos.get("trail_last_update_s") or 0.0)
         every = float(ENV.get("TRAIL_UPDATE_EVERY_SEC") or 20)
         if now_s - last_u >= every:
@@ -2037,7 +2040,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 return
 
             close_side = str(plan.get("side") or "").upper()
-            if close_side in ("BUY", "SELL"):
+            if close_side in ("BUY", "SELL") and (not cleanup_throttled):
                 retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
                 if now_attempt - last_attempt >= retry_sec:
                     market_attempted = True
@@ -2254,7 +2257,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             plan_qty = float(tp_plan.get("qty") or 0.0)
             close_side = str(tp_plan.get("side") or "").upper()
 
-            if plan_qty > 0.0 and close_side in ("BUY", "SELL"):
+            if plan_qty > 0.0 and close_side in ("BUY", "SELL") and (not cleanup_throttled):
                 retry_sec = float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
                 last_attempt = float(pos.get("tp_watchdog_last_market_attempt_s") or 0.0)
 
@@ -2410,6 +2413,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 return
 
             if not pend_tp2 and not pend_sl:
+                if cleanup_throttled:
+                    return  # Defer cancel initiation until cleanup done
                 if not tp2_eff:
                     log_event("TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", mode="live", reason="tp2_id_missing")
                     send_webhook({"event": "TRAIL_ACTIVATION_BLOCKED_UNCERTAIN_TP2", "mode": "live", "symbol": symbol, "reason": "tp2_id_missing"})
@@ -2452,6 +2457,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 return
 
             if not tp2_inactive or not sl_inactive:
+                if cleanup_throttled:
+                    return  # Defer cancel retry until cleanup done
                 if tp2_eff:
                     _cancel_ignore_unknown(tp2_eff)
                     pos["trail_pending_cancel_tp2"] = tp2_eff
@@ -2638,7 +2645,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # BE state-machine: run independently after all watchdog operations
     # This transitions SL to break-even after TP1 FILLED (retries if needed)
-    if pos.get("tp1_be_pending"):
+    if pos.get("tp1_be_pending") and (not cleanup_throttled):
         _tp1_be_transition_tick()
 
 

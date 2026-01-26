@@ -1136,6 +1136,26 @@ MARGIN_BORROW_MODE=manual
 - **Throttling**: cleanup не спамить API через `CLOSE_CLEANUP_RETRY_SEC` (default 2s)
 - **Best-effort**: cleanup wrapped у `with suppress(Exception)` — ніколи не блокує close
 
+### 6a. Cleanup Throttling Contract (v2.2+)
+
+When `position.exit_cleanup_pending` is active and `now < exit_cleanup_next_s`, executor continues passive reconciliation (status polling / snapshot / recon-derived SL_DONE) and may finalize close when SL is confirmed filled.
+
+**Blocked (active mutations):**
+- `flatten_market` (SL/TP watchdog market fallback)
+- `cancel_order` / `_cancel_ignore_unknown` (trailing maintenance, synthetic trailing activation)
+- BE transition (`tp1_be_pending` tick)
+- Trail maintenance (`trail_active` cancel/replace SL)
+- `sl_prev` orphan cancel
+
+**NOT blocked (passive reconciliation):**
+- `check_order_status` polling (SL/TP status detection)
+- `exchange_snapshot` refresh (openOrders)
+- `price_snapshot` refresh (mid-price via bookTicker)
+- `_finalize_close()` / `_close_slot()` when SL confirmed FILLED
+- State transitions based on already-filled facts
+
+**Rationale**: avoids races and conflicting mutations while cancel-retry throttling is in progress; active actions resume after throttling window ends.
+
 ### 7. TP1→BE Safety (v2.2+)
 
 - **Max attempts**: `TP1_BE_MAX_ATTEMPTS` (default 5) запобігає infinite loops
