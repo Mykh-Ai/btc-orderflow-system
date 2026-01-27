@@ -1888,6 +1888,80 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     st["position"] = pos
                     _save_state_best_effort("sl_fill_update")
 
+    # ==================== TERMINAL DETECTION (SL FILLED) ====================
+    # CRITICAL: Must run FIRST before all watchdog operations.
+    # If SL is filled, finalize immediately and EXIT — no TP/trailing/BE should run.
+    
+    sl_id_terminal = int((pos.get("orders") or {}).get("sl") or 0)
+    if not sl_id_terminal and not pos.get("sl_done"):
+        # Fallback: check recon if SL ID is missing
+        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
+        sl_recon_status = str(recon.get("sl_status") or "").upper()
+        # Freshness gate: avoid stale recon closing the wrong slot
+        fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
+        ts = str(recon.get("sl_status_ts") or "")
+        is_fresh = False
+        if not ts:
+            # If ts is missing (common in tests / older states), treat as fresh enough.
+            is_fresh = True
+        else:
+            with suppress(Exception):
+                t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                is_fresh = (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
+
+        st_open = pos.get("status") in ("OPEN", "OPEN_FILLED")
+        if sl_recon_status == "FILLED" and is_fresh and st_open:
+            log_event("SL_FILLED_MISSING_ID_FALLBACK", mode="live", status=sl_recon_status)
+            send_webhook({"event": "SL_FILLED_MISSING_ID_FALLBACK", "mode": "live", "symbol": symbol, "status": sl_recon_status})
+            _finalize_close("SL", tag="SL_FILLED_MISSING_ID_FALLBACK")
+            return
+    
+    if sl_id_terminal and not pos.get("sl_done"):
+        poll_due = now_s >= float(pos.get("sl_status_next_s") or 0.0)
+
+        # Do not gate FILLED detection on openOrders/open_ids; throttle via sl_status_next_s
+        if poll_due or (not orders):
+            pos["sl_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
+            sl_status = ""
+            if isinstance(sl_status_payload, dict):
+                sl_status = str(sl_status_payload.get("status", "")).upper()
+            status_norm = sl_status or "UNKNOWN"
+            last_status = str(pos.get("sl_last_status_logged") or "")
+            if status_norm != last_status:
+                pos["sl_last_status_logged"] = status_norm
+                st["position"] = pos
+                try:
+                    save_state(st)   # best-effort, не ламає цикл
+                except Exception:
+                    pass
+                log_event(
+                    "SL_STATUS_POLL",
+                    mode="live",
+                    order_id_sl=sl_id_terminal,
+                    source=sl_status_source,
+                    status=status_norm,
+                )
+            sl_filled = sl_status == "FILLED" if sl_status else _status_is_filled(sl_id_terminal)
+
+            if sl_filled:
+                pos["sl_done"] = True
+                st["position"] = pos
+                save_state(st)
+                log_event("SL_DONE", mode="live", order_id_sl=sl_id_terminal)
+                send_webhook({"event": "SL_DONE", "mode": "live", "symbol": symbol})
+                _finalize_close("SL", tag="SL_FILLED")
+                return
+            else:
+                miss = pos.setdefault("missing_not_filled", {})
+                key = f"sl:{sl_id_terminal}"
+                if not miss.get(key):
+                    miss[key] = iso_utc()
+                    st["position"] = pos
+                    save_state(st)
+                    log_event("SL_NOT_FILLED", mode="live", order_id_sl=sl_id_terminal)
+
+    # ==================== END TERMINAL DETECTION ====================
+
     # SL watchdog only active when status == "OPEN" (entry filled, exits not yet tracked as filled)
     status = str(pos.get("status") or "").strip().upper()
     plan = None
@@ -2584,73 +2658,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
         st["position"] = pos
         _save_state_best_effort("tp_watchdog_complete")
-
-    # SL filled -> close slot
-    sl_id2 = int((pos.get("orders") or {}).get("sl") or 0)
-    if not sl_id2 and not pos.get("sl_done"):
-        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
-        sl_recon_status = str(recon.get("sl_status") or "").upper()
-        # Freshness gate: avoid stale recon closing the wrong slot
-        fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
-        ts = str(recon.get("sl_status_ts") or "")
-        is_fresh = False
-        if not ts:
-            # If ts is missing (common in tests / older states), treat as fresh enough.
-            is_fresh = True
-        else:
-            with suppress(Exception):
-                t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                is_fresh = (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
-
-        st_open = pos.get("status") in ("OPEN", "OPEN_FILLED")
-        if sl_recon_status == "FILLED" and is_fresh and st_open:
-            log_event("SL_FILLED_MISSING_ID_FALLBACK", mode="live", status=sl_recon_status)
-            send_webhook({"event": "SL_FILLED_MISSING_ID_FALLBACK", "mode": "live", "symbol": symbol, "status": sl_recon_status})
-            _finalize_close("SL", tag="SL_FILLED_MISSING_ID_FALLBACK")
-            return
-    if sl_id2 and not pos.get("sl_done"):
-        poll_due = now_s >= float(pos.get("sl_status_next_s") or 0.0)
-
-        # Do not gate FILLED detection on openOrders/open_ids; throttle via sl_status_next_s
-        if poll_due or (not orders):
-            pos["sl_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
-            sl_status = ""
-            if isinstance(sl_status_payload, dict):
-                sl_status = str(sl_status_payload.get("status", "")).upper()
-            status_norm = sl_status or "UNKNOWN"
-            last_status = str(pos.get("sl_last_status_logged") or "")
-            if status_norm != last_status:
-                pos["sl_last_status_logged"] = status_norm
-                st["position"] = pos
-                try:
-                    save_state(st)   # best-effort, не ламає цикл
-                except Exception:
-                    pass
-                log_event(
-                    "SL_STATUS_POLL",
-                    mode="live",
-                    order_id_sl=sl_id2,
-                    source=sl_status_source,
-                    status=status_norm,
-                )
-            sl_filled = sl_status == "FILLED" if sl_status else _status_is_filled(sl_id2)
-
-            if sl_filled:
-                pos["sl_done"] = True
-                st["position"] = pos
-                save_state(st)
-                log_event("SL_DONE", mode="live", order_id_sl=sl_id2)
-                send_webhook({"event": "SL_DONE", "mode": "live", "symbol": symbol})
-                _finalize_close("SL", tag="SL_FILLED")
-                return
-            else:
-                miss = pos.setdefault("missing_not_filled", {})
-                key = f"sl:{sl_id2}"
-                if not miss.get(key):
-                    miss[key] = iso_utc()
-                    st["position"] = pos
-                    save_state(st)
-                    log_event("SL_NOT_FILLED", mode="live", order_id_sl=sl_id2)
 
     # BE state-machine: run independently after all watchdog operations
     # This transitions SL to break-even after TP1 FILLED (retries if needed)

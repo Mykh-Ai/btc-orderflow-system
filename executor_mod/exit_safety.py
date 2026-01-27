@@ -344,6 +344,11 @@ def tp_watchdog_tick(
     if status not in ("OPEN", "OPEN_FILLED"):
         return None
 
+    # CRITICAL: If SL is filled (sl_done=True), position is closing/closed.
+    # Do NOT activate TP actions — finalization takes priority.
+    if pos.get("sl_done"):
+        return None
+
     orders = pos.get("orders") or {}
     tp1_id = orders.get("tp1")
     tp2_id = orders.get("tp2")
