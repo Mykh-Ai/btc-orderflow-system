@@ -154,6 +154,58 @@ class TestExecutorV15(unittest.TestCase):
         tp1_be_events = [event for event in log_calls if isinstance(event, str) and event.startswith("TP1_BE_")]
         self.assertEqual(tp1_be_events, [])
 
+    def test_sl_status_poll_logs_only_on_change_open_orders(self):
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.1,
+                           "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                           "orders": {"tp1": 111, "tp2": 222, "sl": 333}}}
+
+        sl_new = {"orderId": 333, "status": "NEW", "executedQty": "0.0", "origQty": "0.1"}
+        sl_filled = {"orderId": 333, "status": "FILLED", "executedQty": "0.1", "origQty": "0.1"}
+        open_orders_payloads = [ [sl_new], [sl_new], [sl_filled] ]
+        open_orders_calls = {"n": 0}
+
+        def fake_open_orders(*_a, **_k):
+            idx = min(open_orders_calls["n"], len(open_orders_payloads) - 1)
+            open_orders_calls["n"] += 1
+            return open_orders_payloads[idx]
+
+        log_calls = []
+        def fake_log(event, *args, **kwargs):
+            log_calls.append((event, kwargs))
+
+        prev_poll_every = executor.ENV.get("LIVE_STATUS_POLL_EVERY")
+        try:
+            executor.ENV["LIVE_STATUS_POLL_EVERY"] = 1.0
+            with patch.object(executor, "_now_s", side_effect=[1000.0, 1001.0, 1002.0]), \
+                 patch.object(executor.binance_api, "open_orders", side_effect=fake_open_orders), \
+                 patch.object(executor.binance_api, "check_order_status", MagicMock(return_value={"status": "NEW"})), \
+                 patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})), \
+                 patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+                 patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None), \
+                 patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+                 patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "_save_state_best_effort", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", side_effect=fake_log), \
+                 patch.object(notifications, "log_event", side_effect=fake_log):
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+                executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+        finally:
+            if prev_poll_every is None:
+                executor.ENV.pop("LIVE_STATUS_POLL_EVERY", None)
+            else:
+                executor.ENV["LIVE_STATUS_POLL_EVERY"] = prev_poll_every
+
+        sl_status_logs = [
+            call for call in log_calls
+            if isinstance(call, tuple) and len(call) >= 1 and call[0] == "SL_STATUS_POLL"
+        ]
+        statuses = [call[1].get("status") for call in sl_status_logs]
+        self.assertEqual(statuses, ["NEW", "FILLED"])
+
     def test_tp2_filled_activates_trailing_and_cancels_sl_tp1_best_effort(self):
         # After TP2 FILLED we keep the remaining qty3 open and manage it via trailing SL.
         canceled = {"sl333": False}
