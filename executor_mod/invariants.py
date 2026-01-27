@@ -462,17 +462,36 @@ def _check_i2_exit_price_sanity(st: Dict[str, Any]) -> None:
             )
         return
 
+    # Check if TP1 is done (BE scenario)
+    tp1_done = pos.get("tp1_done") or False
+    tolerance = float(ENV.get("I2_BE_TOLERANCE_USD", 0.1))
+    
     ok = True
     if side == "LONG":
-        ok = (sl < entry < tp1 < tp2)
+        if tp1_done:
+            # After TP1: allow SL in range entry ± tolerance
+            ok = (sl >= entry - tolerance) and (sl <= entry + tolerance) and (tp1 < tp2)
+        else:
+            # Before TP1: strict hierarchy
+            ok = (sl < entry < tp1 < tp2)
     elif side == "SHORT":
-        ok = (tp2 < tp1 < entry < sl)
+        if tp1_done:
+            # After TP1: allow SL in range entry ± tolerance
+            ok = (sl >= entry - tolerance) and (sl <= entry + tolerance) and (tp2 < tp1)
+        else:
+            # Before TP1: strict hierarchy
+            ok = (tp2 < tp1 < entry < sl)
     else:
         return
 
     tick = float(_tick_size())
     if tick > 0:
-        ok = ok and (abs(entry - sl) >= tick) and (abs(tp1 - entry) >= tick) and (abs(tp2 - tp1) >= tick)
+        if tp1_done:
+            # After TP1: only check TP spacing
+            ok = ok and (abs(tp2 - tp1) >= tick)
+        else:
+            # Before TP1: strict spacing for all
+            ok = ok and (abs(entry - sl) >= tick) and (abs(tp1 - entry) >= tick) and (abs(tp2 - tp1) >= tick)
 
     if ok:
         return
@@ -482,7 +501,7 @@ def _check_i2_exit_price_sanity(st: Dict[str, Any]) -> None:
         "I2",
         "ERROR",
         "Exit price hierarchy invalid",
-        {"side": side, "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2}, "tick": tick},
+        {"side": side, "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2}, "tick": tick, "tp1_done": tp1_done, "tolerance": tolerance},
     )
 
 
