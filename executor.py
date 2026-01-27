@@ -2617,12 +2617,14 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             sl_status = ""
             if isinstance(sl_status_payload, dict):
                 sl_status = str(sl_status_payload.get("status", "")).upper()
+            log_every_s = float(ENV.get("SL_STATUS_POLL_LOG_EVERY_SEC") or 60.0)
             status_norm = sl_status or "UNKNOWN"
-            last_status = str(pos.get("sl_last_status_logged") or "")
-            if status_norm != last_status:
-                pos["sl_last_status_logged"] = status_norm
-                st["position"] = pos
-                _save_state_best_effort("sl_status_change")
+            last_status = str(pos.get("sl_status_last_log") or "")
+            log_next_s = float(pos.get("sl_status_log_next_s") or 0.0)
+            should_log = (status_norm != last_status) or (now_s >= log_next_s)
+            if should_log:
+                pos["sl_status_last_log"] = status_norm
+                pos["sl_status_log_next_s"] = now_s + log_every_s
                 log_event(
                     "SL_STATUS_POLL",
                     mode="live",
