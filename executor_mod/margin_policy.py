@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_UP
 from typing import Any, Dict, Optional
 
 
@@ -125,13 +125,6 @@ def _asset_step_size(plan: Dict[str, Any], api: Any, asset: str, symbol: str) ->
                 return _to_decimal(env.get(key))
     return None
 
-
-def _round_amount_down(amount: Decimal, step_size: Decimal) -> Decimal:
-    step_d = _to_decimal(step_size)
-    if step_d is None or step_d <= 0:
-        return Decimal(str(amount))
-    units = (Decimal(str(amount)) / step_d).to_integral_value(rounding=ROUND_DOWN)
-    return units * step_d
 
 
 def _round_amount_up(amount: Decimal, step_size: Decimal) -> Decimal:
