@@ -1,70 +1,197 @@
+diff --git a/executor.py b/executor.py
+index 9132c95..7d48296 100644
+--- a/executor.py
++++ b/executor.py
+@@ -3357,9 +3357,13 @@ def main() -> None:
+                                         send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": f"ABORT_{why}", "info": info})
+                                         _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
+                                         continue
++                                entry_qty = float(posi.get("qty") or 0.0)
++                                qty_sent = float(round_qty(entry_qty))
+                                 with suppress(Exception):
+-                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
++                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, qty_sent, plan={
+                                         "trade_key": posi.get("trade_key") or posi.get("client_id") or posi.get("order_id"),
++                                        "qty_sent": qty_sent,
++                                        "price_sent": px_exec,  # Executable price from bookTicker
+                                     })
+                                 try:
+                                     mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
+@@ -3572,10 +3576,14 @@ def main() -> None:
+                 client_id = f"EX_EN_{int(time.time())}"
+                 entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
+                 if entry_mode == "MARKET_ONLY":
++                    # For MARKET orders, we use rounded qty and current price estimate
++                    qty_sent = float(round_qty(qty))  # Actual qty that will be sent
+                     with suppress(Exception):
+-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
++                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, qty_sent, plan={
+                             "trade_key": client_id,
+                             "entry_price": entry,
++                            "qty_sent": qty_sent,
++                            "price_sent": entry,  # Best estimate for MARKET; actual fill may vary
+                         })
+                     order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
+                     exq0 = float(order.get("executedQty") or 0.0)
+@@ -3583,14 +3591,37 @@ def main() -> None:
+                     avgp0 = _avg_fill_price(order)
+                     entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
+                 else:
++                    # For LIMIT orders, use the exact formatted qty/price that will be sent
++                    qty_sent = float(fmt_qty(qty))  # Actual formatted qty
++                    price_sent = float(fmt_price(entry))  # Actual formatted price
+                     with suppress(Exception):
+-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
++                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, qty_sent, plan={
+                             "trade_key": client_id,
+-                            "entry_price": entry,
++                            "entry_price": price_sent,
++                            "qty_sent": qty_sent,
++                            "price_sent": price_sent,
+                         })
+                     order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
+                     status0 = "PENDING"
+                     entry_actual0 = None
++                
++                # Log actual order facts for margin debugging (one-shot per entry)
++                if ENV.get("TRADE_MODE", "").lower() == "margin":
++                    try:
++                        notional_est = float(fmt_qty(qty)) * float(fmt_price(entry))
++                        log_event(
++                            "MARGIN_ENTRY_ORDER_FACTS",
++                            trade_key=client_id,
++                            qty_sent=float(fmt_qty(qty)),
++                            price_sent=float(fmt_price(entry)),
++                            notional_est=notional_est,
++                            entry_mode=entry_mode,
++                            borrow_mode=ENV.get("MARGIN_BORROW_MODE", "manual"),
++                            side_effect=ENV.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"),
++                        )
++                    except Exception:
++                        pass
++                
+                 st["position"] = {
+                     "status": status0,
+                     "mode": "live",
 diff --git a/executor_mod/margin_guard.py b/executor_mod/margin_guard.py
-index 30583ef..226325c 100644
+index 226325c..a10c045 100644
 --- a/executor_mod/margin_guard.py
 +++ b/executor_mod/margin_guard.py
-@@ -112,8 +112,8 @@ def _prepare_plan_for_borrow(
-                     # Use price snapshot (throttled) to reduce API calls
+@@ -98,25 +98,34 @@ def _prepare_plan_for_borrow(
+         base_asset, quote_asset = _split_symbol(symbol)
+         if _is_long_side(side):
+             borrow_asset = borrow_asset or quote_asset
+-            est_price = plan_use.get("entry", plan_use.get("price"))
++            # Use order-aligned qty/price (already formatted) from plan if available
++            qty_sent = plan_use.get("qty_sent", qty)
++            price_sent = plan_use.get("price_sent", plan_use.get("entry_price", plan_use.get("entry", plan_use.get("price"))))
+             try:
+-                est_price_f = float(est_price or 0.0)
+-                qty_f = float(qty or 0.0)
++                qty_sent_f = float(qty_sent or 0.0)
++                price_sent_f = float(price_sent or 0.0)
+                 borrow_amount = float(borrow_amount or 0.0)
+-                if borrow_amount <= 0.0 and est_price_f > 0.0:
+-                    borrow_amount = qty_f * est_price_f
++                if borrow_amount <= 0.0 and price_sent_f > 0.0 and qty_sent_f > 0.0:
++                    # Compute required quote using order-aligned values
++                    required_quote = qty_sent_f * price_sent_f
++                    # Add buffer to cover fees/rounding (default 0.3%)
++                    buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
++                    borrow_amount = required_quote * (1.0 + buffer_pct)
+             except Exception:
+                 borrow_amount = 0.0
+             if borrow_amount <= 0.0:
+                 try:
+-                    # Use price snapshot (throttled) to reduce API calls
++                    # Fallback: use price snapshot (throttled) to reduce API calls
                      min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
                      if api_client and hasattr(api_client, "get_mid_price"):
--                        snapshot = price_snapshot.get_price_snapshot()
                          price_snapshot.refresh_price_snapshot(symbol, "margin_borrow", api_client.get_mid_price, min_interval)
-+                        snapshot = price_snapshot.get_price_snapshot()
+                         snapshot = price_snapshot.get_price_snapshot()
                          if snapshot.ok:
                              mid_price = float(snapshot.price_mid)
-                             borrow_amount = float(qty or 0.0) * float(mid_price)
+-                            borrow_amount = float(qty or 0.0) * float(mid_price)
++                            qty_f = float(qty or 0.0)
++                            required_quote_mid = qty_f * mid_price
++                            buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
++                            borrow_amount = required_quote_mid * (1.0 + buffer_pct)
+                 except Exception:
+                     borrow_amount = 0.0
+         else:
+@@ -193,6 +202,31 @@ def on_before_entry(state: Dict[str, Any], symbol: str, side: str, qty: float, p
+         return
+     started[trade_key] = time.time()
+     try:
++        # Log borrow plan (one-shot per entry attempt)
++        if log_event:
++            qty_sent = plan_use.get("qty_sent", qty)
++            price_sent = plan_use.get("price_sent", plan_use.get("entry_price"))
++            borrow_amount = plan_use.get("borrow_amount", 0.0)
++            borrow_asset = plan_use.get("borrow_asset")
++            buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
++            required_quote = 0.0
++            if qty_sent and price_sent:
++                try:
++                    required_quote = float(qty_sent) * float(price_sent)
++                except Exception:
++                    pass
++            delta_quote = float(borrow_amount or 0.0) - required_quote if required_quote > 0.0 else 0.0
++            log_event(
++                "MARGIN_BORROW_PLAN",
++                trade_key=trade_key,
++                borrow_asset=borrow_asset,
++                qty_sent=qty_sent,
++                price_sent=price_sent,
++                required_quote=required_quote,
++                buffer_pct=buffer_pct,
++                borrow_amount=borrow_amount,
++                delta_quote=delta_quote,
++            )
+         margin_policy.ensure_borrow_if_needed(state, api_client, symbol, side, qty, plan_use)  # type: ignore[attr-defined]
+         done[trade_key] = time.time()
+         if log_event:
 diff --git a/test/test_margin_guard.py b/test/test_margin_guard.py
-index 6949d33..16b5260 100644
+index 16b5260..3079b9a 100644
 --- a/test/test_margin_guard.py
 +++ b/test/test_margin_guard.py
-@@ -1,5 +1,6 @@
- # test/test_margin_guard.py
- import unittest
-+from types import SimpleNamespace
- from unittest.mock import Mock, patch
- 
- import executor_mod.margin_guard as mg
-@@ -113,6 +114,44 @@ class TestMarginGuard(unittest.TestCase):
+@@ -94,7 +94,8 @@ class TestMarginGuard(unittest.TestCase):
+         self.assertEqual(state["margin"]["active_trade_key"], "T1")
+         self.assertEqual(plan_use["trade_key"], "T1")
          self.assertEqual(plan_use["borrow_asset"], "USDC")
-         self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45, places=8)
+-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 50000.0, places=8)
++        # Expected: qty * entry * (1 + buffer_pct) = 0.01 * 50000 * 1.003 = 501.5
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 50000.0 * 1.003, places=6)
+         self.assertIn("is_isolated", plan_use)  # defaulted from ENV if not provided
  
-+    def test_prepare_plan_for_borrow_long_snapshot_refresh_used(self):
-+        state = {}
-+        symbol = "BTCUSDC"
-+        side = "BUY"
-+        qty = 0.03
-+        plan = {"trade_key": "T2A"}  # no entry/price
-+
-+        refresh_state = {"refreshed": False}
-+
-+        def mock_refresh(*_args, **_kwargs):
-+            refresh_state["refreshed"] = True
-+
-+        def mock_snapshot():
-+            if refresh_state["refreshed"]:
-+                return SimpleNamespace(ok=True, price_mid=250.0)
-+            return SimpleNamespace(ok=False, price_mid=0.0)
-+
-+        with patch.object(mg.price_snapshot, "refresh_price_snapshot", side_effect=mock_refresh), \
-+             patch.object(mg.price_snapshot, "get_price_snapshot", side_effect=mock_snapshot):
-+            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
-+
-+        self.assertEqual(plan_use["borrow_asset"], "USDC")
-+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0, places=8)
-+
-+    def test_prepare_plan_for_borrow_long_snapshot_still_not_ok(self):
-+        state = {}
-+        symbol = "BTCUSDC"
-+        side = "BUY"
-+        qty = 0.03
-+        plan = {"trade_key": "T2B"}  # no entry/price
-+
-+        with patch.object(mg.price_snapshot, "refresh_price_snapshot", return_value=None), \
-+             patch.object(mg.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=False, price_mid=0.0)):
-+            _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
-+
-+        self.assertEqual(plan_use["borrow_asset"], "USDC")
-+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.0, places=12)
-+
-     def test_prepare_plan_for_borrow_short_derives_base_asset_and_amount_from_qty(self):
-         """
-         SELL BTCUSDC:
+     def test_prepare_plan_for_borrow_long_falls_back_to_mid_price_when_no_entry(self):
+@@ -112,7 +113,8 @@ class TestMarginGuard(unittest.TestCase):
+ 
+         self.assertEqual(tk, "T2")
+         self.assertEqual(plan_use["borrow_asset"], "USDC")
+-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45, places=8)
++        # Expected: qty * mid_price * (1 + buffer_pct) = 0.02 * 123.45 * 1.003 = 2.476407
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45 * 1.003, places=6)
+ 
+     def test_prepare_plan_for_borrow_long_snapshot_refresh_used(self):
+         state = {}
+@@ -136,7 +138,8 @@ class TestMarginGuard(unittest.TestCase):
+             _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
+ 
+         self.assertEqual(plan_use["borrow_asset"], "USDC")
+-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0, places=8)
++        # Expected: qty * mid_price * (1 + buffer_pct) = 0.03 * 250.0 * 1.003 = 7.5225
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0 * 1.003, places=6)
+ 
+     def test_prepare_plan_for_borrow_long_snapshot_still_not_ok(self):
+         state = {}
+@@ -191,7 +194,8 @@ class TestMarginGuard(unittest.TestCase):
+         plan_use = call["plan"]
+         self.assertEqual(plan_use["trade_key"], "T10")
+         self.assertEqual(plan_use["borrow_asset"], "USDC")
+-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 40000.0, places=8)
++        # Expected: qty * entry * (1 + buffer_pct) = 0.01 * 40000 * 1.003 = 401.2
++        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 40000.0 * 1.003, places=6)
+ 
+         # ensure trade_key stored for reuse by later hooks
+         self.assertEqual(state["margin"]["active_trade_key"], "T10")

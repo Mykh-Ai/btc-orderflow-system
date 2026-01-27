@@ -98,25 +98,34 @@ def _prepare_plan_for_borrow(
         base_asset, quote_asset = _split_symbol(symbol)
         if _is_long_side(side):
             borrow_asset = borrow_asset or quote_asset
-            est_price = plan_use.get("entry", plan_use.get("price"))
+            # Use order-aligned qty/price (already formatted) from plan if available
+            qty_sent = plan_use.get("qty_sent", qty)
+            price_sent = plan_use.get("price_sent", plan_use.get("entry_price", plan_use.get("entry", plan_use.get("price"))))
             try:
-                est_price_f = float(est_price or 0.0)
-                qty_f = float(qty or 0.0)
+                qty_sent_f = float(qty_sent or 0.0)
+                price_sent_f = float(price_sent or 0.0)
                 borrow_amount = float(borrow_amount or 0.0)
-                if borrow_amount <= 0.0 and est_price_f > 0.0:
-                    borrow_amount = qty_f * est_price_f
+                if borrow_amount <= 0.0 and price_sent_f > 0.0 and qty_sent_f > 0.0:
+                    # Compute required quote using order-aligned values
+                    required_quote = qty_sent_f * price_sent_f
+                    # Add buffer to cover fees/rounding (default 0.3%)
+                    buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
+                    borrow_amount = required_quote * (1.0 + buffer_pct)
             except Exception:
                 borrow_amount = 0.0
             if borrow_amount <= 0.0:
                 try:
-                    # Use price snapshot (throttled) to reduce API calls
+                    # Fallback: use price snapshot (throttled) to reduce API calls
                     min_interval = float(ENV.get("PRICE_SNAPSHOT_MIN_SEC") or 2.0)
                     if api_client and hasattr(api_client, "get_mid_price"):
                         price_snapshot.refresh_price_snapshot(symbol, "margin_borrow", api_client.get_mid_price, min_interval)
                         snapshot = price_snapshot.get_price_snapshot()
                         if snapshot.ok:
                             mid_price = float(snapshot.price_mid)
-                            borrow_amount = float(qty or 0.0) * float(mid_price)
+                            qty_f = float(qty or 0.0)
+                            required_quote_mid = qty_f * mid_price
+                            buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
+                            borrow_amount = required_quote_mid * (1.0 + buffer_pct)
                 except Exception:
                     borrow_amount = 0.0
         else:
@@ -193,6 +202,31 @@ def on_before_entry(state: Dict[str, Any], symbol: str, side: str, qty: float, p
         return
     started[trade_key] = time.time()
     try:
+        # Log borrow plan (one-shot per entry attempt)
+        if log_event:
+            qty_sent = plan_use.get("qty_sent", qty)
+            price_sent = plan_use.get("price_sent", plan_use.get("entry_price"))
+            borrow_amount = plan_use.get("borrow_amount", 0.0)
+            borrow_asset = plan_use.get("borrow_asset")
+            buffer_pct = float(ENV.get("MARGIN_BORROW_BUFFER_PCT", 0.003))
+            required_quote = 0.0
+            if qty_sent and price_sent:
+                try:
+                    required_quote = float(qty_sent) * float(price_sent)
+                except Exception:
+                    pass
+            delta_quote = float(borrow_amount or 0.0) - required_quote if required_quote > 0.0 else 0.0
+            log_event(
+                "MARGIN_BORROW_PLAN",
+                trade_key=trade_key,
+                borrow_asset=borrow_asset,
+                qty_sent=qty_sent,
+                price_sent=price_sent,
+                required_quote=required_quote,
+                buffer_pct=buffer_pct,
+                borrow_amount=borrow_amount,
+                delta_quote=delta_quote,
+            )
         margin_policy.ensure_borrow_if_needed(state, api_client, symbol, side, qty, plan_use)  # type: ignore[attr-defined]
         done[trade_key] = time.time()
         if log_event:

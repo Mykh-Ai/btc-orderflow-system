@@ -94,7 +94,8 @@ class TestMarginGuard(unittest.TestCase):
         self.assertEqual(state["margin"]["active_trade_key"], "T1")
         self.assertEqual(plan_use["trade_key"], "T1")
         self.assertEqual(plan_use["borrow_asset"], "USDC")
-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 50000.0, places=8)
+        # Expected: qty * entry * (1 + buffer_pct) = 0.01 * 50000 * 1.003 = 501.5
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 50000.0 * 1.003, places=6)
         self.assertIn("is_isolated", plan_use)  # defaulted from ENV if not provided
 
     def test_prepare_plan_for_borrow_long_falls_back_to_mid_price_when_no_entry(self):
@@ -112,7 +113,8 @@ class TestMarginGuard(unittest.TestCase):
 
         self.assertEqual(tk, "T2")
         self.assertEqual(plan_use["borrow_asset"], "USDC")
-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45, places=8)
+        # Expected: qty * mid_price * (1 + buffer_pct) = 0.02 * 123.45 * 1.003 = 2.476407
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.02 * 123.45 * 1.003, places=6)
 
     def test_prepare_plan_for_borrow_long_snapshot_refresh_used(self):
         state = {}
@@ -136,7 +138,8 @@ class TestMarginGuard(unittest.TestCase):
             _, plan_use = mg._prepare_plan_for_borrow(state, symbol, side, qty, plan)
 
         self.assertEqual(plan_use["borrow_asset"], "USDC")
-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0, places=8)
+        # Expected: qty * mid_price * (1 + buffer_pct) = 0.03 * 250.0 * 1.003 = 7.5225
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.03 * 250.0 * 1.003, places=6)
 
     def test_prepare_plan_for_borrow_long_snapshot_still_not_ok(self):
         state = {}
@@ -191,7 +194,8 @@ class TestMarginGuard(unittest.TestCase):
         plan_use = call["plan"]
         self.assertEqual(plan_use["trade_key"], "T10")
         self.assertEqual(plan_use["borrow_asset"], "USDC")
-        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 40000.0, places=8)
+        # Expected: qty * entry * (1 + buffer_pct) = 0.01 * 40000 * 1.003 = 401.2
+        self.assertAlmostEqual(float(plan_use["borrow_amount"]), 0.01 * 40000.0 * 1.003, places=6)
 
         # ensure trade_key stored for reuse by later hooks
         self.assertEqual(state["margin"]["active_trade_key"], "T10")

@@ -3376,9 +3376,13 @@ def main() -> None:
                                         send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": f"ABORT_{why}", "info": info})
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
                                         continue
+                                entry_qty = float(posi.get("qty") or 0.0)
+                                qty_sent = float(round_qty(entry_qty))
                                 with suppress(Exception):
-                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
+                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, qty_sent, plan={
                                         "trade_key": posi.get("trade_key") or posi.get("client_id") or posi.get("order_id"),
+                                        "qty_sent": qty_sent,
+                                        "price_sent": px_exec,  # Executable price from bookTicker
                                     })
                                 try:
                                     mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
@@ -3591,10 +3595,14 @@ def main() -> None:
                 client_id = f"EX_EN_{int(time.time())}"
                 entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
                 if entry_mode == "MARKET_ONLY":
+                    # For MARKET orders, we use rounded qty and current price estimate
+                    qty_sent = float(round_qty(qty))  # Actual qty that will be sent
                     with suppress(Exception):
-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, qty_sent, plan={
                             "trade_key": client_id,
                             "entry_price": entry,
+                            "qty_sent": qty_sent,
+                            "price_sent": entry,  # Best estimate for MARKET; actual fill may vary
                         })
                     order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
                     exq0 = float(order.get("executedQty") or 0.0)
@@ -3602,14 +3610,37 @@ def main() -> None:
                     avgp0 = _avg_fill_price(order)
                     entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
                 else:
+                    # For LIMIT orders, use the exact formatted qty/price that will be sent
+                    qty_sent = float(fmt_qty(qty))  # Actual formatted qty
+                    price_sent = float(fmt_price(entry))  # Actual formatted price
                     with suppress(Exception):
-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, qty_sent, plan={
                             "trade_key": client_id,
-                            "entry_price": entry,
+                            "entry_price": price_sent,
+                            "qty_sent": qty_sent,
+                            "price_sent": price_sent,
                         })
                     order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
                     status0 = "PENDING"
                     entry_actual0 = None
+                
+                # Log actual order facts for margin debugging (one-shot per entry)
+                if ENV.get("TRADE_MODE", "").lower() == "margin":
+                    try:
+                        notional_est = float(fmt_qty(qty)) * float(fmt_price(entry))
+                        log_event(
+                            "MARGIN_ENTRY_ORDER_FACTS",
+                            trade_key=client_id,
+                            qty_sent=float(fmt_qty(qty)),
+                            price_sent=float(fmt_price(entry)),
+                            notional_est=notional_est,
+                            entry_mode=entry_mode,
+                            borrow_mode=ENV.get("MARGIN_BORROW_MODE", "manual"),
+                            side_effect=ENV.get("MARGIN_SIDE_EFFECT", "NO_SIDE_EFFECT"),
+                        )
+                    except Exception:
+                        pass
+                
                 st["position"] = {
                     "status": status0,
                     "mode": "live",
