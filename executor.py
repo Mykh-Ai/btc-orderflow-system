@@ -932,7 +932,26 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if not pos.get("orders") or not pos.get("prices"):
         return
     now_s = _now_s()
-    
+
+    # ==================== TERMINAL DETECTION: sl_done early exit ====================
+    # CRITICAL: If sl_done=True from previous tick, finalize immediately and exit.
+    # This prevents watchdog/trailing/BE from executing on already-closed positions.
+    if pos.get("sl_done"):
+        log_event("SL_ALREADY_DONE_EARLY_EXIT", mode="live", reason="sl_done=True at entry")
+        # Inline finalization (cannot call _close_slot - not yet defined as nested function)
+        st["last_closed"] = {"ts": iso_utc(), "mode": "live", "reason": "SL_ALREADY_DONE", "side": pos.get("side"), "entry": (pos.get("prices") or {}).get("entry")}
+        with suppress(Exception):
+            reporting.report_trade_close(st, pos, "SL_ALREADY_DONE")
+        send_trade_closed(st, pos, "SL_ALREADY_DONE", mode="live")
+        st["position"] = None
+        st["cooldown_until"] = now_s + float(ENV["COOLDOWN_SEC"])
+        st["lock_until"] = 0.0
+        save_state(st)
+        with suppress(Exception):
+            margin_guard.on_after_position_closed(st)
+        return
+    # ================================================================================
+
     # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
     # During OPEN_FILLED, rely on place_order responses + retries, not polling
     orders = []
