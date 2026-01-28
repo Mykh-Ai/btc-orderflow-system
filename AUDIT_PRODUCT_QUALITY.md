@@ -1344,9 +1344,9 @@ def main() -> None:
 - ✅ #5: sl_done не блокує watchdog — **FIXED**
 
 **Blockers Remaining:**
-- ⚠️ #2: Exception suppressions — **RE-CLASSIFIED** (4 patterns, not 108 issues)
+- ✅ #2: Exception suppressions — **SOLVED** (alert on critical pattern `save_state_safe()`)
 - ❌ #4: POST-MARKET VERIFY — unchanged
-- ❌ #6: State loss after orders — **Emergency Shutdown mitigates**
+- ✅ #6: State loss after orders — **SOLVED** (immediate alert via webhook)
 - ❌ #7: BE transition SL gap — unchanged
 
 ### After Emergency Shutdown Implementation (Planned)
@@ -1513,9 +1513,10 @@ tail -f /data/logs/executor.log | grep WAKE_UP
 ### Key Insights
 
 1. **Exception Suppressions:** Not 108 problems, but **4 patterns** (1 critical)
-2. **Halt Approach:** Rejected due to bad timing (after market orders)
-3. **Emergency Shutdown:** Operator-controlled, reconciliation-first, fail-safe
-4. **Safety Improvement:** 3/5 → 4/5 with Emergency Shutdown
+2. **Critical Pattern SOLVED:** `_save_state_best_effort()` → `emergency.save_state_safe()` з алертом
+3. **Halt Approach:** Rejected due to bad timing (after market orders)
+4. **Alert Approach:** Accepted — оператор отримує 🚨 SAVE_STATE_FAILURE, вирішує сам
+5. **Safety Improvement:** 3/5 → 4/5 (критичний silent failure тепер алертує)
 
 ### Risk Mitigation Hierarchy
 
@@ -1550,7 +1551,158 @@ Level 4: Recover (Graceful)
 
 ---
 
-## 9. Final Verdict (Post-Implementation)
+## 9. Production Field Testing: Manual Intervention Issues (2026-01-28) 🆕
+
+### 9.1 Context
+
+After implementing Emergency Shutdown Mode and Manual Exchange Clear, field testing revealed **critical integration issues** that broke the state machine.
+
+### 9.2 Issues Encountered
+
+#### Issue #1: Periodic sync_from_binance() Broke State Machine
+
+**What we tried:**
+Added `SYNC_PERIODIC_SEC=300` to call `sync_from_binance(st, reason="PERIODIC")` every 5 minutes in main loop, to enable phone-only manual close workflow.
+
+**What happened:**
+```
+21:05:34 PEAK signal received (long @ 88900)
+21:08:30 Entry order placed (Limit Buy)
+21:10:04 Market BUY filled
+21:10:09 TP1, TP2, SL placed then CANCELED
+→ Logs show position=null throughout!
+```
+
+**Root cause:**
+`sync_from_binance()` was designed for BOOT (cold start) and PEAK_EVENT (signal arrival) — NOT for mid-cycle polling. Calling it during active position lifecycle:
+- Conflicted with position state machine
+- May have triggered race conditions with order placement
+- State remained `null` even though orders executed on Binance
+
+**Resolution:** Reverted commit `dbe6f7c` with `git revert` → commit `e47656e`
+
+**Lesson:** `sync_from_binance()` is NOT a safe periodic call. It's a reconciliation tool for specific events, not a polling mechanism.
+
+---
+
+#### Issue #2: Emergency Shutdown Flag is Manual-Only
+
+**Question:** Can code automatically create `emergency_shutdown.flag` during crisis?
+
+**Answer:** **NO** — by design.
+
+**Current behavior:**
+- `emergency.check_flag()` — reads flag (checks if exists)
+- `emergency.remove_flag()` — deletes flag after processing
+- **No function creates the flag**
+
+**Rationale:**
+The Emergency Shutdown Mode follows "human-in-the-loop" principle:
+1. Bot detects problem → alerts operator
+2. Operator assesses situation → decides action
+3. Operator creates flag → bot cooperates
+
+**Automatic flag creation risks:**
+- False positives (network glitch → unnecessary shutdown)
+- Lost trading opportunities
+- Operator confusion ("why did bot stop?")
+
+**Current workflow:**
+```
+Bot: 🚨 SAVE_STATE_FAILURE (3+ consecutive)
+     Suggestion: touch /data/state/emergency_shutdown.flag
+Operator: (assesses situation)
+     → If recoverable: fix issue, monitor
+     → If critical: touch flag, bot shuts down gracefully
+```
+
+---
+
+#### Issue #3: 1-Hour Cooldown After Emergency Shutdown
+
+**Symptom:** After emergency shutdown, PEAK signals rejected for 1 hour.
+
+**Root cause:** `emergency.shutdown()` sets `cooldown_until = now + 3600` (line 393)
+
+**Why this matters:**
+- Emergency shutdown at 21:00 → no trades until 22:00
+- Operator may want faster recovery after fixing issue
+
+**Current mitigation:** Wake up flag resets sleep mode, but cooldown remains.
+
+**Future consideration:** Add `EMERGENCY_COOLDOWN_SEC` env variable (default 3600, configurable).
+
+---
+
+#### Issue #4: Margin Debt Blocks Manual Exchange Clear
+
+**Scenario:**
+1. Position closed manually on Binance App
+2. `I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=true` should auto-clear state
+3. But margin debt (borrowed USDC) remained
+4. `_exchange_position_exists()` saw debt → returned `True`
+5. State not cleared
+
+**Resolution:** User repaid debt manually before auto-clear worked.
+
+**Lesson:** Manual Exchange Clear requires:
+1. All orders canceled/filled
+2. No open position (base asset)
+3. **No outstanding debt** (borrowed assets)
+
+**Future consideration:** Add `I13_IGNORE_DEBT_FOR_CLEAR` option, or auto-repay on clear.
+
+---
+
+#### Issue #5: sync_from_binance() Only at BOOT and PEAK_EVENT
+
+**Problem:** If operator closes position from phone, bot doesn't detect until:
+- Next PEAK signal arrives, OR
+- Bot restarts
+
+**Implication:** Phone-only workflow requires:
+1. Close position on Binance App
+2. **Create emergency_shutdown.flag** (via SSH or other tool)
+3. Wait for bot to process and enter sleep mode
+
+**Workaround attempted:** Periodic sync (failed — see Issue #1)
+
+**Future approaches to explore:**
+1. **WebSocket position stream** — real-time updates, no polling
+2. **Lightweight position check** — separate from full sync
+3. **Binance REST polling** — check balance only, not orders
+4. **Manual reconciliation endpoint** — operator triggers via webhook
+
+---
+
+### 9.3 Key Insights
+
+| Insight | Impact |
+|---------|--------|
+| `sync_from_binance()` is event-driven, not poll-safe | Cannot add periodic sync naively |
+| Emergency flag is manual by design | Bot alerts, human decides |
+| Margin debt blocks exchange-empty detection | Manual repay required |
+| Phone-only workflow not fully supported | Still needs SSH for flag creation |
+| 1-hour cooldown may be too long | Consider configurable value |
+
+### 9.4 Future Work: Phone-Only Manual Intervention
+
+**Goal:** Close position from Binance App without SSH access.
+
+**Approaches to evaluate:**
+
+| Approach | Complexity | Pros | Cons |
+|----------|------------|------|------|
+| WebSocket position stream | Medium | Real-time, no polling | Requires stream management |
+| Lightweight balance poll | Low | Simple, isolated | Still polling (API load) |
+| n8n webhook trigger | Low | No code change | Requires n8n access |
+| Telegram bot command | Medium | Phone-native | Additional component |
+
+**Recommended next step:** Evaluate WebSocket approach or Telegram command for operator control.
+
+---
+
+## 10. Final Verdict (Post-Implementation)
 
 ### Current Status (After Terminal Detection Fix)
 
@@ -1561,6 +1713,7 @@ Level 4: Recover (Graceful)
 - ✅ Terminal Detection First implemented
 - ✅ Emergency Shutdown Mode implemented
 - ⚠️ Still requires human for complex scenarios
+- ⚠️ Phone-only workflow NOT fully supported (see Section 9)
 - ❌ Not suitable for lights-out operation
 
 **Monitoring Requirements:**
@@ -1578,7 +1731,8 @@ Level 4: Recover (Graceful)
 - ✅ Graceful degradation on failures
 - ✅ Emergency recovery procedures documented
 - ✅ No bot-operator conflicts
-- ✅ Manual exchange clear from phone supported
+- ⚠️ Manual exchange clear requires SSH for flag
+- ⚠️ Phone-only workflow requires future work (see Section 9.4)
 - ⚠️ Still requires human for complex scenarios
 
 **Monitoring Requirements:**
@@ -1601,7 +1755,7 @@ Level 4: Recover (Graceful)
 
 ---
 
-## 10. Implementation Status (Updated 2026-01-28) 🆕
+## 11. Implementation Status (Updated 2026-01-28) 🆕
 
 ### ✅ COMPLETED
 
