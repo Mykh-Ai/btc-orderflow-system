@@ -207,7 +207,6 @@ ENV: Dict[str, Any] = {
 "SNAPSHOT_MIN_SEC": _get_int("SNAPSHOT_MIN_SEC", 5),  # min interval between snapshot refreshes
 "PRICE_SNAPSHOT_MIN_SEC": _get_int("PRICE_SNAPSHOT_MIN_SEC", 2),  # min interval between price snapshot refreshes
 "SYNC_BINANCE_THROTTLE_SEC": _get_int("SYNC_BINANCE_THROTTLE_SEC", 300),  # sync_from_binance throttle
-"SYNC_PERIODIC_SEC": _get_int("SYNC_PERIODIC_SEC", 300),  # periodic sync for manual exchange clear (0 = disabled)
 }
 
 
@@ -3198,7 +3197,6 @@ def main() -> None:
 
     last_manage_s = 0.0
     next_invar_s = 0.0
-    next_sync_s = 0.0  # periodic sync_from_binance for manual exchange clear
 
 
 
@@ -3222,16 +3220,6 @@ def main() -> None:
             # Still sleeping - skip this tick
             continue
         # =====================================================================
-
-        # ==================== PERIODIC SYNC (for manual exchange clear) ====================
-        # Allows operator to close position via Binance App without SSH
-        sync_interval = float(ENV.get("SYNC_PERIODIC_SEC") or 0)
-        if sync_interval > 0 and loop_now_s >= next_sync_s:
-            with suppress(Exception):
-                sync_from_binance(st, reason="PERIODIC")
-            next_sync_s = loop_now_s + sync_interval
-        # ====================================================================================
-
         if ENV.get("INVAR_ENABLED") and loop_now_s >= float(next_invar_s):
             with suppress(Exception):
                 invariants.run(st)
