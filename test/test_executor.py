@@ -994,6 +994,101 @@ class TestExecutorV15(unittest.TestCase):
             executor.ENV["SYMBOL"] = prev_symbol
 
         self.assertNotIn("tp1", st["position"]["orders"])
+
+    def test_manual_close_clears_position_when_exchange_empty(self):
+        """Test I13_CLEAR_STATE_ON_EXCHANGE_CLEAR workflow: manual close from phone.
+        
+        Scenario:
+        1. Position OPEN_FILLED with exits placed
+        2. User manually sells BTC on Binance (balance → 0)
+        3. User cancels all limit orders (open_orders → [])
+        4. sync_from_binance detects exchange empty
+        5. Position cleared, bot waits for new PEAK
+        """
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN_FILLED",
+                "side": "LONG",
+                "qty": 0.1,
+                "trade_key": "EX_EN_12345",
+                "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+                "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+                "recon": {},
+            },
+            "margin": {
+                "borrowed_assets": {"BTC": 0.1},  # Mark that there was a borrow
+                "active_trade_key": "EX_EN_12345",
+            }
+        }
+        
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        prev_clear = executor.ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR")
+        saved = []
+        margin_repay_called = []
+        
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDC"
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = True
+            
+            with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+                 patch.object(executor, "_exchange_position_exists", return_value=False), \
+                 patch.object(executor.margin_guard, "on_after_position_closed", lambda *a, **k: margin_repay_called.append(1)), \
+                 patch.object(executor, "save_state", lambda s: saved.append(s.get("position"))), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_, **__: None):
+                executor.sync_from_binance(st, reason="BOOT")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = prev_clear
+        
+        # Position should be cleared
+        self.assertIsNone(st["position"])
+        # save_state should have been called with position=None
+        self.assertTrue(any(p is None for p in saved), "save_state should save cleared position")
+        # margin repay should be triggered
+        self.assertEqual(len(margin_repay_called), 1, "margin_guard.on_after_position_closed should be called")
+
+    def test_manual_close_does_not_clear_when_flag_disabled(self):
+        """Test that position is NOT cleared when I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=False."""
+        st = {"position": {
+            "mode": "live",
+            "status": "OPEN_FILLED",
+            "side": "LONG",
+            "qty": 0.1,
+            "trade_key": "EX_EN_12345",
+            "prices": {"entry": 100, "tp1": 101, "tp2": 102, "sl": 99},
+            "orders": {"tp1": 111, "tp2": 222, "sl": 333},
+            "recon": {},
+        }}
+        
+        prev_mode = executor.ENV.get("TRADE_MODE")
+        prev_symbol = executor.ENV.get("SYMBOL")
+        prev_clear = executor.ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR")
+        
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["SYMBOL"] = "BTCUSDC"
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = False
+            
+            with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+                 patch.object(executor, "_exchange_position_exists", return_value=False), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_, **__: None):
+                executor.sync_from_binance(st, reason="BOOT")
+        finally:
+            executor.ENV["TRADE_MODE"] = prev_mode
+            executor.ENV["SYMBOL"] = prev_symbol
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = prev_clear
+        
+        # Position should NOT be cleared (flag disabled)
+        self.assertIsNotNone(st["position"])
+        self.assertEqual(st["position"]["status"], "OPEN_FILLED")
+
     def test_exits_placement_uses_stable_client_ids_on_retry(self):
         """Regression test: ensure_exits must use same clientOrderId on retry.
         

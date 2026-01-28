@@ -1559,24 +1559,26 @@ Level 4: Recover (Graceful)
 - ✅ Can trade with human monitoring
 - ✅ Contract enforced by tests
 - ✅ Terminal Detection First implemented
-- ⚠️ Requires operator for save_state failures
+- ✅ Emergency Shutdown Mode implemented
+- ⚠️ Still requires human for complex scenarios
 - ❌ Not suitable for lights-out operation
 
 **Monitoring Requirements:**
 - Telegram alerts enabled
 - SSH access to server
 - Binance Web UI access
-- Check logs daily
-- Respond to alerts within 30min
+- Respond to critical alerts within 1 hour
+- Weekly log review
 
 ### Future Status (After Emergency Shutdown)
 
-**PRODUCTION-READY** ✅
+**PRODUCTION-READY** ✅ — **IMPLEMENTED 2026-01-28**
 
 - ✅ Can trade with occasional operator oversight
 - ✅ Graceful degradation on failures
 - ✅ Emergency recovery procedures documented
 - ✅ No bot-operator conflicts
+- ✅ Manual exchange clear from phone supported
 - ⚠️ Still requires human for complex scenarios
 
 **Monitoring Requirements:**
@@ -1599,6 +1601,63 @@ Level 4: Recover (Graceful)
 
 ---
 
-**Update Completed:** 2026-01-27 (post-audit session)
-**Contributors:** User + Claude Sonnet 4.5
-**Next Steps:** Implement Emergency Shutdown Mode (Phase 2)
+## 10. Implementation Status (Updated 2026-01-28) 🆕
+
+### ✅ COMPLETED
+
+| Blocker | Status | Implementation |
+|---------|--------|----------------|
+| #1: Finalization-First violation | ✅ FIXED | Terminal Detection early exit (executor.py:935) |
+| #5: sl_done не блокує watchdog | ✅ FIXED | sl_done check in tp_watchdog_tick |
+| #6: State loss after orders | ✅ MITIGATED | Emergency Shutdown Mode (emergency.py) |
+
+### 🆕 Emergency Shutdown Mode (v2.3)
+
+**Файл:** `executor_mod/emergency.py` (543 lines)
+
+**Компоненти:**
+1. ✅ Alert on First Failure — throttled webhook при save_state failure
+2. ✅ Emergency Shutdown Trigger — `/data/state/emergency_shutdown.flag`
+3. ✅ Reconciliation-First Shutdown — перевірка ордерів перед очисткою
+4. ✅ Sleep Mode — ігнорування сигналів до wake up
+
+**Інтеграція в executor.py:**
+- `_save_state_best_effort()` → `emergency.save_state_safe()`
+- Main loop: check emergency flag + sleep mode
+
+**Тести:** 36 passed (test_emergency.py)
+
+### 🆕 Manual Exchange Clear (v2.3)
+
+**Налаштування:** `I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=true`
+
+**Дозволяє:**
+- Ручне закриття позиції з телефону через Binance App
+- Автоматичне очищення слоту коли біржа порожня
+
+**Тест:** `test_manual_close_clears_position_when_exchange_empty` — PASSED
+
+### ❌ REMAINING (Immediate Priority)
+
+| Blocker | Priority | Notes |
+|---------|----------|-------|
+| #4: POST-MARKET VERIFY | HIGH | Потрібен для double-fill protection |
+| #7: BE transition SL gap | MEDIUM | Можливе вікно без SL при TP1→BE |
+
+### 📊 Updated Scorecard
+
+| Dimension | Before | After | Delta |
+|-----------|--------|-------|-------|
+| Spec Compliance | 4.5/5 | 4.5/5 | — |
+| Safety | 3/5 | **4/5** | +1 |
+| Maintainability | 2/5 | 2/5 | — |
+| Test Adequacy | 4.5/5 | **4.7/5** | +0.2 |
+| **Average** | **3.5/5** | **3.8/5** | **+0.3** |
+
+**Test Coverage:** 220 → 256 tests (+36 emergency module tests)
+
+---
+
+**Update Completed:** 2026-01-28
+**Contributors:** User + Claude Opus 4.5
+**Next Steps:** POST-MARKET VERIFY (Phase 3)

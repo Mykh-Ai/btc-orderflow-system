@@ -33,6 +33,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
 from executor_mod import baseline_policy
 from executor_mod.notifications import log_event, send_trade_closed, send_webhook
+from executor_mod import emergency
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
 import executor_mod.trail as trail
@@ -427,6 +428,17 @@ with suppress(Exception):
     )
 with suppress(Exception):
     margin_guard.configure(ENV, log_event, api=binance_api)
+
+# Configure emergency shutdown module
+with suppress(Exception):
+    emergency.configure(
+        env=ENV,
+        log_event_fn=log_event,
+        send_webhook_fn=send_webhook,
+        save_state_fn=save_state,
+        check_order_status_fn=binance_api.check_order_status,
+        margin_after_close_fn=margin_guard.on_after_position_closed,
+    )
 
 # ===================== DeltaScout event normalization / dedup =====================
 # (moved to executor_mod.event_dedup)
@@ -1063,22 +1075,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         return changed
 
     def _save_state_best_effort(where: str) -> None:
-        """Watchdog-only persistence: never crash the loop; throttle noise."""
-        try:
-            save_state(st)
-        except Exception as e:
-            next_s = 0.0
-            with suppress(Exception):
-                next_s = float(pos.get("sl_watchdog_save_error_next_s") or 0.0)
-            if now_s >= next_s:
-                pos["sl_watchdog_save_error_next_s"] = now_s + 60.0
-                # best-effort only; do not re-try save_state() here
-                log_event(
-                    "SL_WATCHDOG_SAVE_ERROR",
-                    mode="live",
-                    where=where,
-                    error=str(e),
-                )
+        """Watchdog-only persistence: delegates to emergency module for alert/throttle."""
+        emergency.save_state_safe(st, where)
 
     def _cancel_ignore_unknown(order_id: int) -> Optional[Exception]:
         try:
@@ -3206,6 +3204,22 @@ def main() -> None:
         time.sleep(ENV["POLL_SEC"])
         st = load_state()  # <-- critical: pick up external state changes
         loop_now_s = _now_s()
+
+        # ==================== EMERGENCY SHUTDOWN CHECK ====================
+        # Operator creates flag file to trigger graceful shutdown
+        if emergency.check_flag():
+            log_event("EMERGENCY_SHUTDOWN_TRIGGERED", reason="OPERATOR_FLAG")
+            if emergency.shutdown(st, "OPERATOR_FLAG"):
+                emergency.remove_flag()
+                log_event("EMERGENCY_SHUTDOWN_COMPLETE", sleep_mode=True)
+            # Continue loop - will hit sleep mode check next iteration
+            continue
+
+        # Check if in sleep mode (after emergency shutdown)
+        if emergency.check_sleep_mode(st):
+            # Still sleeping - skip this tick
+            continue
+        # =====================================================================
         if ENV.get("INVAR_ENABLED") and loop_now_s >= float(next_invar_s):
             with suppress(Exception):
                 invariants.run(st)

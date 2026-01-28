@@ -10,6 +10,7 @@
 - [Допоміжні модулі](#допоміжні-модулі)
   - [baseline_policy.py](#baseline_policypy)
   - [binance_api.py](#binance_apipy)
+  - [emergency.py](#emergencypy)
   - [event_dedup.py](#event_deduppy)
   - [exchange_snapshot.py](#exchange_snapshotpy)
   - [exit_safety.py](#exit_safetypy)
@@ -63,6 +64,7 @@ Executor/
 │   ├── __init__.py
 │   ├── baseline_policy.py   # Базові стратегії управління позицією
 │   ├── binance_api.py       # REST API адаптер
+│   ├── emergency.py         # 🆕 Emergency Shutdown Mode
 │   ├── event_dedup.py       # Дедуплікація подій
 │   ├── exchange_snapshot.py # Кеш стану біржі (openOrders)
 │   ├── exit_safety.py       # TP/SL watchdog контроль
@@ -286,6 +288,42 @@ Executor/
 - Автоматична синхронізація часу через `_BINANCE_TIME_OFFSET_MS`
 - Підтримка `MARGIN_BORROW_MODE`: `manual` (NO_SIDE_EFFECT) / `auto` (AUTO_BORROW_REPAY)
 - `isIsolated` нормалізується до `"TRUE"/"FALSE"` strings
+
+---
+
+### emergency.py 🆕
+
+**Призначення**: Emergency Shutdown Mode — operator-controlled graceful shutdown
+
+#### Компоненти
+
+1. **Alert on First Failure** — негайне сповіщення через webhook при `save_state()` failure
+2. **Emergency Shutdown Trigger** — файл-прапор `/data/state/emergency_shutdown.flag`
+3. **Reconciliation-First Shutdown** — перевірка статусів ордерів перед очисткою
+4. **Sleep Mode** — бот ігнорує нові сигнали до wake up
+
+#### Ключові функції
+
+```python
+save_state_safe(st, where) -> bool
+# Заміна _save_state_best_effort з алертами
+
+check_flag() -> bool
+# Перевіряє чи існує emergency_shutdown.flag
+
+check_sleep_mode(st) -> bool
+# Перевіряє sleep mode і wake_up.flag
+
+shutdown(st, reason) -> bool
+# Reconciliation-first shutdown procedure
+```
+
+#### Принципи
+
+- **Fail-Aware, Not Fail-Loud**: алерт, але не halt
+- **Human-in-the-Loop**: оператор вирішує коли shutdown
+- **Reconciliation-First**: перевірка ордерів перед фіналізацією
+- **Fail-Safe**: при сумнівах — передача контролю людині
 
 ---
 
@@ -1173,6 +1211,57 @@ with open(tmp, "w") as f:
     json.dump(st, f)
 os.replace(tmp, STATE_FN)  # atomic на POSIX
 ```
+
+### 9. Emergency Shutdown Mode (v2.3+) 🆕
+
+Оператор-контрольований graceful shutdown з reconciliation:
+
+**Компоненти:**
+1. **Alert on First Failure** — негайне сповіщення через webhook при помилці `save_state()`
+2. **Emergency Shutdown Trigger** — оператор створює файл `/data/state/emergency_shutdown.flag`
+3. **Reconciliation-First Shutdown** — перевірка статусів ордерів перед очисткою позиції
+4. **Sleep Mode** — бот ігнорує нові сигнали до wake up
+
+**Workflow:**
+```bash
+# 1. Оператор отримує alert "🚨 SAVE_STATE_FAILURE"
+# 2. SSH на сервер:
+touch /data/state/emergency_shutdown.flag
+# 3. Бот:
+#    - Перевіряє статус SL/TP1/TP2 на біржі
+#    - Викликає margin repay
+#    - Створює backup state
+#    - Входить у sleep mode
+# 4. Відновлення:
+touch /data/state/wake_up.flag
+```
+
+**Принципи:**
+- **Fail-Aware**: алерт оператору, але не halt
+- **Human-in-the-Loop**: оператор вирішує коли shutdown
+- **Reconciliation-First**: перевірка ордерів перед фіналізацією
+- **Fail-Safe**: при сумнівах — передача контролю людині
+
+### 10. Manual Exchange Clear (v2.3+) 🆕
+
+Можливість ручного закриття позиції з телефону через Binance App:
+
+**Налаштування:**
+```bash
+export I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=true
+```
+
+**Workflow:**
+1. 📱 Binance App → Sell BTC (Market)
+2. 📱 Open Orders → Cancel All
+3. ⏳ Чекати ~5 хв (sync throttle)
+4. ✅ Бот автоматично:
+   - Виявляє `open_orders = []`
+   - Перевіряє `_exchange_position_exists() = False`
+   - Логує `POSITION_CLEARED_BY_EXCHANGE`
+   - Викликає margin repay
+   - Очищає позицію
+   - Чекає новий PEAK
 
 ---
 
