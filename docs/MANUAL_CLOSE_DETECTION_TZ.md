@@ -201,6 +201,227 @@ st["position"] = None
 
 ---
 
+
+1) Дефолтна частота
+
+MANUAL_CLOSE_CHECK_SEC = 120 сек (раз на 2 хв) — дефолтний інтервал опитування біржі.
+
+Throttle реалізується через pos["manual_close_next_check_s"] і персиститься в state, щоб після рестарту частота залишалась детермінованою.
+
+2) Прискорений режим при WARN/WARM (опційно)
+
+Якщо в системі активний стан підвищеної уваги (наприклад pos["warm"] == True або інший існуючий прапор/сигнал), дозволяється зменшити інтервал:
+
+MANUAL_CLOSE_CHECK_SEC_WARM = 15..30 сек.
+
+Вибір конкретного прапора WARM/WARN залежить від наявних сигналів у state; якщо такого сигналу немає, використовується лише дефолтний інтервал 120 сек.
+
+3) Заборона спаму
+
+Незалежно від інтервалу опитування, MANUAL_CLOSE_DETECTED_OK та Telegram/webhook notify відправляються один раз на trade_key (див. розділ no-spam).
+
+Принципи
+
+Single-owner: лише executor виконує side-effect дії (cancel/repay/state reset).
+
+Exchange reality > local state: рішення приймаються за даними біржі, baseline — якір.
+
+Finalization-First: confirmed → cleanup → return.
+
+                                                   Етапи впровадження ТЗ (інваріантний формат)
+------------------------Phase 0 — Аудит і карта інтеграції (NO CODE)
+
+Статус: ✅ DONE
+
+Before
+
+Немає модуля manual close
+
+Executor працює як зараз
+
+Agent does
+
+Визначає:
+
+де читаються balances / debt
+
+де виконується cleanup
+
+де викликається notifications.send_trade_closed
+
+точку вставки на початку manage_v15_position
+
+After
+
+Є чітка карта інтеграції
+
+Є контракт manual_close_detector.tick(...)
+
+Контрольні / тонкі місця
+
+1) Порядок: manual_close_detector.tick() має йти після sl_done early-exit, щоб не порушити контракт “no logic on already-closed positions”.
+
+2) _finalize_close() є вкладеною функцією всередині manage_v15_position; наступні фази мають працювати через callback/сигнальний контракт, а не прямий виклик з модуля.
+
+3) exchange_snapshot.py кешує лише openOrders; margin balances/debt читаються напряму з біржі → потрібні throttles + детермінізм після рестарту.
+
+4) Invariant I13 — референтний шаблон exchange-truth + rate-limit + fail-loud escalation; manual-close логіка має узгоджуватись із цим стилем.
+
+5) Нотифікації мають перевикористовувати send_trade_closed з dedupe через st["last_notified_close_trade_key"] (без нових spam-путів).
+
+Never
+
+Ніяких змін логіки
+
+Ніяких diff
+
+---------------------Phase 1 — Skeleton модуля (Zero behavior change)
+
+Статус: ✅ DONE
+
+Commit: eb0de85cbe989f3c8f0ca6d32a8d15f7f1c4c91b (Add manual close detector skeleton)
+
+Before
+
+manual_close_detector не існує
+
+Agent does
+
+Додає файл executor_mod/manual_close_detector.py
+
+Реалізує tick(...)->False
+
+Додає виклик tick() на початку manage_v15_position
+
+After
+
+Executor викликає tick()
+
+Поведінка повністю ідентична попередній
+
+Execution status
+
+- Додано executor_mod/manual_close_detector.py з tick(...)->False без побічних ефектів.
+
+- Виклик tick() підключено в manage_v15_position після sl_done early-exit і до openOrders/watchdog логіки.
+
+- Додано unit test, який підтверджує відсутність side effects і API-викликів.
+
+Non-blocking notes ⚠️
+
+- executor.py тепер імпортує margin_policy, хоча tick на Stage 1 його не використовує (допустимий шум / потенційний дубль імпорту).
+
+- Тест перевіряє api.method_calls == []; це не ловить лише читання атрибутів (допустимо для Stage 1).
+
+Never
+
+Жодних API викликів
+
+Жодних side effects
+
+Phase 2 — Throttle (детермінізм без дій)
+
+Before
+
+Немає контролю частоти
+
+Agent does
+
+Додає pos["manual_close_next_check_s"]
+
+Додає MANUAL_CLOSE_CHECK_SEC = 120
+
+tick():
+
+поважає throttle
+
+нічого не читає
+
+нічого не змінює, окрім throttle key
+
+After
+
+Polling детермінований
+
+Поведінка не змінена
+
+Never
+
+Ніяких логів
+
+Ніяких cleanup
+
+---------## Phase 2 — Exchange-truth Manual Close Detection (Finalization-First)
+
+Статус: ✅ DONE
+
+Зроблено:
+- Реалізовано manual_close_detector.tick() з exchange-truth перевіркою балансів (base/quote) та margin debt.
+- LONG / SHORT guard-умови розділені (guard = base + debt; quote не використовується).
+- Two-step confirmation через manual_close_candidate_s + MANUAL_CLOSE_CONFIRM_SEC.
+- Throttle з персистом (manual_close_next_check_s) для детермінізму після рестарту.
+- Detector лише сигналізує (handled/reason/tag/details); фіналізація виконується через існуючий finalize-contract в executor (_close_slot / _finalize_close).
+- Повторне використання існуючих механізмів: send_trade_closed, report_trade_close, margin_guard.on_after_position_closed.
+
+Tests:
+- Stage 1: no-side-effects test (detector не мутує state і не викликає API).
+- Stage 2: guards (LONG/SHORT), confirm-window, throttle persistence, інтеграційний finalize-path через executor.
+
+Примітки ⚠️:
+- Confirm/throttle залежать від персисту state; при втраті запису підтвердження може відкластися.
+- EPS-пороги зменшують, але не повністю усувають ризик false-positive при баланс-дріфті.
+- Detector навмисно не викликає _close_slot напряму; фіналізація централізована в executor.
+
+-------------------Phase 3 — Read-only exchange reality
+
+Статус: ✅ ВИКОНАНО (Manual Close Detection)
+
+Що зроблено:
+- manual_close_detector переведено в режим read-only exchange snapshot.
+- раз на MANUAL_CLOSE_CHECK_SEC (throttle через pos["manual_close_next_check_s"], персиститься в state).
+- читає з біржі balances + debt snapshot (margin: margin_account + get_margin_debt_snapshot, spot: spot account).
+- рахує totals + deltas vs baseline + has_debt.
+- зберігає діагностику в pos["manual_close_diag"].
+- пише один JSONL log line на кожен виконаний snapshot (MANUAL_CLOSE_SNAPSHOT_OK), і окремо MANUAL_CLOSE_SNAPSHOT_ERROR при помилці.
+- нема side effects: не виставляє candidate/confirm/notified, не тригерить finalize/cleanup, не викликає close.
+
+Примітка про “спам”:
+- MANUAL_CLOSE_SNAPSHOT_OK логуватиметься кожен tick (наприклад, раз на 120 сек). Це нормально для Stage 3, бо це діагностичний snapshot.
+- “OK один раз на trade_key” (антиспам для Telegram/webhook) — це етапи Stage 4/5, не Stage 3.
+
+Примітка про executor.py:
+- executor.py як і раніше очікує, що manual_close_detector.tick() може повернути handled=True, і тоді піде шлях фіналізації через _close_slot.
+- Після Stage 3 (read-only) handled завжди False, тому manual close зараз не закриє позицію. Це очікувано до реалізації Stage 4/5.
+
+Before
+
+Executor не знає current exchange reality для manual close
+
+Agent does
+
+Реалізує read-only:
+
+balances → base_total / quote_total
+
+debt snapshot
+
+Порівнює з baseline
+
+After
+
+Значення current vs baseline обчислюються
+
+Але ніщо не тригериться
+
+Never
+
+Ніяких candidate
+
+Ніяких confirm
+
+Ніяких side effects
+
+---------------------Phase 4 — Guards + 2-step confirm
 📌 Stage 4 — Manual Close Detection: DONE
 
 Що зроблено
@@ -290,228 +511,6 @@ MANUAL_CLOSE_CHECK_SEC_WARN = 30 секунд (рекомендовано)
 Частіший polling не змінює бізнес-логіку, лише швидкість реакції.
 
 Періодичність опитування (throttle policy)
-1) Дефолтна частота
-
-MANUAL_CLOSE_CHECK_SEC = 120 сек (раз на 2 хв) — дефолтний інтервал опитування біржі.
-
-Throttle реалізується через pos["manual_close_next_check_s"] і персиститься в state, щоб після рестарту частота залишалась детермінованою.
-
-2) Прискорений режим при WARN/WARM (опційно)
-
-Якщо в системі активний стан підвищеної уваги (наприклад pos["warm"] == True або інший існуючий прапор/сигнал), дозволяється зменшити інтервал:
-
-MANUAL_CLOSE_CHECK_SEC_WARM = 15..30 сек.
-
-Вибір конкретного прапора WARM/WARN залежить від наявних сигналів у state; якщо такого сигналу немає, використовується лише дефолтний інтервал 120 сек.
-
-3) Заборона спаму
-
-Незалежно від інтервалу опитування, MANUAL_CLOSE_DETECTED_OK та Telegram/webhook notify відправляються один раз на trade_key (див. розділ no-spam).
-
-Принципи
-
-Single-owner: лише executor виконує side-effect дії (cancel/repay/state reset).
-
-Exchange reality > local state: рішення приймаються за даними біржі, baseline — якір.
-
-Finalization-First: confirmed → cleanup → return.
-
-Етапи впровадження ТЗ (інваріантний формат)
-Phase 0 — Аудит і карта інтеграції (NO CODE)
-
-Статус: ✅ DONE
-
-Before
-
-Немає модуля manual close
-
-Executor працює як зараз
-
-Agent does
-
-Визначає:
-
-де читаються balances / debt
-
-де виконується cleanup
-
-де викликається notifications.send_trade_closed
-
-точку вставки на початку manage_v15_position
-
-After
-
-Є чітка карта інтеграції
-
-Є контракт manual_close_detector.tick(...)
-
-Контрольні / тонкі місця
-
-1) Порядок: manual_close_detector.tick() має йти після sl_done early-exit, щоб не порушити контракт “no logic on already-closed positions”.
-
-2) _finalize_close() є вкладеною функцією всередині manage_v15_position; наступні фази мають працювати через callback/сигнальний контракт, а не прямий виклик з модуля.
-
-3) exchange_snapshot.py кешує лише openOrders; margin balances/debt читаються напряму з біржі → потрібні throttles + детермінізм після рестарту.
-
-4) Invariant I13 — референтний шаблон exchange-truth + rate-limit + fail-loud escalation; manual-close логіка має узгоджуватись із цим стилем.
-
-5) Нотифікації мають перевикористовувати send_trade_closed з dedupe через st["last_notified_close_trade_key"] (без нових spam-путів).
-
-Never
-
-Ніяких змін логіки
-
-Ніяких diff
-
-Phase 1 — Skeleton модуля (Zero behavior change)
-
-Статус: ✅ DONE
-
-Commit: eb0de85cbe989f3c8f0ca6d32a8d15f7f1c4c91b (Add manual close detector skeleton)
-
-Before
-
-manual_close_detector не існує
-
-Agent does
-
-Додає файл executor_mod/manual_close_detector.py
-
-Реалізує tick(...)->False
-
-Додає виклик tick() на початку manage_v15_position
-
-After
-
-Executor викликає tick()
-
-Поведінка повністю ідентична попередній
-
-Execution status
-
-- Додано executor_mod/manual_close_detector.py з tick(...)->False без побічних ефектів.
-
-- Виклик tick() підключено в manage_v15_position після sl_done early-exit і до openOrders/watchdog логіки.
-
-- Додано unit test, який підтверджує відсутність side effects і API-викликів.
-
-Non-blocking notes ⚠️
-
-- executor.py тепер імпортує margin_policy, хоча tick на Stage 1 його не використовує (допустимий шум / потенційний дубль імпорту).
-
-- Тест перевіряє api.method_calls == []; це не ловить лише читання атрибутів (допустимо для Stage 1).
-
-Never
-
-Жодних API викликів
-
-Жодних side effects
-
-Phase 2 — Throttle (детермінізм без дій)
-
-Before
-
-Немає контролю частоти
-
-Agent does
-
-Додає pos["manual_close_next_check_s"]
-
-Додає MANUAL_CLOSE_CHECK_SEC = 120
-
-tick():
-
-поважає throttle
-
-нічого не читає
-
-нічого не змінює, окрім throttle key
-
-After
-
-Polling детермінований
-
-Поведінка не змінена
-
-Never
-
-Ніяких логів
-
-Ніяких cleanup
-
----
-
-## Phase 2 — Exchange-truth Manual Close Detection (Finalization-First)
-
-Статус: ✅ DONE
-
-Зроблено:
-- Реалізовано manual_close_detector.tick() з exchange-truth перевіркою балансів (base/quote) та margin debt.
-- LONG / SHORT guard-умови розділені (guard = base + debt; quote не використовується).
-- Two-step confirmation через manual_close_candidate_s + MANUAL_CLOSE_CONFIRM_SEC.
-- Throttle з персистом (manual_close_next_check_s) для детермінізму після рестарту.
-- Detector лише сигналізує (handled/reason/tag/details); фіналізація виконується через існуючий finalize-contract в executor (_close_slot / _finalize_close).
-- Повторне використання існуючих механізмів: send_trade_closed, report_trade_close, margin_guard.on_after_position_closed.
-
-Tests:
-- Stage 1: no-side-effects test (detector не мутує state і не викликає API).
-- Stage 2: guards (LONG/SHORT), confirm-window, throttle persistence, інтеграційний finalize-path через executor.
-
-Примітки ⚠️:
-- Confirm/throttle залежать від персисту state; при втраті запису підтвердження може відкластися.
-- EPS-пороги зменшують, але не повністю усувають ризик false-positive при баланс-дріфті.
-- Detector навмисно не викликає _close_slot напряму; фіналізація централізована в executor.
-
-Phase 3 — Read-only exchange reality
-
-Статус: ✅ ВИКОНАНО (Manual Close Detection)
-
-Що зроблено:
-- manual_close_detector переведено в режим read-only exchange snapshot.
-- раз на MANUAL_CLOSE_CHECK_SEC (throttle через pos["manual_close_next_check_s"], персиститься в state).
-- читає з біржі balances + debt snapshot (margin: margin_account + get_margin_debt_snapshot, spot: spot account).
-- рахує totals + deltas vs baseline + has_debt.
-- зберігає діагностику в pos["manual_close_diag"].
-- пише один JSONL log line на кожен виконаний snapshot (MANUAL_CLOSE_SNAPSHOT_OK), і окремо MANUAL_CLOSE_SNAPSHOT_ERROR при помилці.
-- нема side effects: не виставляє candidate/confirm/notified, не тригерить finalize/cleanup, не викликає close.
-
-Примітка про “спам”:
-- MANUAL_CLOSE_SNAPSHOT_OK логуватиметься кожен tick (наприклад, раз на 120 сек). Це нормально для Stage 3, бо це діагностичний snapshot.
-- “OK один раз на trade_key” (антиспам для Telegram/webhook) — це етапи Stage 4/5, не Stage 3.
-
-Примітка про executor.py:
-- executor.py як і раніше очікує, що manual_close_detector.tick() може повернути handled=True, і тоді піде шлях фіналізації через _close_slot.
-- Після Stage 3 (read-only) handled завжди False, тому manual close зараз не закриє позицію. Це очікувано до реалізації Stage 4/5.
-
-Before
-
-Executor не знає current exchange reality для manual close
-
-Agent does
-
-Реалізує read-only:
-
-balances → base_total / quote_total
-
-debt snapshot
-
-Порівнює з baseline
-
-After
-
-Значення current vs baseline обчислюються
-
-Але ніщо не тригериться
-
-Never
-
-Ніяких candidate
-
-Ніяких confirm
-
-Ніяких side effects
-
-Phase 4 — Guards + 2-step confirm
 
 Before
 
@@ -543,7 +542,7 @@ Confirm за один тик
 
 Cleanup на цьому етапі
 
-Phase 5 — Cleanup (Finalization-First)
+----------Phase 5 — Cleanup (Finalization-First)
 
 Before
 
@@ -577,7 +576,7 @@ Never
 
 Watchdog / TP / SL після confirmed
 
-Phase 6 — Notifications + logging (no-spam)
+-------------Phase 6 — Notifications + logging (no-spam)
 
 Before
 
@@ -607,7 +606,7 @@ Never
 
 Notify без cleanup
 
-Phase 7 — Tests (інваріанти)
+-------------Phase 7 — Tests (інваріанти)
 
 Agent does
 
@@ -631,7 +630,7 @@ Never
 
 Тести на execution
 
-Phase 8 — Rollout (концептуально)
+-----------Phase 8 — Rollout (концептуально)
 
 Before
 
