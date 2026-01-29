@@ -407,6 +407,29 @@ Never
 
 Ніяких cleanup
 
+---
+
+## Phase 2 — Exchange-truth Manual Close Detection (Finalization-First)
+
+Статус: ✅ DONE
+
+Зроблено:
+- Реалізовано manual_close_detector.tick() з exchange-truth перевіркою балансів (base/quote) та margin debt.
+- LONG / SHORT guard-умови розділені.
+- Two-step confirmation через manual_close_candidate_s + MANUAL_CLOSE_CONFIRM_SEC.
+- Throttle з персистом (manual_close_next_check_s) для детермінізму після рестарту.
+- Detector лише сигналізує (handled/reason/tag/details); фіналізація виконується через існуючий finalize-contract в executor (_close_slot / _finalize_close).
+- Повторне використання існуючих механізмів: send_trade_closed, report_trade_close, margin_guard.on_after_position_closed.
+
+Tests:
+- Stage 1: no-side-effects test (detector не мутує state і не викликає API).
+- Stage 2: guards (LONG/SHORT), confirm-window, throttle persistence, інтеграційний finalize-path через executor.
+
+Примітки ⚠️:
+- Confirm/throttle залежать від персисту state; при втраті запису підтвердження може відкластися.
+- EPS-пороги зменшують, але не повністю усувають ризик false-positive при баланс-дріфті.
+- Detector навмисно не викликає _close_slot напряму; фіналізація централізована в executor.
+
 Phase 3 — Read-only exchange reality
 
 Before
