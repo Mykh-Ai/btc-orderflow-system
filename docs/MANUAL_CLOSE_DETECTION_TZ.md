@@ -12,10 +12,41 @@
 
 ## Вимоги
 
-1. **Детекція manual close**
-   - Порівнювати поточний баланс base asset з baseline (`st["baseline"]["active"]["balances"]["base_free"]`)
-   - Толеранс: EPS = 0.00001 BTC (або еквівалент для іншого base)
-   - Якщо $|current\_base - baseline\_base| < EPS$ → вважати позицію закритою вручну
+1. **Детекція manual close (LONG vs SHORT guards)**
+
+### 1.1 Поля та розрахунки
+Використовуються поля, зняті `baseline_policy`:
+- `base_free`, `base_locked`
+- `quote_free`, `quote_locked`
+- `debt` (для margin)
+
+Розрахункові значення:
+- `base_total = base_free + base_locked`
+- `quote_total = quote_free + quote_locked`
+
+### 1.2 Допуски (tolerances)
+- `BASE_EPS = 0.00001 BTC` (або еквівалент для іншого base)
+- `QUOTE_EPS = 2.0 USDC` (допуск на комісії/дрібні рухи)
+
+### 1.3 Загальні передумови
+- `st["position"]` існує та активна
+- `st["baseline"]["active"]` існує
+- Визначено `side` позиції (LONG або SHORT)
+
+### 1.4 Guard-умови для LONG
+Manual close для LONG вважається підтвердженим, якщо **одночасно**:
+1) `abs(current.base_total - baseline.base_total) < BASE_EPS`
+2) `abs(current.quote_total - baseline.quote_total) < QUOTE_EPS`
+3) (Margin) `current_debt.has_debt == False` *(рекомендовано як строгий gate)*
+
+### 1.5 Guard-умови для SHORT
+Manual close для SHORT вважається підтвердженим, якщо **одночасно**:
+1) `current_debt.has_debt == False` *(обовʼязковий gate)*
+2) `abs(current.base_total - baseline.base_total) < BASE_EPS`
+3) `abs(current.quote_total - baseline.quote_total) < QUOTE_EPS`
+
+> Примітка: `openOrders` **не є** джерелом істини про наявність позиції на margin spot і використовуються лише як обʼєкт cleanup.
+
 
 2. **Cleanup (Finalization-First)**
    - **Скасувати всі exit-ордери** (SL, TP1, TP2) через `api.cancel_order()`, ігнорувати помилки "UNKNOWN_ORDER"
