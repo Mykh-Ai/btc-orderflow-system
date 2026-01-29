@@ -25,7 +25,8 @@ def test_tick_stage1_no_side_effects() -> None:
 
     handled = manual_close_detector.tick(st, pos, api, margin_policy, env, 123.0)
 
-    assert handled is False
+    assert handled.get("handled") is False
+    assert handled.get("state_dirty") is False
     assert st == st_before
     assert pos == pos_before
     assert api.method_calls == []
