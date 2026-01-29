@@ -287,6 +287,8 @@ Finalization-First: confirmed → cleanup → return.
 Етапи впровадження ТЗ (інваріантний формат)
 Phase 0 — Аудит і карта інтеграції (NO CODE)
 
+Статус: ✅ DONE
+
 Before
 
 Немає модуля manual close
@@ -311,6 +313,18 @@ After
 
 Є контракт manual_close_detector.tick(...)
 
+Контрольні / тонкі місця
+
+1) Порядок: manual_close_detector.tick() має йти після sl_done early-exit, щоб не порушити контракт “no logic on already-closed positions”.
+
+2) _finalize_close() є вкладеною функцією всередині manage_v15_position; наступні фази мають працювати через callback/сигнальний контракт, а не прямий виклик з модуля.
+
+3) exchange_snapshot.py кешує лише openOrders; margin balances/debt читаються напряму з біржі → потрібні throttles + детермінізм після рестарту.
+
+4) Invariant I13 — референтний шаблон exchange-truth + rate-limit + fail-loud escalation; manual-close логіка має узгоджуватись із цим стилем.
+
+5) Нотифікації мають перевикористовувати send_trade_closed з dedupe через st["last_notified_close_trade_key"] (без нових spam-путів).
+
 Never
 
 Ніяких змін логіки
@@ -318,6 +332,10 @@ Never
 Ніяких diff
 
 Phase 1 — Skeleton модуля (Zero behavior change)
+
+Статус: ✅ DONE
+
+Commit: eb0de85cbe989f3c8f0ca6d32a8d15f7f1c4c91b (Add manual close detector skeleton)
 
 Before
 
@@ -336,6 +354,20 @@ After
 Executor викликає tick()
 
 Поведінка повністю ідентична попередній
+
+Execution status
+
+- Додано executor_mod/manual_close_detector.py з tick(...)->False без побічних ефектів.
+
+- Виклик tick() підключено в manage_v15_position після sl_done early-exit і до openOrders/watchdog логіки.
+
+- Додано unit test, який підтверджує відсутність side effects і API-викликів.
+
+Non-blocking notes ⚠️
+
+- executor.py тепер імпортує margin_policy, хоча tick на Stage 1 його не використовує (допустимий шум / потенційний дубль імпорту).
+
+- Тест перевіряє api.method_calls == []; це не ловить лише читання атрибутів (допустимо для Stage 1).
 
 Never
 
@@ -562,4 +594,3 @@ Exchange reality — єдине джерело істини.
 Це і є сутність ТЗ.
 
 ---
-

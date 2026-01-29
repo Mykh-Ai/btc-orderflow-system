@@ -36,6 +36,8 @@ from executor_mod.notifications import log_event, send_trade_closed, send_webhoo
 from executor_mod import emergency
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
+from executor_mod import margin_policy
+from executor_mod import manual_close_detector
 import executor_mod.trail as trail
 import executor_mod.invariants as invariants
 import executor_mod.binance_api as binance_api
@@ -964,6 +966,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             margin_guard.on_after_position_closed(st)
         return
     # ================================================================================
+
+    handled = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
+    if handled:
+        return
 
     # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
     # During OPEN_FILLED, rely on place_order responses + retries, not polling
