@@ -3,6 +3,7 @@ import unittest
 import importlib.util
 import time
 from pathlib import Path
+import tempfile
 
 
 def _load_fresh_invariants():
@@ -18,6 +19,12 @@ def _load_fresh_invariants():
 
 class TestI2BETolerance(unittest.TestCase):
     def setUp(self):
+        # Isolate persisted invariant meta-state per test run to avoid cross-test throttling
+        # via default /data/state/invariants_state.json (shared between processes/runs).
+        tmpdir = Path(tempfile.gettempdir()) / "executor_tests"
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        state_fn = tmpdir / f"invariants_state_{time.time_ns()}.json"
+
         self.inv = _load_fresh_invariants()
         self.sent = []
         self.logged = []
@@ -38,6 +45,7 @@ class TestI2BETolerance(unittest.TestCase):
         env = {
             "INVAR_ENABLED": True,
             "INVAR_THROTTLE_SEC": 600,
+            "INVAR_STATE_FN": str(state_fn),
             "SYMBOL": "BTCUSDT",
             "TICK_SIZE": "0.01",
             "I2_BE_TOLERANCE_USD": 0.1,  # 10 cents tolerance
