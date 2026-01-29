@@ -94,6 +94,13 @@ def tick(
 
     has_debt = bool(debt.get("has_debt")) if trade_mode == "margin" else False
     side = str(pos.get("side") or "").upper()
+    base_eps = _get_float(env.get("BASE_EPS"), 0.00001)
+    confirm_sec = _get_float(env.get("MANUAL_CLOSE_CONFIRM_SEC"), check_sec or 120.0)
+    if base_eps < 0.0:
+        base_eps = 0.0
+    # Confirm window must be positive; fall back to polling interval (per TZ).
+    if confirm_sec <= 0.0:
+        confirm_sec = float(check_sec or 120.0)
 
     pos["manual_close_diag"] = {
         "trade_mode": trade_mode,
@@ -107,16 +114,52 @@ def tick(
         "has_debt": has_debt,
     }
     result["state_dirty"] = True
-    log_event(
-        "MANUAL_CLOSE_SNAPSHOT_OK",
-        symbol=symbol,
-        trade_mode=trade_mode,
-        base_total=base_total,
-        quote_total=quote_total,
-        delta_base=base_delta,
-        delta_quote=quote_delta,
-        has_debt=has_debt,
-    )
+
+    # Unknown/invalid side: do not arm candidate; also clear any stale candidate.
+    if side not in ("LONG", "SHORT"):
+        if pos.get("manual_close_candidate_s") is not None:
+            pos.pop("manual_close_candidate_s", None)
+            result["state_dirty"] = True
+        return result
+
+    base_close = abs(base_total - base_base) < base_eps
+    if side == "SHORT":
+        guard_ok = (not has_debt) and base_close
+    else:
+        guard_ok = base_close and (not has_debt)
+
+    candidate_s = _get_float(pos.get("manual_close_candidate_s"), 0.0)
+    if guard_ok:
+        if candidate_s <= 0.0:
+            pos["manual_close_candidate_s"] = now_s
+            result["state_dirty"] = True
+            return result
+        if now_s > candidate_s and (now_s - candidate_s) >= confirm_sec:
+            details = {
+                "trade_mode": trade_mode,
+                "side": side,
+                "base_total": base_total,
+                "base_baseline": base_base,
+                "delta_base": base_delta,
+                "quote_total": quote_total,
+                "quote_baseline": quote_base,
+                "delta_quote": quote_delta,
+                "has_debt": has_debt,
+            }
+            result.update(
+                {
+                    "handled": True,
+                    "reason": "MANUAL_CLOSE_DETECTED",
+                    "tag": "MANUAL_CLOSE_DETECTED_OK",
+                    "details": details,
+                    "state_dirty": True,
+                }
+            )
+            return result
+    else:
+        if candidate_s > 0.0:
+            pos.pop("manual_close_candidate_s", None)
+            result["state_dirty"] = True
 
     return result
 

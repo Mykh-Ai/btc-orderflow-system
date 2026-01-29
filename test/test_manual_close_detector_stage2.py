@@ -82,7 +82,7 @@ def test_manual_close_snapshot_writes_diag_read_only() -> None:
         result = manual_close_detector.tick(st, pos, api, margin_policy, env, 100.0)
 
     assert result["handled"] is False
-    assert pos.get("manual_close_candidate_s") is None
+    assert pos.get("manual_close_candidate_s") == 100.0
     assert pos.get("manual_close_notified") is None
     assert api._close_slot.call_count == 0
     assert api.margin_account.call_count == 1
