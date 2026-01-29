@@ -967,57 +967,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         return
     # ================================================================================
 
-    handled = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
-    if handled:
-        return
-
-    # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
-    # During OPEN_FILLED, rely on place_order responses + retries, not polling
-    orders = []
-    open_orders_ok = False
-    if pos.get("status") == "OPEN":
-        pos.pop("openorders_skip_logged", None)
-        snapshot = get_snapshot()
-        refreshed = refresh_snapshot(
-            symbol=symbol,
-            source="manage",
-            open_orders_fn=binance_api.open_orders,
-            min_interval_sec=float(ENV.get("SNAPSHOT_MIN_SEC", 5)),
-        )
-        if refreshed:
-            log_event(
-                "SNAPSHOT_REFRESH",
-                source="manage",
-                ok=snapshot.ok,
-                error=snapshot.error,
-                age_sec=snapshot.freshness_sec(),
-                order_count=len(snapshot.get_orders()),
-            )
-        orders = snapshot.get_orders()
-        if not snapshot.ok and snapshot.error:
-            # Throttle error logging
-            last_err = float(pos.get("open_orders_err_s") or 0.0)
-            if now_s - last_err >= 30.0:
-                pos["open_orders_err_s"] = now_s
-                st["position"] = pos
-                save_state(st)
-                log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
-        open_orders_ok = bool(snapshot.ok)
-    else:
-        # OPEN_FILLED: skip openOrders polling (log once per position to avoid spam)
-        if not pos.get("openorders_skip_logged"):
-            pos["openorders_skip_logged"] = iso_utc()
-            st["position"] = pos
-            save_state(st)
-            log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
-
-    open_ids: set[int] = set()
-    for _o in (orders or []):
-        if not isinstance(_o, dict):
-            continue
-        with suppress(Exception):
-            open_ids.add(int(_o.get("orderId")))
-
     def _update_order_fill(pos: Dict[str, Any], leg: str, payload: Dict[str, Any]) -> bool:
         """Reporting Spec v1: persist execution data from existing status calls."""
         if not isinstance(payload, dict) or not leg:
@@ -1174,6 +1123,63 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         with suppress(Exception):
             _cancel_sibling_exits_best_effort(tag=tag)
         _close_slot(reason)
+
+    manual_signal = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
+    if manual_signal.get("state_dirty"):
+        st["position"] = pos
+        save_state(st)
+    if manual_signal.get("handled"):
+        reason = str(manual_signal.get("reason") or "MANUAL_CLOSE_DETECTED")
+        tag = str(manual_signal.get("tag") or "MANUAL_CLOSE_DETECTED_OK")
+        _finalize_close(reason, tag=tag)
+        return
+
+    # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
+    # During OPEN_FILLED, rely on place_order responses + retries, not polling
+    orders = []
+    open_orders_ok = False
+    if pos.get("status") == "OPEN":
+        pos.pop("openorders_skip_logged", None)
+        snapshot = get_snapshot()
+        refreshed = refresh_snapshot(
+            symbol=symbol,
+            source="manage",
+            open_orders_fn=binance_api.open_orders,
+            min_interval_sec=float(ENV.get("SNAPSHOT_MIN_SEC", 5)),
+        )
+        if refreshed:
+            log_event(
+                "SNAPSHOT_REFRESH",
+                source="manage",
+                ok=snapshot.ok,
+                error=snapshot.error,
+                age_sec=snapshot.freshness_sec(),
+                order_count=len(snapshot.get_orders()),
+            )
+        orders = snapshot.get_orders()
+        if not snapshot.ok and snapshot.error:
+            # Throttle error logging
+            last_err = float(pos.get("open_orders_err_s") or 0.0)
+            if now_s - last_err >= 30.0:
+                pos["open_orders_err_s"] = now_s
+                st["position"] = pos
+                save_state(st)
+                log_event("LIVE_MANAGE_ERROR", error=f"openOrders: {snapshot.error}")
+        open_orders_ok = bool(snapshot.ok)
+    else:
+        # OPEN_FILLED: skip openOrders polling (log once per position to avoid spam)
+        if not pos.get("openorders_skip_logged"):
+            pos["openorders_skip_logged"] = iso_utc()
+            st["position"] = pos
+            save_state(st)
+            log_event("MANAGE_SKIP_OPENORDERS", status=pos.get("status"), reason="OPEN_FILLED_gate")
+
+    open_ids: set[int] = set()
+    for _o in (orders or []):
+        if not isinstance(_o, dict):
+            continue
+        with suppress(Exception):
+            open_ids.add(int(_o.get("orderId")))
 
     def _tp1_be_transition_tick() -> bool:
         """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed.

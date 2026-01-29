@@ -26,7 +26,6 @@
 
 ### 1.2 Допуски (tolerances)
 - `BASE_EPS = 0.00001 BTC` (або еквівалент для іншого base)
-- `QUOTE_EPS = 2.0 USDC` (допуск на комісії/дрібні рухи)
 
 ### 1.3 Загальні передумови
 - `st["position"]` існує та активна
@@ -36,14 +35,14 @@
 ### 1.4 Guard-умови для LONG
 Manual close для LONG вважається підтвердженим, якщо **одночасно**:
 1) `abs(current.base_total - baseline.base_total) < BASE_EPS`
-2) `abs(current.quote_total - baseline.quote_total) < QUOTE_EPS`
-3) (Margin) `current_debt.has_debt == False` *(рекомендовано як строгий gate)*
+2) (Margin) `current_debt.has_debt == False` *(рекомендовано як строгий gate)*
 
 ### 1.5 Guard-умови для SHORT
 Manual close для SHORT вважається підтвердженим, якщо **одночасно**:
 1) `current_debt.has_debt == False` *(обовʼязковий gate)*
 2) `abs(current.base_total - baseline.base_total) < BASE_EPS`
-3) `abs(current.quote_total - baseline.quote_total) < QUOTE_EPS`
+
+Quote не є guard, оскільки quote змінюється на close через PnL + fees.
 
 > Примітка: `openOrders` **не є** джерелом істини про наявність позиції на margin spot і використовуються лише як обʼєкт cleanup.
 
@@ -111,7 +110,7 @@ Throttle опитування біржі (наприклад раз на MANUAL_
 
 Борг: через api.get_margin_debt_snapshot(...) з урахуванням isolated/cross.
 
-Перевірку guard-умов (LONG/SHORT) з цього ТЗ.
+    Перевірку guard-умов (LONG/SHORT) з цього ТЗ.
 
 (Рекомендовано) 2-step confirm (candidate → confirm), щоб уникнути eventual-consistency після ручного закриття.
 
@@ -406,6 +405,29 @@ Never
 Ніяких логів
 
 Ніяких cleanup
+
+---
+
+## Phase 2 — Exchange-truth Manual Close Detection (Finalization-First)
+
+Статус: ✅ DONE
+
+Зроблено:
+- Реалізовано manual_close_detector.tick() з exchange-truth перевіркою балансів (base/quote) та margin debt.
+- LONG / SHORT guard-умови розділені (guard = base + debt; quote не використовується).
+- Two-step confirmation через manual_close_candidate_s + MANUAL_CLOSE_CONFIRM_SEC.
+- Throttle з персистом (manual_close_next_check_s) для детермінізму після рестарту.
+- Detector лише сигналізує (handled/reason/tag/details); фіналізація виконується через існуючий finalize-contract в executor (_close_slot / _finalize_close).
+- Повторне використання існуючих механізмів: send_trade_closed, report_trade_close, margin_guard.on_after_position_closed.
+
+Tests:
+- Stage 1: no-side-effects test (detector не мутує state і не викликає API).
+- Stage 2: guards (LONG/SHORT), confirm-window, throttle persistence, інтеграційний finalize-path через executor.
+
+Примітки ⚠️:
+- Confirm/throttle залежать від персисту state; при втраті запису підтвердження може відкластися.
+- EPS-пороги зменшують, але не повністю усувають ризик false-positive при баланс-дріфті.
+- Detector навмисно не викликає _close_slot напряму; фіналізація централізована в executor.
 
 Phase 3 — Read-only exchange reality
 
