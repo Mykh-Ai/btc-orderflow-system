@@ -199,6 +199,39 @@ pos["manual_close_notified"] — антиспам для OK-notify.
 
 st["position"] = None
 
+---
+
+📌 Stage 4 — Manual Close Detection: DONE
+
+Що зроблено
+- Реалізовано 2-step confirm для manual close:
+  - 1-й tick → фіксує manual_close_candidate_s
+  - 2-й tick після confirm window + throttle → handled=True
+- Додано guard-умови:
+  - base_close з допуском BASE_EPS
+  - відсутність боргу (has_debt == False) для LONG/SHORT
+- Реалізовано скидання кандидата, якщо guard перестає виконуватись
+- Прибрано спамний snapshot OK лог
+- executor.py як і раніше очікує:
+  - handled=True → стандартний шлях _close_slot
+
+Тести
+- Додані тести Phase 4
+- Виправлено confirm-тест:
+  - другий tick відбувається після throttle-вікна, згідно контракту
+- Усі тести зелені:
+  - pytest: OK
+  - unittest: OK
+
+Критичні моменти (важливо знати)
+- Confirm ≠ throttle: підтвердження можливе лише коли tick реально виконав snapshot
+- manual_close_next_check_s — обовʼязковий для детермінізму після рестарту
+- manual_close_candidate_s — зберігається в state, не локальний
+
+Зауваження
+- Прод-код у цьому кроці коректний, змін не потребує
+- Зміни на фіналі — test-only, контракт підтверджено
+
 st["cooldown_until"] = now_s + COOLDOWN_SEC
 
 st["baseline"]["active"] = None
