@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from executor_mod.notifications import log_event
+
 
 def tick(
     st: Dict[str, Any],
@@ -38,6 +40,7 @@ def tick(
         return result
 
     pos["manual_close_next_check_s"] = now_s + check_sec
+    pos["manual_close_last_check_s"] = now_s
     result["state_dirty"] = True
 
     trade_mode = str(env.get("TRADE_MODE", "spot")).strip().lower()
@@ -71,6 +74,12 @@ def tick(
     except Exception as exc:
         pos["manual_close_last_error"] = str(exc)
         result["state_dirty"] = True
+        log_event(
+            "MANUAL_CLOSE_SNAPSHOT_ERROR",
+            symbol=symbol,
+            trade_mode=trade_mode,
+            error=str(exc),
+        )
         return result
 
     base_total = balances["base_free"] + balances["base_locked"]
@@ -83,54 +92,31 @@ def tick(
     base_delta = base_total - base_base
     quote_delta = quote_total - quote_base
 
-    base_eps = _get_float(env.get("BASE_EPS"), 0.00001)
-    quote_eps = _get_float(env.get("QUOTE_EPS"), 2.0)
-    if base_eps < 0.0:
-        base_eps = 0.0
-    if quote_eps < 0.0:
-        quote_eps = 0.0
-
     has_debt = bool(debt.get("has_debt")) if trade_mode == "margin" else False
-    guard_base = abs(base_delta) < base_eps
-
     side = str(pos.get("side") or "").upper()
-    if side == "LONG":
-        guard = guard_base and (not has_debt if trade_mode == "margin" else True)
-    elif side == "SHORT":
-        guard = (not has_debt) and guard_base
-    else:
-        guard = False
 
-    if guard:
-        candidate = _get_float(pos.get("manual_close_candidate_s"), 0.0)
-        if candidate <= 0.0:
-            pos["manual_close_candidate_s"] = now_s
-            result["state_dirty"] = True
-        else:
-            confirm_sec = _get_float(env.get("MANUAL_CLOSE_CONFIRM_SEC"), check_sec or 120.0)
-            if confirm_sec <= 0.0:
-                confirm_sec = check_sec or 120.0
-            if (now_s - candidate) >= confirm_sec:
-                pos.pop("manual_close_candidate_s", None)
-                result["state_dirty"] = True
-                result["handled"] = True
-                result["reason"] = "MANUAL_CLOSE_DETECTED"
-                result["tag"] = "MANUAL_CLOSE_DETECTED_OK"
-                result["details"] = {
-                    "trade_mode": trade_mode,
-                    "side": side,
-                    "base_total": base_total,
-                    "quote_total": quote_total,
-                    "base_baseline": base_base,
-                    "quote_baseline": quote_base,
-                    "base_delta": base_delta,
-                    "quote_delta": quote_delta,
-                    "has_debt": has_debt,
-                }
-    else:
-        if pos.get("manual_close_candidate_s") is not None:
-            pos.pop("manual_close_candidate_s", None)
-            result["state_dirty"] = True
+    pos["manual_close_diag"] = {
+        "trade_mode": trade_mode,
+        "side": side,
+        "base_total": base_total,
+        "quote_total": quote_total,
+        "base_baseline": base_base,
+        "quote_baseline": quote_base,
+        "delta_base": base_delta,
+        "delta_quote": quote_delta,
+        "has_debt": has_debt,
+    }
+    result["state_dirty"] = True
+    log_event(
+        "MANUAL_CLOSE_SNAPSHOT_OK",
+        symbol=symbol,
+        trade_mode=trade_mode,
+        base_total=base_total,
+        quote_total=quote_total,
+        delta_base=base_delta,
+        delta_quote=quote_delta,
+        has_debt=has_debt,
+    )
 
     return result
 
