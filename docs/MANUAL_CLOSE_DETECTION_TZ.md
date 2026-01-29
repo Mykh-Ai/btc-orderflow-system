@@ -431,6 +431,25 @@ Tests:
 
 Phase 3 — Read-only exchange reality
 
+Статус: ✅ ВИКОНАНО (Manual Close Detection)
+
+Що зроблено:
+- manual_close_detector переведено в режим read-only exchange snapshot.
+- раз на MANUAL_CLOSE_CHECK_SEC (throttle через pos["manual_close_next_check_s"], персиститься в state).
+- читає з біржі balances + debt snapshot (margin: margin_account + get_margin_debt_snapshot, spot: spot account).
+- рахує totals + deltas vs baseline + has_debt.
+- зберігає діагностику в pos["manual_close_diag"].
+- пише один JSONL log line на кожен виконаний snapshot (MANUAL_CLOSE_SNAPSHOT_OK), і окремо MANUAL_CLOSE_SNAPSHOT_ERROR при помилці.
+- нема side effects: не виставляє candidate/confirm/notified, не тригерить finalize/cleanup, не викликає close.
+
+Примітка про “спам”:
+- MANUAL_CLOSE_SNAPSHOT_OK логуватиметься кожен tick (наприклад, раз на 120 сек). Це нормально для Stage 3, бо це діагностичний snapshot.
+- “OK один раз на trade_key” (антиспам для Telegram/webhook) — це етапи Stage 4/5, не Stage 3.
+
+Примітка про executor.py:
+- executor.py як і раніше очікує, що manual_close_detector.tick() може повернути handled=True, і тоді піде шлях фіналізації через _close_slot.
+- Після Stage 3 (read-only) handled завжди False, тому manual close зараз не закриє позицію. Це очікувано до реалізації Stage 4/5.
+
 Before
 
 Executor не знає current exchange reality для manual close
