@@ -437,8 +437,8 @@ bootstrap_seen_keys_from_tail(st, tail_lines)
 
 **Запуск тестів**:
 ```bash
-python -m unittest -q
-python -m pytest test/test_tp_watchdog.py -v
+pytest -q
+pytest -q test/test_tp_watchdog.py
 ```
 
 **Важливо для тестів**: `exchange_snapshot` є singleton модулем, який може зберігати стан між тестами. У `test_tp_watchdog.py` використовується `reset_snapshot_for_tests()` в `setUp()` для ізоляції тестів. Ця функція призначена ТІЛЬКИ для тестів і НЕ має використовуватися в production runtime.
@@ -1308,38 +1308,46 @@ python executor.py
 ## Тестування
 
 ```bash
+# Тести запускаються лише через pytest.
+# python -m unittest не підтримується, бо тести використовують pytest-фічі/імпорти.
+
+# Встановити залежності
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
 # Запустити всі тести
-python -m pytest test/
+pytest -q
 
 # Окремі модулі
-python -m pytest test/test_executor.py
-python -m pytest test/test_state_store.py
-python -m pytest test/test_binance_api_smoke.py
-python -m pytest test/test_invariants_module.py
-python -m pytest test/test_margin_policy.py
-python -m pytest test/test_margin_policy_isolated.py
-python -m pytest test/test_trail.py
+pytest -q test/test_executor.py
+pytest -q test/test_state_store.py
+pytest -q test/test_binance_api_smoke.py
+pytest -q test/test_invariants_module.py
+pytest -q test/test_margin_policy.py
+pytest -q test/test_margin_policy_isolated.py
+pytest -q test/test_trail.py
 
 # Watchdog тести
-python -m pytest test/test_tp_watchdog.py -v
-python -m pytest test/test_sl_watchdog.py -v
+pytest -q test/test_tp_watchdog.py
+pytest -q test/test_sl_watchdog.py
 
 # Snapshot тести
-python -m pytest test/test_exchange_snapshot.py
-python -m pytest test/test_price_snapshot.py
+pytest -q test/test_exchange_snapshot.py
+pytest -q test/test_price_snapshot.py
 
 # Інші функціональні тести
-python -m pytest test/test_market_data.py
-python -m pytest test/test_event_dedup.py
-python -m pytest test/test_risk_math.py
-python -m pytest test/test_notifications.py
-python -m pytest test/test_enrich_trades_with_fees.py
+pytest -q test/test_market_data.py
+pytest -q test/test_event_dedup.py
+pytest -q test/test_risk_math.py
+pytest -q test/test_notifications.py
+pytest -q test/test_enrich_trades_with_fees.py
 
 # Запуск з verbose output
-python -m pytest -v test/
+pytest -v test/
 
 # Запуск з print statements
-python -m pytest -s test/test_executor.py
+pytest -s test/test_executor.py
+
 ```
 
 ---
