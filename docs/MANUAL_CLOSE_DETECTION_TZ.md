@@ -83,5 +83,483 @@ Manual close для SHORT вважається підтвердженим, як�
 **Критерій приймання:**  
 - Якщо позиція закрита вручну (balance ≈ baseline), cleanup виконується негайно, всі інші дії блокує return, state очищено, оператор отримує повідомлення.
 
+- Архітектура (додається до ТЗ)
+Компоненти та відповідальність
+1) Executor (manage_v15_position)
+
+Роль: єдиний власник state-machine та єдине місце, яке виконує дії, що змінюють стан (cancel/repay/clear state).
+
+Відповідає за:
+
+Виклик manual_close_detector.tick(...) на самому початку manage_v15_position (позиція 1/10).
+
+Якщо tick() повернув True → негайний return (Finalization-First), жодні watchdog/trailing/TP/SL далі не виконуються.
+
+Виконання cleanup (через детектор) в рамках того ж циклу executor (single-owner, без паралельних процесів).
+
+2) Новий модуль executor_mod/manual_close_detector.py
+
+Роль: детекція ручного втручання на основі exchange reality + baseline, з контрольованою частотою перевірок.
+
+Відповідає за:
+
+Throttle опитування біржі (наприклад раз на MANUAL_CLOSE_CHECK_SEC, дефолт 120 сек) з персистентним ключем у state.
+
+Читання current balance/debt з біржі (margin spot):
+
+Баланси: через api.margin_account(...) + парсинг margin_policy._asset_snapshot(...) до free/locked.
+
+Борг: через api.get_margin_debt_snapshot(...) з урахуванням isolated/cross.
+
+Перевірку guard-умов (LONG/SHORT) з цього ТЗ.
+
+(Рекомендовано) 2-step confirm (candidate → confirm), щоб уникнути eventual-consistency після ручного закриття.
+
+При confirmed:
+
+Лог 1 раз (MANUAL_CLOSE_DETECTED_OK) без спаму.
+
+Notify 1 раз через notifications (див. нижче).
+
+Запуск cleanup (cancel exits → repay → clear state → save_state) і повернення True.
+
+Дозволені мутації state (мінімум):
+
+pos["manual_close_next_check_s"] — throttle таймер.
+
+pos["manual_close_candidate_s"] — 2-step confirm.
+
+pos["manual_close_notified"] — антиспам для OK-повідомлення.
+
+Очистка позиції/базелайну та запис last_closed виконується в cleanup-блоці (single-owner).
+
+3) executor_mod/notifications.py ("труба")
+
+Роль: I/O модуль. Не приймає рішень, не зберігає бізнес-стан, не робить дедуп поза тим, що явно задано state.
+
+Відповідає за:
+
+log_event(...) — запис JSONL у EXEC_LOG з cap.
+
+send_webhook(payload) — доставка у n8n/Telegram (та інші канали).
+
+send_trade_closed(...) — стандартний шлях відправки TRADE_CLOSED (може бути перевикористаний для manual close як close_reason=MANUAL_CLOSE_DETECTED).
+
+Принцип антиспаму:
+
+Дедуп/тротлінг виконуються в state (executor/детектор), а не в notifications.py.
+
+Мінімальний контракт інтеграції
+1) Виклик у manage_v15_position (на початку)
+
+Executor завжди викликає детектор першим кроком:
+
+handled = manual_close_detector.tick(st, pos, api, margin_policy, ENV, now_s)
+
+if handled: return
+
+Примітка: детектор не запускається, якщо st["position"] або st["baseline"]["active"] відсутні.
+
+2) Вхідні параметри tick(...)
+
+manual_close_detector.tick(...) має приймати лише те, що потрібно для (a) зчитування exchange reality і (b) запуску cleanup:
+
+st: Dict[str, Any] — глобальний state (джерело істини).
+
+pos: Dict[str, Any] — активна позиція (посилання на st["position"]).
+
+api — бинанс API wrapper (виклики margin_account, get_margin_debt_snapshot, cancel_order, тощо).
+
+margin_policy — доступ до _asset_snapshot(...) та repay_if_any(...) (для TRADE_MODE=margin).
+
+ENV: Dict[str, Any] — конфіг (EPS, throttle seconds, isolated/cross flags, COOLDOWN_SEC, тощо).
+
+now_s: int — поточний час у секундах.
+
+Заборона: tick() не повинен читати глобальні env напряму, окрім як через ENV, щоб зберегти детермінізм тестів.
+
+3) Дозволені мутації state (scope)
+
+Щоб уникнути “розповзання” відповідальності, tick() має право змінювати лише наступні ключі, окрім блоку cleanup:
+
+3.1 Detector keys (технічні)
+
+pos["manual_close_next_check_s"] — throttle для опитування біржі.
+
+pos["manual_close_candidate_s"] — 2-step confirm (перший успішний збіг guard-умов).
+
+pos["manual_close_notified"] — антиспам для OK-notify.
+
+(опц.) pos["manual_close_last_check_ts"] — телеметрія.
+
+(опц.) pos["manual_close_last_error"] — остання помилка читання exchange reality (без spam-логів).
+
+3.2 Cleanup keys (бізнес-мутації) — тільки у confirmed гілці
+
+При confirmed manual close детектор виконує cleanup і має право змінювати:
+
+st["position"] = None
+
+st["cooldown_until"] = now_s + COOLDOWN_SEC
+
+st["baseline"]["active"] = None
+
+st["last_closed"] — з причиною MANUAL_CLOSE_DETECTED та діагностикою (deltas + debt)
+
+(опц.) st["last_notified_close_trade_key"] — через виклик notifications.send_trade_closed(...) (dedupe)
+
+Заборона: tick() не повинен змінювати інші watchdog поля (SL/TP/trailing) і не повинен створювати/модифікувати ордери, окрім cancel exits та MARKET-flatten (якщо таке передбачено cleanup, але для manual close зазвичай не потрібно).
+
+4) Повідомлення та логування (no-spam)
+
+У tick() при confirmed:
+
+1× notifications.log_event("MANUAL_CLOSE_DETECTED_OK", ...)
+
+1× notify через notifications.send_trade_closed(st, pos, close_reason="MANUAL_CLOSE_DETECTED") або окремий webhook event MANUAL_CLOSE_OK
+
+Дедуп/антиспам забезпечується:
+
+pos["manual_close_notified"] (локально)
+
+st["last_notified_close_trade_key"] (глобально, якщо використовується send_trade_closed)
+
+Періодичність перевірок (Polling Policy)
+Базовий режим
+
+MANUAL_CLOSE_CHECK_SEC = 120 секунд.
+
+Використовується за замовчуванням, коли немає активних WARN/WARM сигналів.
+
+Мета: мінімізувати API-навантаження і шум, зберігаючи керованість без доступу до терміналу.
+
+Підвищена частота при WARN/WARM
+
+Якщо в state зафіксовано попереджувальний стан (WARN або WARM), executor дозволяє зменшити інтервал:
+
+MANUAL_CLOSE_CHECK_SEC_WARN = 30 секунд (рекомендовано)
+
+Джерело WARN/WARM: внутрішні алерти executor (watchdog, margin, invariant), не Telegram.
+
+Реалізація throttle
+
+Фактичний інтервал визначається в tick() динамічно:
+
+якщо warn_active == True → використати MANUAL_CLOSE_CHECK_SEC_WARN
+
+інакше → MANUAL_CLOSE_CHECK_SEC
+
+Обраний інтервал персиститься через pos["manual_close_next_check_s"].
+
+Безпека
+
+Навіть у WARN/WARM режимі детектор не має права виконувати будь-які дії без підтвердження guard-умов.
+
+Частіший polling не змінює бізнес-логіку, лише швидкість реакції.
+
+Періодичність опитування (throttle policy)
+1) Дефолтна частота
+
+MANUAL_CLOSE_CHECK_SEC = 120 сек (раз на 2 хв) — дефолтний інтервал опитування біржі.
+
+Throttle реалізується через pos["manual_close_next_check_s"] і персиститься в state, щоб після рестарту частота залишалась детермінованою.
+
+2) Прискорений режим при WARN/WARM (опційно)
+
+Якщо в системі активний стан підвищеної уваги (наприклад pos["warm"] == True або інший існуючий прапор/сигнал), дозволяється зменшити інтервал:
+
+MANUAL_CLOSE_CHECK_SEC_WARM = 15..30 сек.
+
+Вибір конкретного прапора WARM/WARN залежить від наявних сигналів у state; якщо такого сигналу немає, використовується лише дефолтний інтервал 120 сек.
+
+3) Заборона спаму
+
+Незалежно від інтервалу опитування, MANUAL_CLOSE_DETECTED_OK та Telegram/webhook notify відправляються один раз на trade_key (див. розділ no-spam).
+
+Принципи
+
+Single-owner: лише executor виконує side-effect дії (cancel/repay/state reset).
+
+Exchange reality > local state: рішення приймаються за даними біржі, baseline — якір.
+
+Finalization-First: confirmed → cleanup → return.
+
+Етапи впровадження ТЗ (інваріантний формат)
+Phase 0 — Аудит і карта інтеграції (NO CODE)
+
+Before
+
+Немає модуля manual close
+
+Executor працює як зараз
+
+Agent does
+
+Визначає:
+
+де читаються balances / debt
+
+де виконується cleanup
+
+де викликається notifications.send_trade_closed
+
+точку вставки на початку manage_v15_position
+
+After
+
+Є чітка карта інтеграції
+
+Є контракт manual_close_detector.tick(...)
+
+Never
+
+Ніяких змін логіки
+
+Ніяких diff
+
+Phase 1 — Skeleton модуля (Zero behavior change)
+
+Before
+
+manual_close_detector не існує
+
+Agent does
+
+Додає файл executor_mod/manual_close_detector.py
+
+Реалізує tick(...)->False
+
+Додає виклик tick() на початку manage_v15_position
+
+After
+
+Executor викликає tick()
+
+Поведінка повністю ідентична попередній
+
+Never
+
+Жодних API викликів
+
+Жодних side effects
+
+Phase 2 — Throttle (детермінізм без дій)
+
+Before
+
+Немає контролю частоти
+
+Agent does
+
+Додає pos["manual_close_next_check_s"]
+
+Додає MANUAL_CLOSE_CHECK_SEC = 120
+
+tick():
+
+поважає throttle
+
+нічого не читає
+
+нічого не змінює, окрім throttle key
+
+After
+
+Polling детермінований
+
+Поведінка не змінена
+
+Never
+
+Ніяких логів
+
+Ніяких cleanup
+
+Phase 3 — Read-only exchange reality
+
+Before
+
+Executor не знає current exchange reality для manual close
+
+Agent does
+
+Реалізує read-only:
+
+balances → base_total / quote_total
+
+debt snapshot
+
+Порівнює з baseline
+
+After
+
+Значення current vs baseline обчислюються
+
+Але ніщо не тригериться
+
+Never
+
+Ніяких candidate
+
+Ніяких confirm
+
+Ніяких side effects
+
+Phase 4 — Guards + 2-step confirm
+
+Before
+
+Немає формальної детекції
+
+Agent does
+
+Реалізує guards:
+
+LONG: totals + debt gate
+
+SHORT: debt gate + totals
+
+Реалізує 2-step confirm:
+
+tick₁ → candidate
+
+tick₂ → confirmed
+
+After
+
+confirmed == True можливе лише після двох послідовних тиків
+
+Candidate скидається при будь-якому mismatch
+
+Never
+
+Confirm за один тик
+
+Cleanup на цьому етапі
+
+Phase 5 — Cleanup (Finalization-First)
+
+Before
+
+confirmed=True не має ефекту
+
+Agent does
+
+При confirmed=True:
+
+cancel exit orders (best-effort)
+
+repay debt (best-effort)
+
+reset position
+
+reset baseline
+
+set cooldown
+
+return з manage_v15_position
+
+After
+
+State консистентний
+
+Executor не виконує жодної іншої логіки в цьому тіку
+
+Never
+
+Частковий cleanup
+
+Watchdog / TP / SL після confirmed
+
+Phase 6 — Notifications + logging (no-spam)
+
+Before
+
+Cleanup не повідомляється
+
+Agent does
+
+При cleanup:
+
+лог MANUAL_CLOSE_DETECTED_OK 1 раз
+
+send_trade_closed(..., MANUAL_CLOSE_DETECTED) 1 раз
+
+Дедуп:
+
+pos["manual_close_notified"]
+
+існуючий last_notified_close_trade_key
+
+After
+
+Один trade → одне повідомлення
+
+Never
+
+Повторні notify
+
+Notify без cleanup
+
+Phase 7 — Tests (інваріанти)
+
+Agent does
+
+Тести гарантують:
+
+confirm ≠ possible за 1 тик
+
+SHORT без repay → no confirm
+
+LONG/SHORT guards коректні
+
+notify only once
+
+After
+
+Логіка захищена від регресій
+
+Never
+
+Тести на “логи”
+
+Тести на execution
+
+Phase 8 — Rollout (концептуально)
+
+Before
+
+Manual close не обробляється
+
+After
+
+Ручне закриття на біржі →
+exchange reality →
+guards →
+cleanup →
+notify →
+чистий state
+
+Never
+
+Ручні команди
+
+Флаги
+
+Часткові стани
+
+Фінальна формула (інваріант)
+
+Exchange reality — єдине джерело істини.
+Якщо позиція фактично закрита на біржі, executor зобовʼязаний:
+
+це виявити,
+
+безпечно очистити state,
+
+зробити це рівно один раз.
+
+Це і є сутність ТЗ.
+
 ---
 
