@@ -1593,6 +1593,16 @@ Added `SYNC_PERIODIC_SEC=300` to call `sync_from_binance(st, reason="PERIODIC")`
 
 **Current behavior:**
 - `emergency.check_flag()` — reads flag (checks if exists)
+
+---
+
+### 9.3 Manual Close Detection (Finalization-First)
+
+Manual close handling now uses exchange-truth (balances + debt) compared to the baseline snapshot:
+- **Guards**: LONG/SHORT require base total within EPS and margin debt cleared (quote is not a guard).
+- **Throttle**: persisted `manual_close_next_check_s` ensures deterministic polling after restart.
+- **Finalization-first**: detector emits a confirm signal and executor runs the existing finalize contract (cleanup → state reset → return).
+- **No spam**: relies on existing trade closed dedupe (`last_notified_close_trade_key`).
 - `emergency.remove_flag()` — deletes flag after processing
 - **No function creates the flag**
 
