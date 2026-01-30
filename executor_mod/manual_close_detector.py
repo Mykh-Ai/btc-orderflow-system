@@ -122,7 +122,7 @@ def tick(
             result["state_dirty"] = True
         return result
 
-    base_close = abs(base_total - base_base) < base_eps
+    base_close = abs(base_total - base_base) <= base_eps
     if side == "SHORT":
         guard_ok = (not has_debt) and base_close
     else:
