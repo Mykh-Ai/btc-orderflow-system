@@ -34,13 +34,13 @@
 
 ### 1.4 Guard-умови для LONG
 Manual close для LONG вважається підтвердженим, якщо **одночасно**:
-1) `abs(current.base_total - baseline.base_total) < BASE_EPS`
+1) `abs(current.base_total - baseline.base_total) <= BASE_EPS`
 2) (Margin) `current_debt.has_debt == False` *(рекомендовано як строгий gate)*
 
 ### 1.5 Guard-умови для SHORT
 Manual close для SHORT вважається підтвердженим, якщо **одночасно**:
 1) `current_debt.has_debt == False` *(обовʼязковий gate)*
-2) `abs(current.base_total - baseline.base_total) < BASE_EPS`
+2) `abs(current.base_total - baseline.base_total) <= BASE_EPS`
 
 Quote не є guard, оскільки quote змінюється на close через PnL + fees.
 
@@ -429,7 +429,7 @@ Never
   - 1-й tick → фіксує manual_close_candidate_s
   - 2-й tick після confirm window + throttle → handled=True
 - Додано guard-умови:
-  - base_close з допуском BASE_EPS
+  - base_close з допуском BASE_EPS (inclusive: `<=`)
   - відсутність боргу (has_debt == False) для LONG/SHORT
 - Реалізовано скидання кандидата, якщо guard перестає виконуватись
 - Прибрано спамний snapshot OK лог
