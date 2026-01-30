@@ -102,7 +102,7 @@ class TestNotifications(unittest.TestCase):
         pos = {"trade_key": "TKDUP", "symbol": "BTCUSDC", "side": "SELL"}
         sent = []
 
-        with patch.object(n, "send_webhook", side_effect=lambda p: sent.append(p)), \
+        with patch.object(n, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)), \
              patch.object(n, "log_event", side_effect=lambda *a, **k: None):
             n.send_trade_closed(st, pos, "MANUAL", mode="live")
             self.assertEqual(st.get("last_notified_close_trade_key"), "TKDUP")
@@ -116,7 +116,7 @@ class TestNotifications(unittest.TestCase):
         pos = {"trade_key": "TK_FALLBACK", "symbol": "BTCUSDC", "side": "LONG"}
         sent = []
 
-        with patch.object(n, "send_webhook", side_effect=lambda p: sent.append(p)), \
+        with patch.object(n, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)), \
              patch.object(n, "log_event", side_effect=lambda *a, **k: None):
             n.send_trade_closed(st, pos, "REASON", mode="live")
 

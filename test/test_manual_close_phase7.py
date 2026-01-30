@@ -41,7 +41,7 @@ class TestManualClosePhase7(unittest.TestCase):
              patch.object(executor.margin_guard, "on_after_position_closed", side_effect=lambda *a, **k: None), \
              patch.object(executor, "log_event", side_effect=lambda *a, **k: None), \
              patch.object(notifications, "log_event", side_effect=lambda *a, **k: None), \
-             patch.object(notifications, "send_webhook", side_effect=lambda p: sent.append(p)):
+             patch.object(notifications, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)):
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
         self.assertEqual(len(sent), 1)
