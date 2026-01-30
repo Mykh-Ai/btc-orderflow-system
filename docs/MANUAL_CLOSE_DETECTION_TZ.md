@@ -591,23 +591,34 @@ Watchdog / TP / SL після confirmed
 
 -------------Phase 6 — Notifications + logging (no-spam)
 
+Статус: DONE.
+
+Що зроблено:
+- Manual close не має окремого notify side-channel: все йде через стандартний close-пайплайн (_close_slot → send_trade_closed).
+- При handled=True діагностичні дані manual close збираються у pos["close_details"] = {"manual_close": details}.
+- У _close_slot() close_details додаються в st["last_closed"]["details"] перед викликом send_trade_closed().
+- TRADE_CLOSED payload включає поле "details" (береться з pos["close_details"] або st["last_closed"]["details"]).
+
+No-spam / dedupe:
+- Повідомлення TRADE_CLOSED дедупиться за trade_key через st["last_notified_close_trade_key"] (persisted state).
+
+Notes:
+- У handled-гілці НЕ додається save_state(); dedupe стає restart-safe завдяки save_state всередині _close_slot().
+
 Before
 
-Cleanup не повідомляється
+Немає окремого notify про cleanup (лише стандартний TRADE_CLOSED)
 
 Agent does
 
 При cleanup:
 
-лог MANUAL_CLOSE_DETECTED_OK 1 раз
-
 send_trade_closed(..., MANUAL_CLOSE_DETECTED) 1 раз
+details через pos["close_details"] → st["last_closed"]["details"] → payload["details"]
 
 Дедуп:
 
-pos["manual_close_notified"]
-
-існуючий last_notified_close_trade_key
+існуючий last_notified_close_trade_key (persisted by save_state in _close_slot)
 
 After
 

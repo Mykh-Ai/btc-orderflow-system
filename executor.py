@@ -1127,6 +1127,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             "side": pos.get("side"),
             "entry": (pos.get("prices") or {}).get("entry"),
         }
+        if isinstance(pos.get("close_details"), dict):
+            st["last_closed"]["details"] = pos["close_details"]
         with suppress(Exception):
             reporting.report_trade_close(st, pos, reason)
         send_trade_closed(st, pos, reason, mode="live")
@@ -1152,6 +1154,13 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if manual_signal.get("handled"):
         reason = str(manual_signal.get("reason") or "MANUAL_CLOSE_DETECTED")
         tag = str(manual_signal.get("tag") or "MANUAL_CLOSE_DETECTED_OK")
+
+        details = {}
+        if isinstance(manual_signal.get("details"), dict):
+            details = manual_signal.get("details") or {}
+        elif isinstance(pos.get("manual_close_diag"), dict):
+            details = pos.get("manual_close_diag") or {}
+        pos["close_details"] = {"manual_close": details}
 
         if pos.get("manual_close_candidate_s") is not None:
             pos.pop("manual_close_candidate_s", None)

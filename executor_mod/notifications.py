@@ -155,6 +155,13 @@ def send_trade_closed(st: Dict[str, Any], pos: Dict[str, Any], close_reason: str
             "trade_key": trade_key,
             "close_reason": str(close_reason or ""),
         }
+        details = None
+        if isinstance(pos.get("close_details"), dict):
+            details = pos.get("close_details")
+        elif isinstance(st.get("last_closed"), dict):
+            details = st["last_closed"].get("details")
+        if isinstance(details, dict):
+            payload["details"] = details
 
         for k_src, k_out in (
             ("qty", "qty"),
