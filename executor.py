@@ -1113,6 +1113,30 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             keys=[k for (k, _) in attempted],
         )
 
+    def _close_slot(reason: str) -> None:
+        if pos.get("baseline_clear_pending"):
+            baseline = st.get("baseline")
+            if isinstance(baseline, dict):
+                baseline["active"] = None
+                st["baseline"] = baseline
+            pos.pop("baseline_clear_pending", None)
+        st["last_closed"] = {
+            "ts": iso_utc(),
+            "mode": "live",
+            "reason": reason,
+            "side": pos.get("side"),
+            "entry": (pos.get("prices") or {}).get("entry"),
+        }
+        with suppress(Exception):
+            reporting.report_trade_close(st, pos, reason)
+        send_trade_closed(st, pos, reason, mode="live")
+        st["position"] = None
+        st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
+        st["lock_until"] = 0.0
+        save_state(st)
+        with suppress(Exception):
+            margin_guard.on_after_position_closed(st)
+
     def _finalize_close(reason: str, tag: str) -> None:
         """
         AK-47 contract:
@@ -1134,10 +1158,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if pos.get("manual_close_diag") is not None:
             pos.pop("manual_close_diag", None)
 
-        baseline = st.get("baseline")
-        if isinstance(baseline, dict):
-            baseline["active"] = None
-            st["baseline"] = baseline
+        pos["baseline_clear_pending"] = True
 
         _finalize_close(reason, tag=tag)
         return
@@ -1401,24 +1422,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         send_webhook({"event": event_name, "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
         # Note: tp1_done is already set when TP1_FILLED detected, independent of BE success
         return True
-
-    def _close_slot(reason: str) -> None:
-        st["last_closed"] = {
-            "ts": iso_utc(),
-            "mode": "live",
-            "reason": reason,
-            "side": pos.get("side"),
-            "entry": (pos.get("prices") or {}).get("entry"),
-        }
-        with suppress(Exception):
-            reporting.report_trade_close(st, pos, reason)
-        send_trade_closed(st, pos, reason, mode="live")
-        st["position"] = None
-        st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
-        st["lock_until"] = 0.0
-        save_state(st)
-        with suppress(Exception):
-            margin_guard.on_after_position_closed(st)
 
     tp1_id = int(pos["orders"].get("tp1") or 0)
     tp2_id = int(pos["orders"].get("tp2") or 0)

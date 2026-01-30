@@ -552,6 +552,11 @@ Cleanup на цьому етапі
 - Якщо процес впаде між cleanup і _close_slot() save — ці зміни не запишуться.
 - Це нормально для Finalization-First: якщо close не відбувся, стан не має бути напівзакритим.
 
+Додатково (Phase 5.x — restart determinism fix):
+- baseline.active очищається лише в _close_slot() під маркером baseline_clear_pending.
+- Мета: best-effort save під час cleanup не може зафіксувати baseline.active=None, поки position ще OPEN (crash-window).
+- Додано регресійний тест: test_manual_close_defers_baseline_clear_until_close_slot.
+
 Before
 
 confirmed=True не має ефекту

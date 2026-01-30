@@ -995,6 +995,71 @@ class TestExecutorV15(unittest.TestCase):
 
         self.assertNotIn("tp1", st["position"]["orders"])
 
+    def test_manual_close_defers_baseline_clear_until_close_slot(self):
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100.0},
+                "orders": {"tp1": 111},
+            },
+            "baseline": {"active": {"source": "manual"}},
+        }
+        saved_best_effort = []
+        saved_final = []
+
+        def capture_best_effort(state, _where):
+            saved_best_effort.append(deepcopy(state))
+
+        def capture_save_state(state):
+            saved_final.append(deepcopy(state))
+
+        with patch.object(
+            executor.manual_close_detector,
+            "tick",
+            return_value={"handled": True, "reason": "MANUAL", "tag": "MANUAL"},
+        ), patch.object(
+            executor.emergency,
+            "save_state_safe",
+            side_effect=capture_best_effort,
+        ), patch.object(
+            executor,
+            "save_state",
+            side_effect=capture_save_state,
+        ), patch.object(
+            executor.binance_api,
+            "cancel_order",
+            return_value={"status": "CANCELED"},
+        ), patch.object(
+            executor,
+            "send_trade_closed",
+            lambda *_,
+            **__: None,
+        ), patch.object(
+            executor.reporting,
+            "report_trade_close",
+            lambda *_: None,
+        ), patch.object(
+            executor.margin_guard,
+            "on_after_position_closed",
+            lambda *_: None,
+        ), patch.object(
+            executor,
+            "log_event",
+            lambda *_,
+            **__: None,
+        ):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertTrue(saved_best_effort)
+        self.assertIsNotNone(saved_best_effort[0]["position"])
+        self.assertIsNotNone(saved_best_effort[0]["baseline"]["active"])
+        self.assertTrue(saved_final)
+        self.assertIsNone(saved_final[-1]["position"])
+        self.assertIsNone(saved_final[-1]["baseline"]["active"])
+
     def test_manual_close_clears_position_when_exchange_empty(self):
         """Test I13_CLEAR_STATE_ON_EXCHANGE_CLEAR workflow: manual close from phone.
         
