@@ -1125,14 +1125,26 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         _close_slot(reason)
 
     manual_signal = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
-    if manual_signal.get("state_dirty"):
-        st["position"] = pos
-        save_state(st)
     if manual_signal.get("handled"):
         reason = str(manual_signal.get("reason") or "MANUAL_CLOSE_DETECTED")
         tag = str(manual_signal.get("tag") or "MANUAL_CLOSE_DETECTED_OK")
+
+        if pos.get("manual_close_candidate_s") is not None:
+            pos.pop("manual_close_candidate_s", None)
+        if pos.get("manual_close_diag") is not None:
+            pos.pop("manual_close_diag", None)
+
+        baseline = st.get("baseline")
+        if isinstance(baseline, dict):
+            baseline["active"] = None
+            st["baseline"] = baseline
+
         _finalize_close(reason, tag=tag)
         return
+
+    if manual_signal.get("state_dirty"):
+        st["position"] = pos
+        save_state(st)
 
     # GATE: Only poll openOrders when status == OPEN (not OPEN_FILLED)
     # During OPEN_FILLED, rely on place_order responses + retries, not polling

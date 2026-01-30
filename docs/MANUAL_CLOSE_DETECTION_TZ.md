@@ -543,6 +543,14 @@ Confirm за один тик
 Cleanup на цьому етапі
 
 ----------Phase 5 — Cleanup (Finalization-First)
+Статус: DONE (змерджено у коміт f4d349f).
+Підсумок: handled=True шлях тепер = cleanup baseline/keys → _finalize_close → return.
+Вилучено Phase 6 лог/notify та manual_close_notified з Phase 5.
+Прибрано зайві save_state() до/після _finalize_close; лишається save_state всередині _close_slot().
+Тепер НЕ робимо save_state() перед _finalize_close(). Це означає:
+- cleanup baseline.active=None і pop ключів персистяться разом з _close_slot() save.
+- Якщо процес впаде між cleanup і _close_slot() save — ці зміни не запишуться.
+- Це нормально для Finalization-First: якщо close не відбувся, стан не має бути напівзакритим.
 
 Before
 
