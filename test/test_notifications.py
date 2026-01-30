@@ -94,6 +94,34 @@ class TestNotifications(unittest.TestCase):
             n.send_trade_closed(st, pos, "SL_WATCHDOG", mode="live")
 
         self.assertEqual(len(sent), 1, "Must emit TRADE_CLOSED only once per trade_key")
+        self.assertEqual(st.get("last_notified_close_trade_key"), "TK2")
+
+    def test_send_trade_closed_dedup_persists_trade_key(self):
+        import executor_mod.notifications as n
+        st = {}
+        pos = {"trade_key": "TKDUP", "symbol": "BTCUSDC", "side": "SELL"}
+        sent = []
+
+        with patch.object(n, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "MANUAL", mode="live")
+            self.assertEqual(st.get("last_notified_close_trade_key"), "TKDUP")
+            n.send_trade_closed(st, pos, "MANUAL", mode="live")
+
+        self.assertEqual(len(sent), 1)
+
+    def test_trade_closed_details_fallback_to_last_closed(self):
+        import executor_mod.notifications as n
+        st = {"last_closed": {"details": {"manual_close": {"src": "last_closed"}}}}
+        pos = {"trade_key": "TK_FALLBACK", "symbol": "BTCUSDC", "side": "LONG"}
+        sent = []
+
+        with patch.object(n, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)), \
+             patch.object(n, "log_event", side_effect=lambda *a, **k: None):
+            n.send_trade_closed(st, pos, "REASON", mode="live")
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].get("details", {}).get("manual_close", {}).get("src"), "last_closed")
 
     def test_send_trade_closed_no_trade_key_still_emits(self):
         import executor_mod.notifications as n
