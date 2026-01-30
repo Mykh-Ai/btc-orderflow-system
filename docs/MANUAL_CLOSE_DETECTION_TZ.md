@@ -632,6 +632,17 @@ Notify без cleanup
 
 -------------Phase 7 — Tests (інваріанти)
 
+Статус: DONE (commit 33c2e295).
+
+Що зроблено:
+- Додано тести Phase 7: test/test_manual_close_phase7.py
+  - test_manual_close_trade_closed_includes_details: гарантує, що при handled=True TRADE_CLOSED payload містить details.manual_close,
+    а saved state містить last_closed.details.manual_close та last_notified_close_trade_key.
+  - test_phase6_no_legacy_flags: анти-регресія — executor.py не містить manual_close_notified і log_event("MANUAL_CLOSE_DETECTED_OK").
+- Розширено test/test_notifications.py:
+  - test_send_trade_closed_dedup_persists_trade_key: dedupe по trade_key і фіксація last_notified_close_trade_key.
+  - test_trade_closed_details_fallback_to_last_closed: fallback details з st["last_closed"]["details"], якщо pos без close_details.
+
 Agent does
 
 Тести гарантують:
