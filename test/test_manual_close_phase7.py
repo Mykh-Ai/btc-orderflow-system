@@ -28,11 +28,21 @@ class TestManualClosePhase7(unittest.TestCase):
             "tag": "MANUAL",
             "details": {"k": "v"},
         }
-        sent = []
+        closed_calls = []
         saved = []
 
         def capture_save_state(state):
             saved.append(deepcopy(state))
+
+        def capture_send_trade_closed(st_arg, pos_arg, reason_arg, mode="live"):
+            closed_calls.append(
+                {
+                    "st": deepcopy(st_arg),
+                    "pos": deepcopy(pos_arg),
+                    "reason": reason_arg,
+                    "mode": mode,
+                }
+            )
 
         with patch.object(executor.manual_close_detector, "tick", return_value=manual_signal), \
              patch.object(executor.binance_api, "cancel_order", return_value={"status": "CANCELED"}), \
@@ -41,14 +51,17 @@ class TestManualClosePhase7(unittest.TestCase):
              patch.object(executor.margin_guard, "on_after_position_closed", side_effect=lambda *a, **k: None), \
              patch.object(executor, "log_event", side_effect=lambda *a, **k: None), \
              patch.object(notifications, "log_event", side_effect=lambda *a, **k: None), \
-             patch.object(notifications, "send_webhook", side_effect=lambda p, *a, **k: sent.append(p)):
+             patch.object(executor, "send_trade_closed", side_effect=capture_send_trade_closed):
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
-        self.assertEqual(len(sent), 1)
-        payload = sent[0]
-        self.assertEqual(payload.get("event"), "TRADE_CLOSED")
-        self.assertEqual(payload.get("trade_key"), "TK1")
-        self.assertEqual(payload.get("details", {}).get("manual_close"), {"k": "v"})
+        self.assertEqual(len(closed_calls), 1, "Expected send_trade_closed to be called exactly once.")
+        call = closed_calls[0]
+        self.assertEqual(call["mode"], "live")
+        self.assertEqual(call["pos"].get("trade_key"), "TK1")
+        self.assertEqual(
+            (call["st"].get("last_closed") or {}).get("details", {}).get("manual_close"),
+            {"k": "v"},
+        )
 
         self.assertTrue(saved, "Expected state to be saved after close.")
         last_saved = saved[-1]
