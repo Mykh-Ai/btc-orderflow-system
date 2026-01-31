@@ -253,6 +253,61 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         self.assertIsNone(st.get("position"))
 
     # =========================================================================
+    # CRITICAL TEST 5: sl_prev FILLED finalizes before TP paths
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_sl_prev_filled_finalizes_before_tp_paths(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """
+        Legacy SL (sl_prev) FILLED must finalize immediately and preempt TP/BE logic.
+        """
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"sl_prev": 888, "tp1": 111, "tp2": 222},
+            "prices": {"sl": 95000.0, "tp1": 96000.0, "tp2": 97000.0, "entry": 95500.0},
+            "qty": 0.1,
+        }
+        st = {"position": pos}
+
+        mock_api.open_orders.return_value = []
+
+        def fake_status(_symbol, oid):
+            if int(oid) == 888:
+                return {"status": "FILLED", "orderId": 888, "executedQty": "0.1"}
+            return {"status": "NEW", "orderId": int(oid)}
+
+        mock_api.check_order_status.side_effect = fake_status
+
+        events = []
+
+        def capture_event(event, *args, **kwargs):
+            events.append(event)
+
+        mock_log.side_effect = capture_event
+
+        with patch.object(executor.exit_safety, "sl_watchdog_tick") as mock_sl_wd, \
+             patch.object(executor.exit_safety, "tp_watchdog_tick") as mock_tp_wd:
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertIsNone(st.get("position"))
+        self.assertEqual(st.get("last_closed", {}).get("reason"), "SL")
+        mock_sl_wd.assert_not_called()
+        mock_tp_wd.assert_not_called()
+        tp_events = [event for event in events if isinstance(event, str) and event.startswith(("TP1_", "TP2_"))]
+        self.assertEqual(tp_events, [])
+
+    # =========================================================================
     # CRITICAL TEST 5: SL FILLED detection → blocks BE transition
     # =========================================================================
     @patch("executor.binance_api")
