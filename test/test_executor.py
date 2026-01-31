@@ -1,4 +1,5 @@
 import unittest
+import time
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pandas as pd
@@ -295,7 +296,99 @@ class TestExecutorV15(unittest.TestCase):
         self.assertEqual(st["position"].get("trail_pending_cancel_sl"), 333)
         called = [c.args[1] for c in m_cancel.call_args_list]
         self.assertIn(222, called)
-        self.assertIn(333, called)
+
+    def test_status_is_filled_uses_fills_cache_in_sl_watchdog_no_api(self):
+        now_s = time.time()
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.1,
+                           "prices": {"entry": 100, "sl": 99},
+                           "orders": {"sl_prev": 444,
+                                      "fills": {"sl": {"orderId": 444, "status": "FILLED"}}},
+                           "sl_status_next_s": now_s + 60.0}}
+
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [{"orderId": 777}],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+             patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=snapshot), \
+             patch.object(executor.binance_api, "check_order_status") as m_status, \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+             patch.object(executor.binance_api, "flatten_market") as m_flatten, \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_trade_closed", lambda *_a, **_k: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_ , **__: None), \
+             patch.object(executor.reporting, "report_trade_close", lambda *_: None), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *_: None), \
+             patch.object(executor.emergency, "save_state_safe", lambda *_: None):
+
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertEqual(m_status.call_count, 0)
+        m_flatten.assert_not_called()
+        self.assertIsNone(st["position"])
+
+    def test_status_is_filled_memoizes_status_api_within_tick_sl_watchdog_double_check(self):
+        now_s = time.time()
+        st = {"position": {"mode": "live", "status": "OPEN", "side": "LONG",
+                           "qty": 0.1,
+                           "prices": {"entry": 100, "sl": 99},
+                           "orders": {"sl": 333},
+                           "exit_cleanup_pending": True,
+                           "exit_cleanup_next_s": now_s + 600.0,
+                           "sl_status_next_s": now_s + 60.0}}
+
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [{"orderId": 777}],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [111],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=1000.0), \
+             patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=snapshot), \
+             patch.object(executor.binance_api, "check_order_status", return_value={"status": "NEW"}) as m_status, \
+             patch.object(executor.binance_api, "cancel_order", MagicMock(return_value={"status": "CANCELED"})), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_trade_closed", lambda *_a, **_k: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_ , **__: None), \
+             patch.object(executor.reporting, "report_trade_close", lambda *_: None), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *_: None), \
+             patch.object(executor.emergency, "save_state_safe", lambda *_: None):
+
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertEqual(m_status.call_count, 1)
 
     def test_tp2_synthetic_trailing_phase_b_confirms_and_activates(self):
         st = {
@@ -764,12 +857,10 @@ class TestExecutorV15(unittest.TestCase):
             "events": [],
         }
 
-        calls = {"sl_prev": 0}
         def fake_status(_symbol, oid):
             oid = int(oid)
             if oid == 444:
-                calls["sl_prev"] += 1
-                return {"status": "NEW"} if calls["sl_prev"] == 1 else {"status": "FILLED"}
+                return {"status": "FILLED"}
             return {"status": "NEW", "executedQty": "0", "origQty": "0.1"}
 
         with patch.object(executor, "_now_s", return_value=1000.0), \
