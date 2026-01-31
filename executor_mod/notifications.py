@@ -96,10 +96,14 @@ def log_event(action: str, **fields: Any) -> None:
     )
 
 
-def send_webhook(payload: Dict[str, Any]) -> None:
+def send_webhook(payload: Dict[str, Any]) -> bool:
+    """
+    Send webhook payload to configured N8N endpoint.
+    Returns True if delivery succeeded (HTTP 2xx), False otherwise.
+    """
     url = ENV["N8N_WEBHOOK_URL"]
     if not url:
-        return
+        return False
 
     payload = dict(payload)
     payload.setdefault("source", "executor")
@@ -108,9 +112,15 @@ def send_webhook(payload: Dict[str, Any]) -> None:
         auth = None
         if ENV["N8N_BASIC_AUTH_USER"] and ENV["N8N_BASIC_AUTH_PASSWORD"]:
             auth = (ENV["N8N_BASIC_AUTH_USER"], ENV["N8N_BASIC_AUTH_PASSWORD"])
-        requests.post(url, json=payload, timeout=5, auth=auth)
+        resp = requests.post(url, json=payload, timeout=5, auth=auth)
+        if resp.ok:  # 200 <= status_code < 300
+            return True
+        else:
+            log_event("WEBHOOK_NON_2XX", status_code=resp.status_code, payload=payload)
+            return False
     except Exception as e:
         log_event("WEBHOOK_ERROR", error=str(e), payload=payload)
+        return False
 
 
 def _extract_trade_key(st: Dict[str, Any], pos: Dict[str, Any]) -> Optional[str]:
@@ -178,10 +188,13 @@ def send_trade_closed(st: Dict[str, Any], pos: Dict[str, Any], close_reason: str
         with suppress(Exception):
             log_event("TRADE_CLOSED", **{k: v for k, v in payload.items() if v is not None})
 
-        send_webhook(payload)
+        ok = send_webhook(payload)
 
-        if trade_key:
+        if ok and trade_key:
             st["last_notified_close_trade_key"] = trade_key
+        elif not ok:
+            with suppress(Exception):
+                log_event("WEBHOOK_CLOSE_NOT_DELIVERED", trade_key=trade_key, close_reason=str(close_reason or ""))
     except Exception as e:
         with suppress(Exception):
             log_event("TRADE_CLOSED_NOTIFY_ERROR", error=str(e), close_reason=str(close_reason or ""))

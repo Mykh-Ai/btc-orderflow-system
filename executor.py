@@ -1209,9 +1209,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         with suppress(Exception):
             reporting.report_trade_close(st, pos, reason)
         send_trade_closed(st, pos, reason, mode="live")
-        trade_key = pos.get("trade_key") or st.get("trade_key")
-        if trade_key and st.get("last_notified_close_trade_key") != trade_key:
-            st["last_notified_close_trade_key"] = trade_key
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
