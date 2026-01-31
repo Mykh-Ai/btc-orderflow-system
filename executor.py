@@ -945,6 +945,34 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if pos.get("mode") != "live" or pos.get("status") not in ("OPEN", "OPEN_FILLED"):
         return
     now_s = _now_s()
+    tick_order_status: Dict[int, str] = {}
+
+    def _cache_tick_status(order_id: Any, status: Any) -> None:
+        if order_id is None or status is None:
+            return
+        try:
+            oid = int(order_id)
+        except Exception:
+            return
+        status_s = str(status).upper()
+        if not status_s:
+            return
+        tick_order_status[oid] = status_s
+
+    def _cache_status_payload(payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        _cache_tick_status(payload.get("orderId"), payload.get("status"))
+
+    def _order_id_to_leg(order_id: int) -> str:
+        orders_map = pos.get("orders") if isinstance(pos.get("orders"), dict) else {}
+        for key in ("sl", "sl_prev", "tp1", "tp2"):
+            try:
+                if int(orders_map.get(key) or 0) == int(order_id):
+                    return "sl" if key == "sl_prev" else key
+            except Exception:
+                continue
+        return ""
 
     # ==================== TERMINAL DETECTION: sl_done early exit ====================
     # CRITICAL: If sl_done=True from previous tick, finalize immediately and exit.
@@ -1052,9 +1080,60 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     def _status_is_filled(order_id: int) -> bool:
         try:
-            od = binance_api.check_order_status(symbol, int(order_id))
-            return str(od.get("status", "")).upper() == "FILLED"
+            oid = int(order_id)
         except Exception:
+            return False
+
+        cached = tick_order_status.get(oid)
+        if cached:
+            return cached == "FILLED"
+
+        leg = _order_id_to_leg(oid)
+        fills = ((pos.get("orders") or {}).get("fills") or {}) if isinstance(pos.get("orders"), dict) else {}
+        if leg and isinstance(fills, dict):
+            leg_data = fills.get(leg)
+            if isinstance(leg_data, dict):
+                st_fill = str(leg_data.get("status") or "").upper()
+                if st_fill:
+                    _cache_tick_status(oid, st_fill)
+                    if st_fill == "FILLED":
+                        return True
+                    if st_fill in ("CANCELED", "EXPIRED", "REJECTED"):
+                        return False
+
+        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
+        if leg and isinstance(recon, dict):
+            st_recon = str(recon.get(f"{leg}_status") or "").upper()
+            if st_recon:
+                if leg == "sl":
+                    fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
+                    ts = str(recon.get("sl_status_ts") or "")
+                    is_fresh = False
+                    if not ts:
+                        is_fresh = True
+                    else:
+                        with suppress(Exception):
+                            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            is_fresh = (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
+                    if not is_fresh:
+                        st_recon = ""
+                if st_recon:
+                    _cache_tick_status(oid, st_recon)
+                    if st_recon == "FILLED":
+                        return True
+                    if st_recon in ("CANCELED", "EXPIRED", "REJECTED", "NOT_FOUND"):
+                        return False
+
+        try:
+            od = binance_api.check_order_status(symbol, int(order_id))
+            status = str(od.get("status", "")).upper()
+            if status:
+                _cache_tick_status(oid, status)
+            else:
+                _cache_tick_status(oid, "UNKNOWN")
+            return status == "FILLED"
+        except Exception:
+            _cache_tick_status(oid, "ERROR")
             return False
 
     def _cancel_sibling_exits_best_effort(tag: str, throttle_sec: float = 2.0) -> None:
@@ -1226,6 +1305,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             continue
         with suppress(Exception):
             open_ids.add(int(_o.get("orderId")))
+        _cache_status_payload(_o)
 
     def _tp1_be_transition_tick() -> bool:
         """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed.
@@ -1471,6 +1551,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 sl_status_payload = binance_api.check_order_status(symbol, sl_id)
                 sl_status_source = "status_api"
             if isinstance(sl_status_payload, dict):
+                _cache_status_payload(sl_status_payload)
                 if _update_order_fill(pos, "sl", sl_status_payload):
                     st["position"] = pos
                     _save_state_best_effort("sl_fill_update")
@@ -1627,6 +1708,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             with suppress(Exception):
                 tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
             if isinstance(tp1_status_payload, dict):
+                _cache_status_payload(tp1_status_payload)
                 if _update_order_fill(pos, "tp1", tp1_status_payload):
                     st["position"] = pos
                     _save_state_best_effort("tp1_fill_update")
@@ -1681,6 +1763,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             with suppress(Exception):
                 tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
             if isinstance(tp2_status_payload, dict):
+                _cache_status_payload(tp2_status_payload)
                 if _update_order_fill(pos, "tp2", tp2_status_payload):
                     st["position"] = pos
                     _save_state_best_effort("tp2_fill_update")
@@ -2322,6 +2405,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 try:
                     tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
                     if isinstance(tp1_status_payload, dict):
+                        _cache_status_payload(tp1_status_payload)
                         if _update_order_fill(pos, "tp1", tp1_status_payload):
                             st["position"] = pos
                             _save_state_best_effort("tp1_watchdog_fill_update")
@@ -2343,6 +2427,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 try:
                     tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
                     if isinstance(tp2_status_payload, dict):
+                        _cache_status_payload(tp2_status_payload)
                         if _update_order_fill(pos, "tp2", tp2_status_payload):
                             st["position"] = pos
                             _save_state_best_effort("tp2_watchdog_fill_update")
