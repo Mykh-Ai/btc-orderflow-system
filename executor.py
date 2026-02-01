@@ -1302,7 +1302,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             continue
         with suppress(Exception):
             open_ids.add(int(_o.get("orderId")))
-        _cache_status_payload(_o)
+        # Do NOT cache openOrders status into tick_order_status:
+        # - openOrders snapshot can be stale (up to SNAPSHOT_MIN_SEC)
+        # - openOrders only contains OPEN orders (never FILLED/CANCELED)
+        # - Caching stale "NEW" creates early-return bypass in _status_is_filled()
+        # Tick cache should only be populated from terminal/fresh sources:
+        # check_order_status() API responses, fills, and recon data.
 
     def _tp1_be_transition_tick() -> bool:
         """Cancel current SL first, then place BE SL (throttled). Returns True if BE placed.

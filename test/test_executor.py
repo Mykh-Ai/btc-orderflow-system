@@ -1,5 +1,6 @@
 import unittest
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pandas as pd
@@ -389,6 +390,134 @@ class TestExecutorV15(unittest.TestCase):
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
         self.assertEqual(m_status.call_count, 1)
+
+    def test_stale_openorders_new_does_not_block_recon_filled(self):
+        """
+        Regression test: openOrders snapshot can be stale (up to SNAPSHOT_MIN_SEC).
+        If openOrders shows "NEW" but recon shows "FILLED", _status_is_filled() must
+        return True via recon (no early-return on stale openOrders cache).
+        SL_WATCHDOG suppression must trigger, preventing redundant MARKET_FLATTEN.
+        """
+        now_dt = datetime.now(timezone.utc)
+        now_s = time.time()
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100, "sl": 99},
+                "orders": {"sl": 555},
+                "recon": {
+                    "sl_status": "FILLED",
+                    "sl_status_ts": now_dt.isoformat(),  # Fresh timestamp
+                },
+                "sl_status_next_s": now_s + 60.0,
+            }
+        }
+
+        # Stale openOrders snapshot shows SL as "NEW"
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [{"orderId": 555, "status": "NEW"}],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=now_s), \
+             patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=snapshot), \
+             patch.object(executor.binance_api, "check_order_status") as m_status, \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+             patch.object(executor.binance_api, "flatten_market") as m_flatten, \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_trade_closed", lambda *_a, **_k: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor.reporting, "report_trade_close", lambda *_: None), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *_: None), \
+             patch.object(executor.emergency, "save_state_safe", lambda *_: None):
+
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        # Assert: recon FILLED takes priority, no API call needed, no flatten, position closed
+        self.assertEqual(m_status.call_count, 0, "check_order_status should not be called when recon shows FILLED")
+        m_flatten.assert_not_called()
+        self.assertIsNone(st["position"], "Position should be closed via recon FILLED")
+
+    def test_openorders_status_not_cached_behavior(self):
+        """
+        Behavioral test: openOrders snapshot status must NOT be cached into tick cache.
+        Setup: openOrders shows "NEW", fills shows "FILLED", no status_api call should occur.
+        Expected: _status_is_filled() returns True via fills (early-return on fills cache),
+        watchdog suppression triggers, no flatten_market, no check_order_status call.
+        """
+        now_s = time.time()
+        st = {
+            "position": {
+                "mode": "live",
+                "status": "OPEN",
+                "side": "LONG",
+                "qty": 0.1,
+                "prices": {"entry": 100, "sl": 99},
+                "orders": {
+                    "sl": 666,
+                    "fills": {"sl": {"orderId": 666, "status": "FILLED"}},
+                },
+                "sl_status_next_s": now_s + 60.0,
+            }
+        }
+
+        # openOrders shows "NEW" (would poison cache if caching were active)
+        snapshot = SimpleNamespace(
+            ok=True,
+            error=None,
+            get_orders=lambda: [{"orderId": 666, "status": "NEW"}],
+            freshness_sec=lambda: 0.0,
+        )
+        plan = {
+            "action": "MARKET_FLATTEN",
+            "qty": 0.1,
+            "side": "SELL",
+            "reason": "SL_WATCHDOG",
+            "cancel_order_ids": [],
+            "set_fired_on_success": True,
+            "events": [],
+        }
+
+        with patch.object(executor, "_now_s", return_value=now_s), \
+             patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=snapshot), \
+             patch.object(executor.binance_api, "check_order_status") as m_status, \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
+             patch.object(executor.binance_api, "flatten_market") as m_flatten, \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_trade_closed", lambda *_a, **_k: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor.reporting, "report_trade_close", lambda *_: None), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *_: None), \
+             patch.object(executor.emergency, "save_state_safe", lambda *_: None):
+
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        # Assert: fills cache used, no API spam, no flatten, position closed
+        self.assertEqual(m_status.call_count, 0, "check_order_status should not be called when fills shows FILLED")
+        m_flatten.assert_not_called()
+        self.assertIsNone(st["position"], "Position should be closed via fills cache")
 
     def test_tp2_synthetic_trailing_phase_b_confirms_and_activates(self):
         st = {
