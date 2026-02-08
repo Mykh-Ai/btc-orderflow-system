@@ -246,6 +246,34 @@ class TestCleanupThrottle(unittest.TestCase):
         mock_api.cancel_order.assert_not_called()
         mock_api.place_order_raw.assert_not_called()
 
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_cleanup_done_does_not_finalize(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Cleanup completion must not finalize the position by itself."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = self._make_pos_with_cleanup_pending("OPEN")
+        pos["exit_cleanup_next_s"] = time.time() - 1.0  # cleanup is due now
+        st = {"position": pos}
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.return_value = {"status": "NEW"}
+
+        with patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None):
+            with patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+                executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertIsNotNone(st.get("position"))
+        self.assertFalse(pos.get("exit_cleanup_pending"))
+        self.assertIsNone(st.get("last_closed"))
+
 
 if __name__ == "__main__":
     unittest.main()
