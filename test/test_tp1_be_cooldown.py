@@ -1,5 +1,6 @@
 """Test tp1_be_disabled auto-clear after cooldown."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from copy import deepcopy
 import executor
@@ -41,6 +42,8 @@ class TestTP1BECooldown(unittest.TestCase):
                 patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
                 patch.object(executor.binance_api, "cancel_order", MagicMock()), \
                 patch.object(executor.binance_api, "place_order_raw", return_value={"orderId": 444}), \
+                patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
+                patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
                 patch.object(executor, "save_state", lambda *_: None), \
                 patch.object(executor, "send_webhook", lambda *_: None), \
                 patch.object(executor, "log_event", lambda *_, **__: None):

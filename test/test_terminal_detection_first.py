@@ -455,6 +455,149 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         self.assertIsNone(st.get("position"))
 
     # =========================================================================
+    # CRITICAL TEST 8: terminal UNKNOWN blocks SL watchdog market
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_terminal_unknown_blocks_sl_market(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """MARKET must be blocked when terminal state is UNKNOWN (SL watchdog)."""
+        import executor
+
+        env = self._make_env()
+        env["SL_WATCHDOG_GRACE_SEC"] = 0.0
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"sl": 123},
+            "prices": {"sl": 98.0, "entry": 100.0},
+            "qty": 0.1,
+        }
+        st = {"position": pos}
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.side_effect = Exception("status error")
+
+        class _Snap:
+            ok = True
+            price_mid = 97.0
+
+        with patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        mock_api.flatten_market.assert_not_called()
+        self.assertIsNotNone(st.get("position"))
+
+    # =========================================================================
+    # CRITICAL TEST 9: terminal UNKNOWN blocks TP watchdog market
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_terminal_unknown_blocks_tp_market(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """MARKET must be blocked when terminal state is UNKNOWN (TP watchdog)."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"sl": 333, "tp1": 111, "tp2": 222, "qty1": 0.1, "qty2": 0.0, "qty3": 0.0},
+            "prices": {"sl": 98.0, "tp1": 102.0, "tp2": 104.0, "entry": 100.0},
+            "qty": 0.1,
+        }
+        st = {"position": pos}
+
+        mock_api.open_orders.return_value = []
+
+        def fake_status(_symbol, order_id):
+            if int(order_id) == 333:
+                raise Exception("status error")
+            if int(order_id) == 111:
+                return {"status": "CANCELED", "orderId": 111}
+            return {"status": "NEW", "orderId": int(order_id)}
+
+        mock_api.check_order_status.side_effect = fake_status
+
+        class _Snap:
+            ok = True
+            price_mid = 103.0
+
+        with patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        mock_api.flatten_market.assert_not_called()
+        self.assertIsNotNone(st.get("position"))
+
+    # =========================================================================
+    # CRITICAL TEST 10: terminal probe avoids status API when poll not due
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_terminal_probe_respects_poll_throttle(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Terminal probe must not call check_order_status when poll is not due."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"sl": 123},
+            "prices": {"sl": 98.0, "entry": 100.0},
+            "qty": 0.1,
+            "sl_status_next_s": time.time() + 60.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return [{
+                    "orderId": 123,
+                    "status": "NEW",
+                    "origQty": "0.1",
+                    "executedQty": "0.0",
+                }]
+
+            def freshness_sec(self):
+                return 0.0
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        mock_api.check_order_status.assert_not_called()
+
+    # =========================================================================
     # NEGATIVE TEST 8: Test would FAIL if Terminal Detection is commented out
     # =========================================================================
     def test_ordering_verification_comment(self):

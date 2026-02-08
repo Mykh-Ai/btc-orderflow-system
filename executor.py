@@ -1136,6 +1136,168 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _cache_tick_status(oid, "ERROR")
             return False
 
+    TERMINAL_CONFIRMED = "TERMINAL_CONFIRMED"
+    NOT_TERMINAL_CONFIRMED = "NOT_TERMINAL_CONFIRMED"
+    TERMINAL_UNKNOWN = "UNKNOWN"
+
+    def _is_recon_fresh(ts: str) -> bool:
+        if not ts:
+            return True
+        try:
+            fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
+        except Exception:
+            fresh_sec = 120.0
+        try:
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
+        except Exception:
+            return False
+
+    def _poll_due_for_leg(leg: str) -> bool:
+        next_s = 0.0
+        if leg in ("sl", "sl_prev"):
+            next_s = float(pos.get("sl_status_next_s") or 0.0)
+        elif leg == "tp1":
+            next_s = float(pos.get("tp1_status_next_s") or 0.0)
+        elif leg == "tp2":
+            next_s = float(pos.get("tp2_status_next_s") or 0.0)
+        return now_s >= next_s
+
+    def _status_from_sources(leg: str, order_id: int) -> Optional[str]:
+        if not order_id:
+            return None
+        leg_key = "sl" if leg in ("sl", "sl_prev") else leg
+        fills = ((pos.get("orders") or {}).get("fills") or {}) if isinstance(pos.get("orders"), dict) else {}
+        if isinstance(fills, dict):
+            leg_data = fills.get(leg_key)
+            if isinstance(leg_data, dict):
+                if leg == "sl_prev":
+                    try:
+                        if int(leg_data.get("orderId") or 0) != int(order_id):
+                            leg_data = None
+                    except Exception:
+                        leg_data = None
+                if isinstance(leg_data, dict):
+                    st_fill = str(leg_data.get("status") or "").upper()
+                    if st_fill:
+                        _cache_tick_status(order_id, st_fill)
+                        return st_fill
+
+        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
+        if isinstance(recon, dict) and leg != "sl_prev":
+            st_recon = str(recon.get(f"{leg_key}_status") or "").upper()
+            ts = str(recon.get(f"{leg_key}_status_ts") or "")
+            if st_recon and _is_recon_fresh(ts):
+                _cache_tick_status(order_id, st_recon)
+                return st_recon
+
+        cached = tick_order_status.get(int(order_id))
+        if cached:
+            return cached
+
+        if open_orders_ok and int(order_id) in open_ids:
+            return "OPEN"
+
+        poll_due = _poll_due_for_leg(leg)
+        should_poll = poll_due or (open_orders_ok and int(order_id) not in open_ids)
+        if not should_poll:
+            return None
+
+        try:
+            od = binance_api.check_order_status(symbol, int(order_id))
+            status = str(od.get("status", "")).upper()
+            if status:
+                _cache_tick_status(order_id, status)
+                return status
+            _cache_tick_status(order_id, "UNKNOWN")
+            return "ERROR"
+        except Exception:
+            _cache_tick_status(order_id, "ERROR")
+            return "ERROR"
+
+    def _terminal_probe() -> tuple[str, str]:
+        orders_map = pos.get("orders") if isinstance(pos.get("orders"), dict) else {}
+        try:
+            qty1 = float(orders_map.get("qty1") or 0.0)
+        except Exception:
+            qty1 = 0.0
+        try:
+            qty2 = float(orders_map.get("qty2") or 0.0)
+        except Exception:
+            qty2 = 0.0
+        try:
+            qty3 = float(orders_map.get("qty3") or 0.0)
+        except Exception:
+            qty3 = 0.0
+
+        sl_id = int(orders_map.get("sl") or 0)
+        if not sl_id:
+            recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
+            if isinstance(recon, dict):
+                sl_recon_status = str(recon.get("sl_status") or "").upper()
+                ts = str(recon.get("sl_status_ts") or "")
+                if sl_recon_status == "FILLED" and _is_recon_fresh(ts):
+                    return TERMINAL_CONFIRMED, "SL_FILLED"
+
+        def _tp_exec_total() -> Optional[float]:
+            fills = (orders_map.get("fills") or {}) if isinstance(orders_map, dict) else {}
+            if not isinstance(fills, dict):
+                return None
+            total = 0.0
+            found = False
+            for key in ("tp1", "tp2"):
+                leg_data = fills.get(key)
+                if isinstance(leg_data, dict):
+                    try:
+                        exec_qty = float(leg_data.get("executedQty") or 0.0)
+                    except Exception:
+                        exec_qty = 0.0
+                    if exec_qty > 0.0:
+                        total += exec_qty
+                        found = True
+            return total if found else None
+
+        pos_qty = 0.0
+        try:
+            pos_qty = float(pos.get("qty") or 0.0)
+        except Exception:
+            pos_qty = 0.0
+        if pos_qty <= 0.0:
+            pos_qty = max(qty1 + qty2 + qty3, 0.0)
+
+        candidates = [
+            ("sl", sl_id, "SL_FILLED"),
+            ("sl_prev", int(orders_map.get("sl_prev") or 0), "SL_FILLED"),
+            ("tp1", int(orders_map.get("tp1") or 0), "TP1_FILLED"),
+            ("tp2", int(orders_map.get("tp2") or 0), "TP2_FILLED"),
+        ]
+
+        unknown = False
+        for leg, oid, reason in candidates:
+            if not oid:
+                continue
+            st = _status_from_sources(leg, oid)
+            if st in ("ERROR", "UNKNOWN"):
+                unknown = True
+                continue
+            if not st:
+                continue
+            if st == "FILLED":
+                if reason == "SL_FILLED":
+                    return TERMINAL_CONFIRMED, reason
+                tp_total = _tp_exec_total()
+                if tp_total is not None and pos_qty > 0.0 and tp_total >= (pos_qty * 0.999):
+                    return TERMINAL_CONFIRMED, reason
+                continue
+            if st in ("CANCELED", "REJECTED", "EXPIRED", "NOT_FOUND", "MISSING"):
+                continue
+            if st in ("NEW", "PARTIALLY_FILLED", "PENDING", "OPEN"):
+                continue
+            unknown = True
+        if unknown:
+            return TERMINAL_UNKNOWN, ""
+        return NOT_TERMINAL_CONFIRMED, ""
+
     def _cancel_sibling_exits_best_effort(tag: str, throttle_sec: float = 2.0) -> None:
         """
         Best-effort sibling exit cleanup (tp1/tp2/sl/sl_prev) with simple throttling.
@@ -1223,6 +1385,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         - _close_slot() stays pure (state/report/margin-hook only)
         - close must never be blocked by cleanup failures
         """
+        if str(tag or "").startswith("SL_FILLED"):
+            sl_id_done = int((pos.get("orders") or {}).get("sl") or 0)
+            sl_prev_done = int((pos.get("orders") or {}).get("sl_prev") or 0)
+            log_event("SL_DONE", mode="live", order_id_sl=sl_id_done or sl_prev_done)
         with suppress(Exception):
             _cancel_sibling_exits_best_effort(tag=tag)
         _close_slot(reason)
@@ -1558,85 +1724,23 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     st["position"] = pos
                     _save_state_best_effort("sl_fill_update")
 
-    # ==================== TERMINAL DETECTION (SL FILLED) ====================
-    # CRITICAL: Must run FIRST before all watchdog/TP/BE operations.
-    # If SL is filled, finalize immediately and EXIT — no TP/trailing/BE should run.
-    # Finalization-first: SL FILLED must preempt TP/BE/trailing in same tick.
-    sl_id_terminal = int((pos.get("orders") or {}).get("sl") or 0)
-    sl_prev_terminal = int((pos.get("orders") or {}).get("sl_prev") or 0)
-
-    if not sl_id_terminal and not pos.get("sl_done"):
-        # Fallback: check recon if SL ID is missing
-        recon = pos.get("recon") if isinstance(pos.get("recon"), dict) else {}
-        sl_recon_status = str(recon.get("sl_status") or "").upper()
-        # Freshness gate: avoid stale recon closing the wrong slot
-        fresh_sec = float(ENV.get("SL_RECON_FRESH_SEC") or 120.0)
-        ts = str(recon.get("sl_status_ts") or "")
-        is_fresh = False
-        if not ts:
-            # If ts is missing (common in tests / older states), treat as fresh enough.
-            is_fresh = True
-        else:
-            with suppress(Exception):
-                t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                is_fresh = (datetime.now(timezone.utc) - t).total_seconds() <= fresh_sec
-
-        st_open = pos.get("status") in ("OPEN", "OPEN_FILLED")
-        if sl_recon_status == "FILLED" and is_fresh and st_open:
-            log_event("SL_FILLED_MISSING_ID_FALLBACK", mode="live", status=sl_recon_status)
-            send_webhook({"event": "SL_FILLED_MISSING_ID_FALLBACK", "mode": "live", "symbol": symbol, "status": sl_recon_status})
-            _finalize_close("SL", tag="SL_FILLED_MISSING_ID_FALLBACK")
+    # ==================== TERMINAL BARRIER (SL/TP) ====================
+    # CRITICAL: Must run BEFORE watchdog/BE/trailing. If terminal confirmed, finalize and return.
+    terminal_state, terminal_reason = _terminal_probe()
+    if terminal_state == TERMINAL_CONFIRMED:
+        if terminal_reason == "SL_FILLED":
+            _finalize_close("SL", tag="SL_FILLED")
             return
+        if terminal_reason == "TP1_FILLED":
+            _finalize_close("TP1", tag="TP1_FILLED")
+            return
+        if terminal_reason == "TP2_FILLED":
+            _finalize_close("TP2", tag="TP2_FILLED")
+            return
+        _finalize_close(str(terminal_reason or "TERMINAL"), tag=str(terminal_reason or "TERMINAL"))
+        return
 
-    if (sl_id_terminal or sl_prev_terminal) and not pos.get("sl_done"):
-        poll_due = now_s >= float(pos.get("sl_status_next_s") or 0.0)
-
-        # Do not gate FILLED detection on openOrders/open_ids; throttle via sl_status_next_s
-        if poll_due or (not orders):
-            pos["sl_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
-            sl_status = ""
-            if isinstance(sl_status_payload, dict):
-                sl_status = str(sl_status_payload.get("status", "")).upper()
-            status_norm = sl_status or "UNKNOWN"
-            last_status = str(pos.get("sl_last_status_logged") or "")
-            if status_norm != last_status:
-                pos["sl_last_status_logged"] = status_norm
-                st["position"] = pos
-                try:
-                    save_state(st)   # best-effort, не ламає цикл
-                except Exception:
-                    pass
-                log_event(
-                    "SL_STATUS_POLL",
-                    mode="live",
-                    order_id_sl=sl_id_terminal,
-                    source=sl_status_source,
-                    status=status_norm,
-                )
-            sl_filled = False
-            if sl_id_terminal:
-                sl_filled = sl_status == "FILLED" if sl_status else _status_is_filled(sl_id_terminal)
-            if not sl_filled and sl_prev_terminal:
-                sl_filled = _status_is_filled(sl_prev_terminal)
-
-            if sl_filled:
-                pos["sl_done"] = True
-                st["position"] = pos
-                save_state(st)
-                log_event("SL_DONE", mode="live", order_id_sl=sl_id_terminal or sl_prev_terminal)
-                send_webhook({"event": "SL_DONE", "mode": "live", "symbol": symbol})
-                _finalize_close("SL", tag="SL_FILLED")
-                return
-            else:
-                miss = pos.setdefault("missing_not_filled", {})
-                key = f"sl:{sl_id_terminal or sl_prev_terminal}"
-                if not miss.get(key):
-                    miss[key] = iso_utc()
-                    st["position"] = pos
-                    save_state(st)
-                    log_event("SL_NOT_FILLED", mode="live", order_id_sl=sl_id_terminal or sl_prev_terminal)
-
-    # ==================== END TERMINAL DETECTION ====================
+    # ==================== END TERMINAL BARRIER ====================
 
     # Cleanup throttling: block active mutations but allow passive reconciliation
     cleanup_throttled = False
@@ -1673,7 +1777,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 st["position"] = pos
                 _save_state_best_effort("exit_cleanup_done")
                 log_event("EXIT_CLEANUP_DONE", mode="live", reason=reason)
-                _finalize_close(reason, tag="EXIT_CLEANUP_DONE")
                 return
             pos["exit_cleanup_order_ids"] = failed_ids
             pos["exit_cleanup_next_s"] = now_s + float(ENV.get("SL_WATCHDOG_RETRY_SEC") or 0.0)
@@ -2228,6 +2331,14 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         now_attempt = now_s
         last_attempt = float(pos.get("sl_watchdog_last_market_attempt_s") or 0.0)
         if (not skip_market) and plan_qty > 0.0:
+            if terminal_state != NOT_TERMINAL_CONFIRMED:
+                log_event(
+                    "SL_WATCHDOG_MARKET_BLOCKED_UNKNOWN",
+                    mode="live",
+                    reason="TERMINAL_UNKNOWN",
+                    qty=plan_qty,
+                )
+                return
             # Guard: if SL is already FILLED, do NOT attempt MARKET flatten.
             # This prevents a second close attempt (and -2010 insufficient balance) when SL already closed the position.
             sl_filled_cached = False
@@ -2509,6 +2620,14 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
         # Handle MARKET_FLATTEN actions
         if action == "MARKET_FLATTEN":
+            if terminal_state != NOT_TERMINAL_CONFIRMED:
+                log_event(
+                    "TP_WATCHDOG_MARKET_BLOCKED_UNKNOWN",
+                    mode="live",
+                    reason="TERMINAL_UNKNOWN",
+                    qty=float(tp_plan.get("qty") or 0.0),
+                )
+                return
             plan_qty = float(tp_plan.get("qty") or 0.0)
             close_side = str(tp_plan.get("side") or "").upper()
 
