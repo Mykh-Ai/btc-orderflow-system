@@ -946,6 +946,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         return
     now_s = _now_s()
     tick_order_status: Dict[int, str] = {}
+    status_polled_ids: set[int] = set()
 
     def _cache_tick_status(order_id: Any, status: Any) -> None:
         if order_id is None or status is None:
@@ -1153,8 +1154,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return
         key = "sl_status_next_s" if leg in ("sl", "sl_prev") else f"{leg}_status_next_s"
         pos[key] = now_s + poll_every
-        st["position"] = pos
-        _save_state_best_effort(f"{key}_terminal_probe")
 
     def _status_from_sources(leg: str, order_id: int) -> Optional[str]:
         if not order_id:
@@ -1200,6 +1199,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if poll_due or missing_from_open:
             _bump_status_next_s(leg)
         try:
+            status_polled_ids.add(int(order_id))
             od = binance_api.check_order_status(symbol, int(order_id))
             status = str(od.get("status", "")).upper()
             if status:
@@ -1313,22 +1313,22 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         for leg, oid, reason in candidates:
             if not oid:
                 continue
-            st = _status_from_sources(leg, oid)
-            if st in ("ERROR", "UNKNOWN"):
+            status = _status_from_sources(leg, oid)
+            if status in ("ERROR", "UNKNOWN"):
                 unknown = True
                 continue
-            if not st:
+            if not status:
                 continue
-            if st == "FILLED":
+            if status == "FILLED":
                 if reason == "SL_FILLED":
                     return TERMINAL_CONFIRMED, reason
                 tp_total = _tp_exec_total()
                 if tp_total is not None and pos_qty > 0.0 and tp_total >= (pos_qty * 0.999):
                     return TERMINAL_CONFIRMED, reason
                 continue
-            if st in ("CANCELED", "REJECTED", "EXPIRED", "NOT_FOUND", "MISSING"):
+            if status in ("CANCELED", "REJECTED", "EXPIRED", "NOT_FOUND", "MISSING"):
                 continue
-            if st in ("NEW", "PARTIALLY_FILLED", "PENDING", "OPEN"):
+            if status in ("NEW", "PARTIALLY_FILLED", "PENDING", "OPEN"):
                 continue
             unknown = True
         if unknown:
@@ -1429,32 +1429,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         with suppress(Exception):
             _cancel_sibling_exits_best_effort(tag=tag)
         _close_slot(reason)
-
-    manual_signal = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
-    if manual_signal.get("handled"):
-        reason = str(manual_signal.get("reason") or "MANUAL_CLOSE_DETECTED")
-        tag = str(manual_signal.get("tag") or "MANUAL_CLOSE_DETECTED_OK")
-
-        details = {}
-        if isinstance(manual_signal.get("details"), dict):
-            details = manual_signal.get("details") or {}
-        elif isinstance(pos.get("manual_close_diag"), dict):
-            details = pos.get("manual_close_diag") or {}
-        pos["close_details"] = {"manual_close": details}
-
-        if pos.get("manual_close_candidate_s") is not None:
-            pos.pop("manual_close_candidate_s", None)
-        if pos.get("manual_close_diag") is not None:
-            pos.pop("manual_close_diag", None)
-
-        pos["baseline_clear_pending"] = True
-
-        _finalize_close(reason, tag=tag)
-        return
-
-    if manual_signal.get("state_dirty"):
-        st["position"] = pos
-        save_state(st)
 
     if not pos.get("orders") or not pos.get("prices"):
         return
@@ -1781,6 +1755,32 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     # ==================== END TERMINAL BARRIER ====================
 
+    manual_signal = manual_close_detector.tick(st, pos, binance_api, margin_policy, ENV, now_s)
+    if manual_signal.get("handled"):
+        reason = str(manual_signal.get("reason") or "MANUAL_CLOSE_DETECTED")
+        tag = str(manual_signal.get("tag") or "MANUAL_CLOSE_DETECTED_OK")
+
+        details = {}
+        if isinstance(manual_signal.get("details"), dict):
+            details = manual_signal.get("details") or {}
+        elif isinstance(pos.get("manual_close_diag"), dict):
+            details = pos.get("manual_close_diag") or {}
+        pos["close_details"] = {"manual_close": details}
+
+        if pos.get("manual_close_candidate_s") is not None:
+            pos.pop("manual_close_candidate_s", None)
+        if pos.get("manual_close_diag") is not None:
+            pos.pop("manual_close_diag", None)
+
+        pos["baseline_clear_pending"] = True
+
+        _finalize_close(reason, tag=tag)
+        return
+
+    if manual_signal.get("state_dirty"):
+        st["position"] = pos
+        save_state(st)
+
     # Cleanup throttling: block active mutations but allow passive reconciliation
     cleanup_throttled = False
     if pos.get("exit_cleanup_pending"):
@@ -1846,7 +1846,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     if tp1_id and not pos.get("tp1_done"):
         poll_due = now_s >= float(pos.get("tp1_status_next_s") or 0.0)
         # Do not gate FILLED detection on openOrders/open_ids; throttle via tp1_status_next_s
-        if poll_due or (not orders):
+        tp1_cached = tick_order_status.get(tp1_id)
+        tp1_polled = tp1_id in status_polled_ids
+        tp1_filled = tp1_cached == "FILLED"
+        if (not tp1_cached) and (not tp1_polled) and poll_due and not tp1_filled:
             pos["tp1_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
             tp1_status_payload = None
             with suppress(Exception):
@@ -1856,49 +1859,51 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if _update_order_fill(pos, "tp1", tp1_status_payload):
                     st["position"] = pos
                     _save_state_best_effort("tp1_fill_update")
-            tp1_filled = False
             if isinstance(tp1_status_payload, dict):
                 tp1_filled = str(tp1_status_payload.get("status", "")).upper() == "FILLED"
-            if tp1_filled:
-                # TP1 FILLED is a fact - accept it immediately
-                pos["tp1_done"] = True
-                st["position"] = pos
-                _save_state_best_effort("tp1_done_set")
-                log_event("TP1_DONE", mode="live", order_id_tp1=tp1_id)
-                
-                # Now initiate BE state-machine (separate from tp1_done)
-                exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
-                be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
-                qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
-                qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
-                rem_qty = float(round_qty(qty2 + qty3))
-                
-                # Initialize BE state-machine with parameters
-                old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-                pos["tp1_be_pending"] = True
-                pos["tp1_be_old_sl"] = old_sl_id
-                pos["tp1_be_exit_side"] = exit_side
-                pos["tp1_be_stop"] = be_stop
-                pos["tp1_be_rem_qty"] = rem_qty
-                pos["tp1_be_source"] = "TP1"
-                pos["tp1_be_attempts"] = 0
-                pos["tp1_be_next_s"] = now_s
+        if tp1_filled:
+            # TP1 FILLED is a fact - accept it immediately
+            pos["tp1_done"] = True
+            st["position"] = pos
+            _save_state_best_effort("tp1_done_set")
+            log_event("TP1_DONE", mode="live", order_id_tp1=tp1_id)
+            
+            # Now initiate BE state-machine (separate from tp1_done)
+            exit_side = "SELL" if pos["side"] == "LONG" else "BUY"
+            be_stop = float(pos.get("entry_actual") or (pos.get("prices") or {}).get("entry") or 0.0)
+            qty2 = float((pos.get("orders") or {}).get("qty2") or 0.0)
+            qty3 = float((pos.get("orders") or {}).get("qty3") or 0.0)
+            rem_qty = float(round_qty(qty2 + qty3))
+            
+            # Initialize BE state-machine with parameters
+            old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+            pos["tp1_be_pending"] = True
+            pos["tp1_be_old_sl"] = old_sl_id
+            pos["tp1_be_exit_side"] = exit_side
+            pos["tp1_be_stop"] = be_stop
+            pos["tp1_be_rem_qty"] = rem_qty
+            pos["tp1_be_source"] = "TP1"
+            pos["tp1_be_attempts"] = 0
+            pos["tp1_be_next_s"] = now_s
+            st["position"] = pos
+            save_state(st)
+        else:
+            # Log once to avoid spam; can happen if order exists but is not filled yet.
+            miss = pos.setdefault("missing_not_filled", {})
+            key = f"tp1:{tp1_id}"
+            if poll_due and not miss.get(key):
+                miss[key] = iso_utc()
                 st["position"] = pos
                 save_state(st)
-            else:
-                # Log once to avoid spam; can happen if order exists but is not filled yet.
-                miss = pos.setdefault("missing_not_filled", {})
-                key = f"tp1:{tp1_id}"
-                if poll_due and not miss.get(key):
-                    miss[key] = iso_utc()
-                    st["position"] = pos
-                    save_state(st)
-                    log_event("TP1_NOT_FILLED", mode="live", order_id_tp1=tp1_id)
+                log_event("TP1_NOT_FILLED", mode="live", order_id_tp1=tp1_id)
 
     # TP2 filled -> activate trailing SL for remaining qty3 (if configured)
     if tp2_id and not pos.get("tp2_done"):    
         poll_due = now_s >= float(pos.get("tp2_status_next_s") or 0.0)
-        if poll_due or (not orders):
+        tp2_cached = tick_order_status.get(tp2_id)
+        tp2_polled = tp2_id in status_polled_ids
+        tp2_filled = tp2_cached == "FILLED"
+        if (not tp2_cached) and (not tp2_polled) and poll_due and not tp2_filled:
             pos["tp2_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
             st["position"] = pos
             _save_state_best_effort("tp2_status_next_s")
@@ -1911,11 +1916,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if _update_order_fill(pos, "tp2", tp2_status_payload):
                     st["position"] = pos
                     _save_state_best_effort("tp2_fill_update")
-            tp2_filled = False
             if isinstance(tp2_status_payload, dict):
                 tp2_filled = str(tp2_status_payload.get("status", "")).upper() == "FILLED"
-        else:
-            tp2_filled = False
         if tp2_filled:
             pos["tp2_done"] = True
             st["position"] = pos
@@ -2409,8 +2411,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 sl_prev_filled_live = _status_is_filled(sl_prev)
 
             if sl_filled_cached or sl_filled_payload or sl_filled_live or sl_prev_filled_live:
-                if not pos.get("sl_done"):
-                    pos["sl_done"] = True
                 if not pos.get("sl_watchdog_market_suppressed_logged"):
                     pos["sl_watchdog_market_suppressed_logged"] = True
                     st["position"] = pos
@@ -2434,8 +2434,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             if not sl_filled_after_cancel and sl_prev:
                 sl_filled_after_cancel = _status_is_filled(sl_prev)
             if sl_filled_after_cancel:
-                if not pos.get("sl_done"):
-                    pos["sl_done"] = True
                 if not pos.get("sl_watchdog_market_suppressed_after_cancel_logged"):
                     pos["sl_watchdog_market_suppressed_after_cancel_logged"] = True
                     st["position"] = pos
@@ -2551,6 +2549,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             )
             next_tp1_status = float(pos.get("tp1_watchdog_status_next_s") or 0.0)
             if needs_tp1_status and (now_s >= next_tp1_status or (not orders)):
+                if tp1_id in status_polled_ids:
+                    cached_tp1 = tick_order_status.get(tp1_id)
+                    if cached_tp1:
+                        tp1_status_payload = {"status": cached_tp1, "orderId": tp1_id}
+                    needs_tp1_status = False
+            if needs_tp1_status:
                 pos["tp1_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
                 st["position"] = pos
                 _save_state_best_effort("tp1_watchdog_status_poll")
@@ -2573,6 +2577,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             )
             next_tp2_status = float(pos.get("tp2_watchdog_status_next_s") or 0.0)
             if needs_tp2_status and (now_s >= next_tp2_status or (not orders)):
+                if tp2_id in status_polled_ids:
+                    cached_tp2 = tick_order_status.get(tp2_id)
+                    if cached_tp2:
+                        tp2_status_payload = {"status": cached_tp2, "orderId": tp2_id}
+                    needs_tp2_status = False
+            if needs_tp2_status:
                 pos["tp2_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
                 st["position"] = pos
                 _save_state_best_effort("tp2_watchdog_status_poll")

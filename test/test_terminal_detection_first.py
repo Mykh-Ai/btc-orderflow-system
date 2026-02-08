@@ -97,7 +97,48 @@ class TestTerminalDetectionFirst(unittest.TestCase):
                          "Position should be finalized when sl_done=True")
 
     # =========================================================================
-    # CRITICAL TEST 2: sl_done=True blocks TP watchdog
+    # CRITICAL TEST 2: sl_done=True blocks manual close detector
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_sl_done_blocks_manual_close_detector(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """
+        CRITICAL: If sl_done=True, manual_close_detector.tick should NOT be called.
+
+        This verifies Terminal Detection preempts manual-close detection.
+        """
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN_FILLED",
+            "side": "LONG",
+            "sl_done": True,
+            "orders": {"sl": 999, "tp1": 111, "tp2": 222},
+            "prices": {"sl": 95000.0, "tp1": 96000.0, "tp2": 97000.0, "entry": 95500.0},
+            "qty": 0.1,
+        }
+        st = {"position": pos}
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor.manual_close_detector, "tick") as mock_manual:
+            with patch.object(executor.exit_safety, "sl_watchdog_tick") as mock_sl_wd:
+                with patch.object(executor.exit_safety, "tp_watchdog_tick") as mock_tp_wd:
+                    executor.manage_v15_position("BTCUSDC", st)
+
+        mock_manual.assert_not_called()
+        self.assertIsNone(st.get("position"))
+
+    # =========================================================================
+    # CRITICAL TEST 3: sl_done=True blocks TP watchdog
     # =========================================================================
     @patch("executor.binance_api")
     @patch("executor.save_state")
@@ -645,7 +686,60 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         mock_api.check_order_status.assert_not_called()
 
     # =========================================================================
-    # CRITICAL TEST 12: TP terminal proof avoids qty2/qty3-only confirmation
+    # CRITICAL TEST 12: terminal probe single-flight prevents double status poll
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_terminal_probe_single_flight_blocks_second_status_poll(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Terminal probe status poll must not trigger a second status poll in the same tick."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"tp1": 111},
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() - 10.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return []
+
+            def freshness_sec(self):
+                return 0.0
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.return_value = {
+            "status": "NEW",
+            "orderId": 111,
+            "executedQty": "0.0",
+            "origQty": "0.1",
+        }
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertEqual(mock_api.check_order_status.call_count, 1)
+
+    # =========================================================================
+    # CRITICAL TEST 13: TP terminal proof avoids qty2/qty3-only confirmation
     # =========================================================================
     @patch("executor.binance_api")
     @patch("executor.save_state")
