@@ -423,21 +423,12 @@ class TestExecutorV15(unittest.TestCase):
             get_orders=lambda: [{"orderId": 555, "status": "NEW"}],
             freshness_sec=lambda: 0.0,
         )
-        plan = {
-            "action": "MARKET_FLATTEN",
-            "qty": 0.1,
-            "side": "SELL",
-            "reason": "SL_WATCHDOG",
-            "cancel_order_ids": [],
-            "set_fired_on_success": True,
-            "events": [],
-        }
-
         with patch.object(executor, "_now_s", return_value=now_s), \
              patch.object(executor, "refresh_snapshot", return_value=False), \
              patch.object(executor, "get_snapshot", return_value=snapshot), \
              patch.object(executor.binance_api, "check_order_status") as m_status, \
-             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick") as m_sl_wd, \
+             patch.object(executor.exit_safety, "tp_watchdog_tick") as m_tp_wd, \
              patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
              patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
              patch.object(executor.binance_api, "flatten_market") as m_flatten, \
@@ -451,7 +442,9 @@ class TestExecutorV15(unittest.TestCase):
 
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
-        # Assert: recon FILLED takes priority, no API call needed, no flatten, position closed
+        # Contract: terminal detection preempts watchdog paths entirely
+        m_sl_wd.assert_not_called()
+        m_tp_wd.assert_not_called()
         self.assertEqual(m_status.call_count, 0, "check_order_status should not be called when recon shows FILLED")
         m_flatten.assert_not_called()
         self.assertIsNone(st["position"], "Position should be closed via recon FILLED")
@@ -486,21 +479,12 @@ class TestExecutorV15(unittest.TestCase):
             get_orders=lambda: [{"orderId": 666, "status": "NEW"}],
             freshness_sec=lambda: 0.0,
         )
-        plan = {
-            "action": "MARKET_FLATTEN",
-            "qty": 0.1,
-            "side": "SELL",
-            "reason": "SL_WATCHDOG",
-            "cancel_order_ids": [],
-            "set_fired_on_success": True,
-            "events": [],
-        }
-
         with patch.object(executor, "_now_s", return_value=now_s), \
              patch.object(executor, "refresh_snapshot", return_value=False), \
              patch.object(executor, "get_snapshot", return_value=snapshot), \
              patch.object(executor.binance_api, "check_order_status") as m_status, \
-             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=plan), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick") as m_sl_wd, \
+             patch.object(executor.exit_safety, "tp_watchdog_tick") as m_tp_wd, \
              patch.object(executor.price_snapshot, "refresh_price_snapshot", lambda *_a, **_k: None), \
              patch.object(executor.price_snapshot, "get_price_snapshot", return_value=SimpleNamespace(ok=True, price_mid=100.0)), \
              patch.object(executor.binance_api, "flatten_market") as m_flatten, \
@@ -514,7 +498,9 @@ class TestExecutorV15(unittest.TestCase):
 
             executor.manage_v15_position(executor.ENV["SYMBOL"], st)
 
-        # Assert: fills cache used, no API spam, no flatten, position closed
+        # Contract: terminal detection preempts watchdog paths entirely
+        m_sl_wd.assert_not_called()
+        m_tp_wd.assert_not_called()
         self.assertEqual(m_status.call_count, 0, "check_order_status should not be called when fills shows FILLED")
         m_flatten.assert_not_called()
         self.assertIsNone(st["position"], "Position should be closed via fills cache")
