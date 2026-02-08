@@ -776,6 +776,238 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         self.assertEqual(mock_api.check_order_status.call_count, 1)
 
     # =========================================================================
+    # CRITICAL TEST 12B: TP1 poll single-flight blocks TP watchdog second poll
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp1_poll_single_flight_blocks_watchdog_poll(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """TP1 poll block must prevent TP watchdog from re-polling in the same tick."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"tp1": 111},
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() - 10.0,
+            "tp1_watchdog_status_next_s": time.time() - 10.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return [{
+                    "orderId": 111,
+                    "status": "NEW",
+                }]
+
+            def freshness_sec(self):
+                return 0.0
+
+        class _PriceSnap:
+            ok = True
+            price_mid = 103.0
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.return_value = {
+            "status": "NEW",
+            "orderId": 111,
+            "executedQty": "0.0",
+            "origQty": "0.1",
+        }
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_PriceSnap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertEqual(mock_api.check_order_status.call_count, 1)
+
+    # =========================================================================
+    # CRITICAL TEST 12C: status-only cached payload uses fills for TP watchdog
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp_watchdog_uses_fill_payload_when_cached_status_only(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """TP watchdog should receive executed/orig when cached status is used."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {
+                "tp1": 111,
+                "fills": {
+                    "tp1": {
+                        "orderId": 111,
+                        "status": "PARTIALLY_FILLED",
+                        "executedQty": "0.045",
+                        "origQty": "0.1",
+                    }
+                },
+            },
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() - 10.0,
+            "tp1_watchdog_status_next_s": time.time() - 10.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return [{
+                    "orderId": 111,
+                    "status": "NEW",
+                }]
+
+            def freshness_sec(self):
+                return 0.0
+
+        class _PriceSnap:
+            ok = True
+            price_mid = 103.0
+
+        captured = {"args": None, "kwargs": None}
+
+        def _capture_tp_watchdog(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return None
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.return_value = {
+            "status": "NEW",
+            "orderId": 111,
+            "executedQty": "0.0",
+            "origQty": "0.1",
+        }
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_PriceSnap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", side_effect=_capture_tp_watchdog):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        payload = None
+        if captured.get("kwargs") and "tp1_status_payload" in captured["kwargs"]:
+            payload = captured["kwargs"]["tp1_status_payload"]
+        if payload is None and captured.get("args"):
+            for arg in captured["args"]:
+                if isinstance(arg, dict) and arg.get("orderId") == 111:
+                    payload = arg
+                    break
+            if payload is None and len(captured["args"]) >= 7:
+                payload = captured["args"][5]
+        payload = payload or {}
+        self.assertIn("executedQty", payload)
+        self.assertIn("origQty", payload)
+
+    # =========================================================================
+    # CRITICAL TEST 12D: cached status without fills should not pass status-only payload
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp_watchdog_skips_status_only_when_fills_missing(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """TP watchdog should not receive status-only payload without fill qtys."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"tp1": 111},
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() - 10.0,
+            "tp1_watchdog_status_next_s": time.time() - 10.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return []
+
+            def freshness_sec(self):
+                return 0.0
+
+        class _PriceSnap:
+            ok = True
+            price_mid = 103.0
+
+        captured = {"args": None, "kwargs": None}
+
+        def _capture_tp_watchdog(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return None
+
+        mock_api.open_orders.return_value = []
+        mock_api.check_order_status.return_value = {
+            "status": "NEW",
+            "orderId": 111,
+        }
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_PriceSnap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", side_effect=_capture_tp_watchdog):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        payload = None
+        if captured.get("kwargs") and "tp1_status_payload" in captured["kwargs"]:
+            payload = captured["kwargs"]["tp1_status_payload"]
+        if payload is None and captured.get("args"):
+            for arg in captured["args"]:
+                if isinstance(arg, dict) and arg.get("orderId") == 111:
+                    payload = arg
+                    break
+            if payload is None and len(captured["args"]) >= 7:
+                payload = captured["args"][5]
+        if payload is not None:
+            self.assertIn("executedQty", payload)
+            self.assertIn("origQty", payload)
+
+    # =========================================================================
     # CRITICAL TEST 13: TP terminal proof avoids qty2/qty3-only confirmation
     # =========================================================================
     @patch("executor.binance_api")
