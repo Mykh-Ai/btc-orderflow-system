@@ -1037,6 +1037,19 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             pos["orders"] = orders
         return changed
 
+    def _fill_payload_from_fills(leg: str, status: str, order_id: int) -> Optional[Dict[str, Any]]:
+        fills = ((pos.get("orders") or {}).get("fills") or {}) if isinstance(pos.get("orders"), dict) else {}
+        if not isinstance(fills, dict):
+            return None
+        leg_data = fills.get(leg)
+        if not isinstance(leg_data, dict):
+            return None
+        executed = leg_data.get("executedQty")
+        orig = leg_data.get("origQty")
+        if executed is None or orig is None:
+            return None
+        return {"status": status, "orderId": order_id, "executedQty": executed, "origQty": orig}
+
     def _save_state_best_effort(where: str) -> None:
         """Watchdog-only persistence: delegates to emergency module for alert/throttle."""
         emergency.save_state_safe(st, where)
@@ -1852,8 +1865,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         if (not tp1_cached) and (not tp1_polled) and poll_due and not tp1_filled:
             pos["tp1_status_next_s"] = now_s + float(ENV["LIVE_STATUS_POLL_EVERY"])
             tp1_status_payload = None
-            with suppress(Exception):
+            try:
                 tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+            except Exception:
+                status_polled_ids.add(tp1_id)
+            else:
+                status_polled_ids.add(tp1_id)
             if isinstance(tp1_status_payload, dict):
                 _cache_status_payload(tp1_status_payload)
                 if _update_order_fill(pos, "tp1", tp1_status_payload):
@@ -1909,8 +1926,12 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _save_state_best_effort("tp2_status_next_s")
 
             tp2_status_payload = None
-            with suppress(Exception):
+            try:
                 tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+            except Exception:
+                status_polled_ids.add(tp2_id)
+            else:
+                status_polled_ids.add(tp2_id)
             if isinstance(tp2_status_payload, dict):
                 _cache_status_payload(tp2_status_payload)
                 if _update_order_fill(pos, "tp2", tp2_status_payload):
@@ -2552,23 +2573,28 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if tp1_id in status_polled_ids:
                     cached_tp1 = tick_order_status.get(tp1_id)
                     if cached_tp1:
-                        tp1_status_payload = {"status": cached_tp1, "orderId": tp1_id}
-                    needs_tp1_status = False
+                        fill_payload = _fill_payload_from_fills("tp1", cached_tp1, tp1_id)
+                        if fill_payload:
+                            tp1_status_payload = fill_payload
+                            needs_tp1_status = False
             if needs_tp1_status:
-                pos["tp1_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
-                st["position"] = pos
-                _save_state_best_effort("tp1_watchdog_status_poll")
-                try:
-                    tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
-                    if isinstance(tp1_status_payload, dict):
-                        _cache_status_payload(tp1_status_payload)
-                        if _update_order_fill(pos, "tp1", tp1_status_payload):
-                            st["position"] = pos
-                            _save_state_best_effort("tp1_watchdog_fill_update")
-                except Exception as e:
-                    # If order is missing on exchange, inject synthetic status for planner.
-                    if _is_unknown_order_error(e):
-                        tp1_status_payload = {"status": "MISSING"}
+                if tp1_id not in status_polled_ids:
+                    pos["tp1_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+                    st["position"] = pos
+                    _save_state_best_effort("tp1_watchdog_status_poll")
+                    try:
+                        tp1_status_payload = binance_api.check_order_status(symbol, tp1_id)
+                        status_polled_ids.add(tp1_id)
+                        if isinstance(tp1_status_payload, dict):
+                            _cache_status_payload(tp1_status_payload)
+                            if _update_order_fill(pos, "tp1", tp1_status_payload):
+                                st["position"] = pos
+                                _save_state_best_effort("tp1_watchdog_fill_update")
+                    except Exception as e:
+                        status_polled_ids.add(tp1_id)
+                        # If order is missing on exchange, inject synthetic status for planner.
+                        if _is_unknown_order_error(e):
+                            tp1_status_payload = {"status": "MISSING"}
 
         if tp2_id and not pos.get("tp2_done") and not pos.get("tp2_synthetic"):
             needs_tp2_status = (
@@ -2580,22 +2606,27 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if tp2_id in status_polled_ids:
                     cached_tp2 = tick_order_status.get(tp2_id)
                     if cached_tp2:
-                        tp2_status_payload = {"status": cached_tp2, "orderId": tp2_id}
-                    needs_tp2_status = False
+                        fill_payload = _fill_payload_from_fills("tp2", cached_tp2, tp2_id)
+                        if fill_payload:
+                            tp2_status_payload = fill_payload
+                            needs_tp2_status = False
             if needs_tp2_status:
-                pos["tp2_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
-                st["position"] = pos
-                _save_state_best_effort("tp2_watchdog_status_poll")
-                try:
-                    tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
-                    if isinstance(tp2_status_payload, dict):
-                        _cache_status_payload(tp2_status_payload)
-                        if _update_order_fill(pos, "tp2", tp2_status_payload):
-                            st["position"] = pos
-                            _save_state_best_effort("tp2_watchdog_fill_update")
-                except Exception as e:
-                    if _is_unknown_order_error(e):
-                        tp2_status_payload = {"status": "MISSING"}
+                if tp2_id not in status_polled_ids:
+                    pos["tp2_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+                    st["position"] = pos
+                    _save_state_best_effort("tp2_watchdog_status_poll")
+                    try:
+                        tp2_status_payload = binance_api.check_order_status(symbol, tp2_id)
+                        status_polled_ids.add(tp2_id)
+                        if isinstance(tp2_status_payload, dict):
+                            _cache_status_payload(tp2_status_payload)
+                            if _update_order_fill(pos, "tp2", tp2_status_payload):
+                                st["position"] = pos
+                                _save_state_best_effort("tp2_watchdog_fill_update")
+                    except Exception as e:
+                        status_polled_ids.add(tp2_id)
+                        if _is_unknown_order_error(e):
+                            tp2_status_payload = {"status": "MISSING"}
 
     # Execute TP watchdog (OPEN or OPEN_FILLED status)
     tp_plan = None
