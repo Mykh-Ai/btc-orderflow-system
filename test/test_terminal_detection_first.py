@@ -138,6 +138,43 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         self.assertIsNone(st.get("position"))
 
     # =========================================================================
+    # CRITICAL TEST 2b: sl_done finalizes even with missing orders/prices
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_sl_done_finalizes_with_missing_orders_prices(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """
+        CRITICAL: If sl_done=True with missing orders/prices, finalize immediately.
+
+        This verifies terminal-first cannot be blocked by partial state.
+        """
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN_FILLED",
+            "side": "LONG",
+            "sl_done": True,
+            "orders": None,
+            "prices": None,
+            "qty": 0.1,
+        }
+        st = {"position": pos}
+
+        with patch.object(executor.manual_close_detector, "tick") as mock_manual:
+            executor.manage_v15_position("BTCUSDC", st)
+
+        mock_manual.assert_not_called()
+        self.assertIsNone(st.get("position"))
+
+    # =========================================================================
     # CRITICAL TEST 3: sl_done=True blocks TP watchdog
     # =========================================================================
     @patch("executor.binance_api")
