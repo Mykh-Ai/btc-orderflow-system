@@ -1430,6 +1430,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             _cancel_sibling_exits_best_effort(tag=tag)
         _close_slot(reason)
 
+    if pos.get("sl_done"):
+        _finalize_close("SL", tag="SL_FILLED")
+        return
+
     if not pos.get("orders") or not pos.get("prices"):
         return
 
