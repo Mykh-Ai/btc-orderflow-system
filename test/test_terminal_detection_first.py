@@ -598,6 +598,122 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         mock_api.check_order_status.assert_not_called()
 
     # =========================================================================
+    # CRITICAL TEST 11: missing openOrders does not bypass poll throttle
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_terminal_probe_skips_status_when_missing_open_orders_and_poll_not_due(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Terminal probe must not call status API when openOrders missing but poll not due."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"sl": 123},
+            "prices": {"sl": 98.0, "entry": 100.0},
+            "qty": 0.1,
+            "sl_status_next_s": time.time() + 60.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return []
+
+            def freshness_sec(self):
+                return 0.0
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        mock_api.check_order_status.assert_not_called()
+
+    # =========================================================================
+    # CRITICAL TEST 12: TP terminal proof avoids qty2/qty3-only confirmation
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp_terminal_probe_not_overconfirmed_on_qty_desync(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """TP terminal confirmation must not rely on stale qty2/qty3 state."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {
+                "sl": 333,
+                "tp1": 111,
+                "tp2": 222,
+                "qty1": 0.01,
+                "qty2": 0.01,
+                "qty3": 0.0,
+                "fills": {
+                    "tp1": {
+                        "orderId": 111,
+                        "status": "FILLED",
+                        "executedQty": "0.03",
+                        "origQty": "0.03",
+                    }
+                },
+            },
+            "prices": {"sl": 98.0, "tp1": 102.0, "tp2": 104.0, "entry": 100.0},
+            "qty": 0.0,
+            "sl_status_next_s": time.time() + 60.0,
+            "tp1_status_next_s": time.time() + 60.0,
+            "tp2_status_next_s": time.time() + 60.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return [{
+                    "orderId": 111,
+                    "status": "NEW",
+                    "origQty": "0.03",
+                    "executedQty": "0.0",
+                }]
+
+            def freshness_sec(self):
+                return 0.0
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertIsNotNone(st.get("position"))
+
+    # =========================================================================
     # NEGATIVE TEST 8: Test would FAIL if Terminal Detection is commented out
     # =========================================================================
     def test_ordering_verification_comment(self):

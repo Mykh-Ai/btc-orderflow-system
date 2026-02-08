@@ -974,25 +974,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 continue
         return ""
 
-    # ==================== TERMINAL DETECTION: sl_done early exit ====================
-    # CRITICAL: If sl_done=True from previous tick, finalize immediately and exit.
-    # This prevents watchdog/trailing/BE from executing on already-closed positions.
-    if pos.get("sl_done"):
-        log_event("SL_ALREADY_DONE_EARLY_EXIT", mode="live", reason="sl_done=True at entry")
-        # Inline finalization (cannot call _close_slot - not yet defined as nested function)
-        st["last_closed"] = {"ts": iso_utc(), "mode": "live", "reason": "SL_ALREADY_DONE", "side": pos.get("side"), "entry": (pos.get("prices") or {}).get("entry")}
-        with suppress(Exception):
-            reporting.report_trade_close(st, pos, "SL_ALREADY_DONE")
-        send_trade_closed(st, pos, "SL_ALREADY_DONE", mode="live")
-        st["position"] = None
-        st["cooldown_until"] = now_s + float(ENV["COOLDOWN_SEC"])
-        st["lock_until"] = 0.0
-        save_state(st)
-        with suppress(Exception):
-            margin_guard.on_after_position_closed(st)
-        return
-    # ================================================================================
-
     def _update_order_fill(pos: Dict[str, Any], leg: str, payload: Dict[str, Any]) -> bool:
         """Reporting Spec v1: persist execution data from existing status calls."""
         if not isinstance(payload, dict) or not leg:
@@ -1163,6 +1144,18 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             next_s = float(pos.get("tp2_status_next_s") or 0.0)
         return now_s >= next_s
 
+    def _bump_status_next_s(leg: str) -> None:
+        try:
+            poll_every = float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
+        except Exception:
+            poll_every = 0.0
+        if poll_every <= 0.0:
+            return
+        key = "sl_status_next_s" if leg in ("sl", "sl_prev") else f"{leg}_status_next_s"
+        pos[key] = now_s + poll_every
+        st["position"] = pos
+        _save_state_best_effort(f"{key}_terminal_probe")
+
     def _status_from_sources(leg: str, order_id: int) -> Optional[str]:
         if not order_id:
             return None
@@ -1199,10 +1192,13 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return "OPEN"
 
         poll_due = _poll_due_for_leg(leg)
-        should_poll = poll_due or (open_orders_ok and int(order_id) not in open_ids)
+        missing_from_open = open_orders_ok and int(order_id) not in open_ids
+        should_poll = poll_due
         if not should_poll:
             return None
 
+        if poll_due or missing_from_open:
+            _bump_status_next_s(leg)
         try:
             od = binance_api.check_order_status(symbol, int(order_id))
             status = str(od.get("status", "")).upper()
@@ -1216,6 +1212,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return "ERROR"
 
     def _terminal_probe() -> tuple[str, str]:
+        if pos.get("sl_done"):
+            return TERMINAL_CONFIRMED, "SL_FILLED"
         orders_map = pos.get("orders") if isinstance(pos.get("orders"), dict) else {}
         try:
             qty1 = float(orders_map.get("qty1") or 0.0)
@@ -1257,13 +1255,48 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         found = True
             return total if found else None
 
+        def _tp_orig_total(tp1_id: int, tp2_id: int) -> Optional[float]:
+            fills = (orders_map.get("fills") or {}) if isinstance(orders_map, dict) else {}
+            if not isinstance(fills, dict):
+                return None
+            total = 0.0
+            found_tp1 = False
+            found_tp2 = False
+            if tp1_id:
+                leg_data = fills.get("tp1")
+                if isinstance(leg_data, dict):
+                    try:
+                        orig_qty = float(leg_data.get("origQty") or 0.0)
+                    except Exception:
+                        orig_qty = 0.0
+                    if orig_qty > 0.0:
+                        total += orig_qty
+                        found_tp1 = True
+            if tp2_id:
+                leg_data = fills.get("tp2")
+                if isinstance(leg_data, dict):
+                    try:
+                        orig_qty = float(leg_data.get("origQty") or 0.0)
+                    except Exception:
+                        orig_qty = 0.0
+                    if orig_qty > 0.0:
+                        total += orig_qty
+                        found_tp2 = True
+            if tp1_id and tp2_id:
+                if found_tp1 and found_tp2:
+                    return total
+                return None
+            if tp1_id and not tp2_id:
+                return total if found_tp1 else None
+            if tp2_id and not tp1_id:
+                return total if found_tp2 else None
+            return None
+
         pos_qty = 0.0
         try:
             pos_qty = float(pos.get("qty") or 0.0)
         except Exception:
             pos_qty = 0.0
-        if pos_qty <= 0.0:
-            pos_qty = max(qty1 + qty2 + qty3, 0.0)
 
         candidates = [
             ("sl", sl_id, "SL_FILLED"),
@@ -1271,6 +1304,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             ("tp1", int(orders_map.get("tp1") or 0), "TP1_FILLED"),
             ("tp2", int(orders_map.get("tp2") or 0), "TP2_FILLED"),
         ]
+        tp1_id = int(orders_map.get("tp1") or 0)
+        tp2_id = int(orders_map.get("tp2") or 0)
+        if pos_qty <= 0.0:
+            pos_qty = float(_tp_orig_total(tp1_id, tp2_id) or 0.0)
 
         unknown = False
         for leg, oid, reason in candidates:
@@ -1715,9 +1752,11 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             pos["sl_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
             st["position"] = pos
             _save_state_best_effort("sl_status_next_s_watchdog")
-            with suppress(Exception):
+            try:
                 sl_status_payload = binance_api.check_order_status(symbol, sl_id)
                 sl_status_source = "status_api"
+            except Exception:
+                _cache_tick_status(sl_id, "ERROR")
             if isinstance(sl_status_payload, dict):
                 _cache_status_payload(sl_status_payload)
                 if _update_order_fill(pos, "sl", sl_status_payload):
