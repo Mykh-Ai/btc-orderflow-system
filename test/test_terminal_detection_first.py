@@ -839,6 +839,114 @@ class TestTerminalDetectionFirst(unittest.TestCase):
         self.assertEqual(mock_api.check_order_status.call_count, 1)
 
     # =========================================================================
+    # CRITICAL TEST 12B-1: TP watchdog does not bypass throttle on empty orders
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp1_watchdog_empty_orders_does_not_force_poll(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Empty openOrders with snapshot ok must not force TP watchdog polling."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"tp1": 111},
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() + 60.0,
+            "tp1_watchdog_status_next_s": time.time() + 60.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = True
+            error = None
+
+            def get_orders(self):
+                return []
+
+            def freshness_sec(self):
+                return 0.0
+
+        class _PriceSnap:
+            ok = True
+            price_mid = 103.0
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_PriceSnap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertEqual(mock_api.check_order_status.call_count, 0)
+
+    # =========================================================================
+    # CRITICAL TEST 12B-2: snapshot not ok still does not bypass throttle
+    # =========================================================================
+    @patch("executor.binance_api")
+    @patch("executor.save_state")
+    @patch("executor.send_webhook")
+    @patch("executor.log_event")
+    def test_tp1_watchdog_snapshot_not_ok_does_not_force_poll(
+        self, mock_log, mock_webhook, mock_save, mock_api
+    ):
+        """Snapshot not ok must not force TP watchdog polling before throttle."""
+        import executor
+
+        env = self._make_env()
+        executor.ENV.update(env)
+
+        pos = {
+            "mode": "live",
+            "status": "OPEN",
+            "side": "LONG",
+            "orders": {"tp1": 111},
+            "prices": {"tp1": 102.0, "entry": 100.0},
+            "qty": 0.1,
+            "tp1_status_next_s": time.time() + 60.0,
+            "tp1_watchdog_status_next_s": time.time() + 60.0,
+        }
+        st = {"position": pos}
+
+        class _Snap:
+            ok = False
+            error = "boom"
+
+            def get_orders(self):
+                return []
+
+            def freshness_sec(self):
+                return 0.0
+
+        class _PriceSnap:
+            ok = True
+            price_mid = 103.0
+
+        mock_api.open_orders.return_value = []
+
+        with patch.object(executor, "refresh_snapshot", return_value=False), \
+             patch.object(executor, "get_snapshot", return_value=_Snap()), \
+             patch.object(executor.price_snapshot, "refresh_price_snapshot", return_value=None), \
+             patch.object(executor.price_snapshot, "get_price_snapshot", return_value=_PriceSnap()), \
+             patch.object(executor.exit_safety, "sl_watchdog_tick", return_value=None), \
+             patch.object(executor.exit_safety, "tp_watchdog_tick", return_value=None):
+            executor.manage_v15_position("BTCUSDC", st)
+
+        self.assertEqual(mock_api.check_order_status.call_count, 0)
+
+    # =========================================================================
     # CRITICAL TEST 12C: status-only cached payload uses fills for TP watchdog
     # =========================================================================
     @patch("executor.binance_api")

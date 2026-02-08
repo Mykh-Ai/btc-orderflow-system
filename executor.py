@@ -2573,7 +2573,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 or ("origQty" not in tp1_status_payload)
             )
             next_tp1_status = float(pos.get("tp1_watchdog_status_next_s") or 0.0)
-            if needs_tp1_status and (now_s >= next_tp1_status or (not orders)):
+            tp1_watchdog_due = now_s >= next_tp1_status
+            if needs_tp1_status and tp1_watchdog_due:
                 if tp1_id in status_polled_ids:
                     cached_tp1 = tick_order_status.get(tp1_id)
                     if cached_tp1:
@@ -2581,7 +2582,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         if fill_payload:
                             tp1_status_payload = fill_payload
                             needs_tp1_status = False
-            if needs_tp1_status:
+            if needs_tp1_status and tp1_watchdog_due:
                 if tp1_id not in status_polled_ids:
                     pos["tp1_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
                     st["position"] = pos
@@ -2606,7 +2607,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 or ("status" not in tp2_status_payload)
             )
             next_tp2_status = float(pos.get("tp2_watchdog_status_next_s") or 0.0)
-            if needs_tp2_status and (now_s >= next_tp2_status or (not orders)):
+            tp2_watchdog_due = now_s >= next_tp2_status
+            if needs_tp2_status and tp2_watchdog_due:
                 if tp2_id in status_polled_ids:
                     cached_tp2 = tick_order_status.get(tp2_id)
                     if cached_tp2:
@@ -2614,7 +2616,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         if fill_payload:
                             tp2_status_payload = fill_payload
                             needs_tp2_status = False
-            if needs_tp2_status:
+            if needs_tp2_status and tp2_watchdog_due:
                 if tp2_id not in status_polled_ids:
                     pos["tp2_watchdog_status_next_s"] = now_s + float(ENV.get("LIVE_STATUS_POLL_EVERY") or 0.0)
                     st["position"] = pos
