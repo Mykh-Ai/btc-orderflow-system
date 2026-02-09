@@ -26,3 +26,4 @@ Thumbs.db
 # --- Temporary files ---
 tmpclaude-*
 *.tmp
+test/.tmp_invariants_state_*.json
