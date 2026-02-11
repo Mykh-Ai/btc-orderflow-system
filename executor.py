@@ -925,6 +925,25 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # Ensure price != stopPrice even after rounding
                 if be_limit_s == be_stop_s:
                     be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
+                # Cancel old SL FIRST (and confirm), then place new BE SL.
+                old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+                if old_sl_id:
+                    with suppress(Exception):
+                        binance_api.cancel_order(symbol, old_sl_id)
+                    od_c = None
+                    with suppress(Exception):
+                        od_c = binance_api.check_order_status(symbol, old_sl_id)
+                    st_c = str((od_c or {}).get("status", "")).upper()
+                    if st_c not in ("CANCELED", "REJECTED", "EXPIRED"):
+                        log_event(
+                            "TP1_SL_TO_BE_WAIT_CANCEL",
+                            mode="live",
+                            order_id_tp1=tp1_id,
+                            order_id_sl=old_sl_id,
+                            status=st_c or "UNKNOWN",
+                        )
+                        return
+
                 try:
                     sl_new = binance_api.place_order_raw({
                         "symbol": symbol,
@@ -940,10 +959,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     log_event("TP1_SL_TO_BE_ERROR", error=str(e), mode="live", order_id_tp1=tp1_id)
                     send_webhook({"event": "TP1_SL_TO_BE_ERROR", "mode": "live", "symbol": symbol, "order_id_tp1": tp1_id, "error": str(e)})
                 else:
-                    sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-                    # Keep old SL id for best-effort cleanup even if cancel fails.
-                    if sl_id:
-                        pos["orders"]["sl_prev"] = sl_id
+                    # Keep old SL id for best-effort orphan cleanup (if needed).
+                    if old_sl_id:
+                        pos["orders"]["sl_prev"] = old_sl_id
                         pos["sl_prev_next_cancel_s"] = _now_s()
                     pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                     pos["tp1_done"] = True
@@ -951,10 +969,6 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     save_state(st)
                     log_event("TP1_DONE_SL_TO_BE", mode="live", order_id_tp1=tp1_id, new_sl_order_id=sl_new.get("orderId"))
                     send_webhook({"event": "TP1_DONE_SL_TO_BE", "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
-                    # Best-effort cancel of old SL (do not depend on openOrders).
-                    if sl_id:
-                        with suppress(Exception):
-                            binance_api.cancel_order(symbol, sl_id)
             else:
                 # Log once to avoid spam; can happen if order exists but is not filled yet.
                 miss = pos.setdefault("missing_not_filled", {})
