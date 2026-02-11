@@ -1,71 +1,335 @@
-import unittest
+"""
+Tests for margin_policy V2 integration with rolled-back executor.
+Real config: SYMBOL=BTCUSDC, ASSET_STEP_SIZE_USDC=0.00000001
+Core problem V2 solves: float arithmetic garbage (e.g. 59.856790199999995)
+causes Binance to reject borrow requests.
+"""
+from decimal import Decimal
+import sys, os
 
-import executor_mod.margin_policy as mp
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from executor_mod.margin_policy import (
+    ensure_borrow_if_needed,
+    repay_if_any,
+    _split_symbol_assets,
+    _round_amount_up,
+    _to_decimal,
+)
+
+# --- Real .env values ---
+REAL_ENV = {"ASSET_STEP_SIZE_USDC": "0.00000001"}
+STEP = Decimal("0.00000001")
 
 
-class FakeApi:
-    def __init__(self, account):
-        self.account = account
-        self.account_calls = []
-        self.borrow_calls = []
-        self.repay_calls = []
+class MockApi:
+    def __init__(self, free=None, borrowed=None, env=None):
+        self.free = free or {}
+        self.borrowed = borrowed or {}
+        self._env_data = env if env is not None else dict(REAL_ENV)
+        self.borrows = []
+        self.repays = []
 
-    def margin_account(self, is_isolated=False, symbols=None, symbol=None):
-        self.account_calls.append({"is_isolated": is_isolated, "symbols": symbols, "symbol": symbol})
-        return self.account
+    def _env(self):
+        return self._env_data
+
+    def margin_account(self, is_isolated=False, symbols=None):
+        assets = []
+        all_keys = set(list(self.free) + list(self.borrowed))
+        for a in all_keys:
+            assets.append({
+                "asset": a,
+                "free": self.free.get(a, "0"),
+                "borrowed": self.borrowed.get(a, "0"),
+            })
+        return {"userAssets": assets}
 
     def margin_borrow(self, asset, amount, is_isolated=False, symbol=None):
-        self.borrow_calls.append((asset, float(amount), is_isolated, symbol))
+        self.borrows.append({"asset": asset, "amount": amount})
 
     def margin_repay(self, asset, amount, is_isolated=False, symbol=None):
-        self.repay_calls.append((asset, float(amount), is_isolated, symbol))
+        self.repays.append({"asset": asset, "amount": amount})
+
+    def log_event(self, *args, **kwargs):
+        pass
 
 
-class TestMarginPolicy(unittest.TestCase):
-    def test_isolated_assets_are_flattened(self):
-        # Isolated margin-style response: assets -> [{baseAsset:{...}, quoteAsset:{...}}]
-        account = {
-            "assets": [{
-                "baseAsset": {"asset": "BTC", "free": "0.0", "borrowed": "0.01"},
-                "quoteAsset": {"asset": "USDT", "free": "5.0", "borrowed": "0.0"},
-            }]
-        }
-        api = FakeApi(account)
-        st = {}
-        plan = {"trade_key": "T1", "is_isolated": True, "borrow_asset": "USDT", "borrow_amount": 10.0}
+# =====================================================================
+# 1. THE REAL BUG: float garbage cleaned by V2
+#    V1: 0.00062 * 96543.21 = 59.856790199999995 → Binance rejects
+#    V2: Decimal rounds to step → 59.8567902 → Binance accepts
+# =====================================================================
 
-        mp.ensure_borrow_if_needed(st, api, "BTCUSDT", "BUY", 0.001, plan)
+def test_float_garbage_cleaned():
+    """The exact scenario that caused V1 failures.
+    float multiplication produces trailing garbage digits;
+    V2 must round to step and produce a clean Decimal."""
+    float_garbage = 0.00062 * 96543.21  # platform-dependent trailing digits
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {
+        "borrow_asset": "USDC",
+        "borrow_amount": float_garbage,
+        "trade_key": "t1",
+    }
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.00062, plan)
+    assert len(api.borrows) == 1
+    amt = api.borrows[0]["amount"]
+    assert isinstance(amt, Decimal)
+    # must have at most 8 decimal places (step = 0.00000001)
+    assert amt == amt.quantize(STEP)
+    # must not contain float garbage (15+ digits)
+    assert len(str(amt).split(".")[-1]) <= 8
 
-        # free=5, needed=10 => borrow 5
-        self.assertEqual(len(api.borrow_calls), 1)
-        asset, amt, is_iso, sym = api.borrow_calls[0]
-        self.assertEqual(asset, "USDT")
-        self.assertAlmostEqual(amt, 5.0)
-        self.assertTrue(is_iso)
 
-    def test_repay_only_tracked_amount_not_full_outstanding(self):
-        account = {"userAssets": [{"asset": "USDT", "borrowed": "10.0", "free": "0.0"}]}
-        api = FakeApi(account)
-        st = {"margin": {
-            "active_trade_key": "T1",
-            "borrowed_by_trade": {"T1": {"USDT": 3.0}},
-            "borrowed_assets": {"USDT": 3.0},
-            "borrowed_trade_keys": ["T1"],
-            "repaid_trade_keys": [],
-            "is_isolated": False,
-        }}
+def test_float_garbage_partial_free():
+    """Float garbage with partial free balance."""
+    float_needed = 0.00062 * 96543.21  # 59.856790199999995
+    api = MockApi(free={"USDC": "20.5"})
+    st = {}
+    plan = {
+        "borrow_asset": "USDC",
+        "borrow_amount": float_needed,
+        "trade_key": "t1",
+    }
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.00062, plan)
+    assert len(api.borrows) == 1
+    amt = api.borrows[0]["amount"]
+    assert isinstance(amt, Decimal)
+    assert amt == amt.quantize(STEP)
 
-        mp.repay_if_any(st, api, "BTCUSDT")
 
-        self.assertEqual(len(api.repay_calls), 1)
-        asset, amt, is_iso, sym = api.repay_calls[0]
-        self.assertEqual(asset, "USDT")
-        self.assertAlmostEqual(amt, 3.0)  # IMPORTANT: tracked only
+def test_clean_decimal_passthrough():
+    """When borrow_amount is already clean, no distortion."""
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {
+        "borrow_asset": "USDC",
+        "borrow_amount": "60.00",
+        "trade_key": "t1",
+    }
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert api.borrows[0]["amount"] == Decimal("60.00")
 
-        # cleanup
-        self.assertIsNone(st["margin"]["active_trade_key"])
-        self.assertNotIn("T1", st["margin"]["borrowed_by_trade"])
 
+# =====================================================================
+# 2. Step size found via ASSET_STEP_SIZE_USDC (real env key)
+# =====================================================================
+
+def test_step_found_via_asset_step_size_key():
+    """V2 finds step via ASSET_STEP_SIZE_USDC — 4th priority in _asset_step_size."""
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {
+        "borrow_asset": "USDC",
+        "borrow_amount": "50.123456789012",
+        "trade_key": "t1",
+    }
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 1
+    amt = api.borrows[0]["amount"]
+    assert amt == Decimal("50.12345679")
+
+
+# =====================================================================
+# 3. Missing step size → quote asset blocked (safety net)
+# =====================================================================
+
+def test_usdc_blocked_without_any_step_size():
+    """Without ANY step size for USDC, borrow is blocked."""
+    api = MockApi(free={"USDC": "0"}, env={})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "100", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+    assert st["margin"]["last_borrow_skip_reason"] == "missing_quote_step_size"
+
+
+def test_api_without_env_method_blocks_usdc():
+    """Old api without _env() → no step size → USDC blocked."""
+    class BareApi:
+        def __init__(self):
+            self.borrows = []
+        def margin_account(self, is_isolated=False, symbols=None):
+            return {"userAssets": [{"asset": "USDC", "free": "0", "borrowed": "0"}]}
+        def margin_borrow(self, asset, amount, is_isolated=False, symbol=None):
+            self.borrows.append({"asset": asset, "amount": amount})
+        def log_event(self, *a, **kw):
+            pass
+    api = BareApi()
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "100", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+
+
+# =====================================================================
+# 4. Free balance sufficient → no borrow
+# =====================================================================
+
+def test_no_borrow_when_free_covers_needed():
+    api = MockApi(free={"USDC": "200.00"})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "150", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+
+
+def test_no_borrow_free_equals_needed():
+    api = MockApi(free={"USDC": "60.00"})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "60.00", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+
+
+# =====================================================================
+# 5. Idempotency — no double borrow
+# =====================================================================
+
+def test_no_double_borrow_same_trade_key():
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "50", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 1
+
+
+# =====================================================================
+# 6. Borrow → Repay roundtrip
+# =====================================================================
+
+def test_borrow_then_repay_roundtrip():
+    api = MockApi(
+        free={"USDC": "0"},
+        borrowed={"USDC": "60.00"},
+    )
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "60", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 1
+
+    repay_if_any(st, api, "BTCUSDC")
+    assert len(api.repays) == 1
+    assert st["margin"]["active_trade_key"] is None
+    assert "t1" in st["margin"]["repaid_trade_keys"]
+    assert "t1" not in st["margin"].get("borrowed_by_trade", {})
+
+
+# =====================================================================
+# 7. Multiple sequential trades
+# =====================================================================
+
+def test_two_sequential_trades():
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+
+    plan1 = {"borrow_asset": "USDC", "borrow_amount": "60", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan1)
+
+    api.borrowed = {"USDC": "60.00"}
+    repay_if_any(st, api, "BTCUSDC")
+
+    plan2 = {"borrow_asset": "USDC", "borrow_amount": "45", "trade_key": "t2"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.0005, plan2)
+
+    assert len(api.borrows) == 2
+    assert st["margin"]["active_trade_key"] == "t2"
+    assert "t1" in st["margin"]["repaid_trade_keys"]
+
+
+# =====================================================================
+# 8. State tracking
+# =====================================================================
+
+def test_state_tracks_borrowed_amount():
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "59.856790199999995", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    m = st["margin"]
+    assert m["active_trade_key"] == "t1"
+    assert "t1" in m["borrowed_trade_keys"]
+    assert "USDC" in m["borrowed_assets"]
+    assert "USDC" in m["borrowed_by_trade"]["t1"]
+    assert m["borrowed_assets"]["USDC"] == float(Decimal("59.8567902"))
+
+
+# =====================================================================
+# 9. Symbol parsing
+# =====================================================================
+
+def test_split_btcusdc():
+    assert _split_symbol_assets("BTCUSDC") == ("BTC", "USDC")
+
+
+def test_split_other_usdc_pairs():
+    assert _split_symbol_assets("ETHUSDC") == ("ETH", "USDC")
+    assert _split_symbol_assets("SOLUSDC") == ("SOL", "USDC")
+
+
+def test_split_edge_cases():
+    assert _split_symbol_assets("") == ("", "")
+    assert _split_symbol_assets("USDC") == ("", "")
+
+
+# =====================================================================
+# 10. Rounding math with real step size (0.00000001)
+# =====================================================================
+
+def test_round_up_8_decimals():
+    assert _round_amount_up(Decimal("59.856790199999995"), STEP) == Decimal("59.8567902")
+    assert _round_amount_up(Decimal("59.85679020"), STEP) == Decimal("59.8567902")
+    assert _round_amount_up(Decimal("59.856790201"), STEP) == Decimal("59.85679021")
+
+
+def test_round_up_already_clean():
+    assert _round_amount_up(Decimal("60.00"), STEP) == Decimal("60.00000000")
+
+
+def test_round_up_zero():
+    assert _round_amount_up(Decimal("0"), STEP) == Decimal("0E-8")
+
+
+# =====================================================================
+# 11. Edge: needed <= 0 or missing asset
+# =====================================================================
+
+def test_skip_if_needed_zero():
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {"borrow_asset": "USDC", "borrow_amount": "0", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+    assert st["margin"]["last_borrow_skip_reason"] == "needed<=0"
+
+
+def test_skip_if_no_borrow_asset():
+    api = MockApi(free={"USDC": "0"})
+    st = {}
+    plan = {"borrow_amount": "100", "trade_key": "t1"}
+    ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
+    assert len(api.borrows) == 0
+    assert st["margin"]["last_borrow_skip_reason"] == "missing_borrow_asset"
+
+
+# =====================================================================
+# Runner
+# =====================================================================
 
 if __name__ == "__main__":
-    unittest.main()
+    import inspect
+    tests = sorted([
+        name for name, fn in inspect.getmembers(sys.modules[__name__], inspect.isfunction)
+        if name.startswith("test_")
+    ])
+    passed = failed = 0
+    for name in tests:
+        try:
+            globals()[name]()
+            print(f"  PASS  {name}")
+            passed += 1
+        except Exception as e:
+            print(f"  FAIL  {name}: {e}")
+            failed += 1
+    print(f"\n{passed} passed, {failed} failed out of {len(tests)}")

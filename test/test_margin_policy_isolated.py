@@ -34,6 +34,7 @@ class TestMarginPolicyIsolated(unittest.TestCase):
     def test_ensure_borrow_uses_isolated_free_balance_no_false_borrow(self):
         st = {}
         api = MagicMock()
+        api._env.return_value = {"ASSET_STEP_SIZE_USDC": "0.00000001"}
         api.margin_account.return_value = self._isolated_account(quote_free="200")
 
         plan = {
@@ -52,6 +53,7 @@ class TestMarginPolicyIsolated(unittest.TestCase):
     def test_ensure_borrow_borrows_only_missing_amount_isolated(self):
         st = {}
         api = MagicMock()
+        api._env.return_value = {"ASSET_STEP_SIZE_USDC": "0.00000001"}
         api.margin_account.return_value = self._isolated_account(quote_free="100")
 
         plan = {
@@ -81,6 +83,7 @@ class TestMarginPolicyIsolated(unittest.TestCase):
     def test_repay_repays_tracked_amount_not_full_outstanding_isolated(self):
         st = {}
         api = MagicMock()
+        api._env.return_value = {"ASSET_STEP_SIZE_USDC": "0.00000001"}
 
         # 1) ensure_borrow sees free=100, needed=150 -> borrows 50
         # 2) repay sees outstanding borrowed=60 -> should repay only tracked(50), not 60
