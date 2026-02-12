@@ -108,7 +108,7 @@ def test_clean_decimal_passthrough():
         "trade_key": "t1",
     }
     ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
-    assert api.borrows[0]["amount"] == Decimal("60.00")
+    assert api.borrows[0]["amount"] == Decimal("61.20000000")  # 60 + 2% buffer
 
 
 # =====================================================================
@@ -127,7 +127,7 @@ def test_step_found_via_asset_step_size_key():
     ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan)
     assert len(api.borrows) == 1
     amt = api.borrows[0]["amount"]
-    assert amt == Decimal("50.12345679")
+    assert amt == Decimal("51.12592592")  # 50.123456789012 + 2% buffer, quantized
 
 
 # =====================================================================
@@ -202,7 +202,7 @@ def test_no_double_borrow_same_trade_key():
 def test_borrow_then_repay_roundtrip():
     api = MockApi(
         free={"USDC": "0"},
-        borrowed={"USDC": "60.00"},
+        borrowed={"USDC": "61.20"},  # matches 60 + 2% buffer
     )
     st = {}
     plan = {"borrow_asset": "USDC", "borrow_amount": "60", "trade_key": "t1"}
@@ -227,7 +227,7 @@ def test_two_sequential_trades():
     plan1 = {"borrow_asset": "USDC", "borrow_amount": "60", "trade_key": "t1"}
     ensure_borrow_if_needed(st, api, "BTCUSDC", "BUY", 0.001, plan1)
 
-    api.borrowed = {"USDC": "60.00"}
+    api.borrowed = {"USDC": "61.20"}  # matches 60 + 2% buffer
     repay_if_any(st, api, "BTCUSDC")
 
     plan2 = {"borrow_asset": "USDC", "borrow_amount": "45", "trade_key": "t2"}
@@ -252,7 +252,7 @@ def test_state_tracks_borrowed_amount():
     assert "t1" in m["borrowed_trade_keys"]
     assert "USDC" in m["borrowed_assets"]
     assert "USDC" in m["borrowed_by_trade"]["t1"]
-    assert m["borrowed_assets"]["USDC"] == float(Decimal("59.8567902"))
+    assert m["borrowed_assets"]["USDC"] == float(Decimal("61.05392600"))  # 59.8567902 + 2% buffer
 
 
 # =====================================================================

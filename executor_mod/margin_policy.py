@@ -171,6 +171,9 @@ def ensure_borrow_if_needed(
         return
 
     borrow_amt_dec = max(needed_dec - free_dec, Decimal("0"))
+    # Add 2% buffer to cover rounding/conversion drift
+    if borrow_amt_dec > 0:
+        borrow_amt_dec = (borrow_amt_dec * Decimal("1.02")).quantize(Decimal("0.00000001"))
     borrow_amt_raw = borrow_amt_dec
     base_asset, quote_asset = _split_symbol_assets(symbol)
     step_size = _asset_step_size(plan, api, asset, symbol)

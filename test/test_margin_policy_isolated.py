@@ -68,7 +68,7 @@ class TestMarginPolicyIsolated(unittest.TestCase):
         api.margin_borrow.assert_called_once()
         args, kwargs = api.margin_borrow.call_args
         self.assertEqual(args[0], "USDC")
-        self.assertAlmostEqual(float(args[1]), 50.0, places=8)
+        self.assertAlmostEqual(float(args[1]), 51.0, places=8)  # 50 + 2% buffer
         self.assertEqual(kwargs.get("is_isolated"), True)
         self.assertEqual(kwargs.get("symbol"), "BTCUSDC")
 
@@ -76,9 +76,9 @@ class TestMarginPolicyIsolated(unittest.TestCase):
         margin = st["margin"]
         self.assertEqual(margin["active_trade_key"], "t2")
         self.assertIn("USDC", margin["borrowed_assets"])
-        self.assertAlmostEqual(margin["borrowed_assets"]["USDC"], 50.0, places=8)
+        self.assertAlmostEqual(margin["borrowed_assets"]["USDC"], 51.0, places=8)  # 50 + 2% buffer
         self.assertIn("t2", margin["borrowed_by_trade"])
-        self.assertAlmostEqual(margin["borrowed_by_trade"]["t2"]["USDC"], 50.0, places=8)
+        self.assertAlmostEqual(margin["borrowed_by_trade"]["t2"]["USDC"], 51.0, places=8)  # 50 + 2% buffer
 
     def test_repay_repays_tracked_amount_not_full_outstanding_isolated(self):
         st = {}
@@ -105,7 +105,7 @@ class TestMarginPolicyIsolated(unittest.TestCase):
         api.margin_repay.assert_called_once()
         args, kwargs = api.margin_repay.call_args
         self.assertEqual(args[0], "USDC")
-        self.assertAlmostEqual(float(args[1]), 50.0, places=8)  # tracked only
+        self.assertAlmostEqual(float(args[1]), 51.0, places=8)  # tracked 50 + 2% buffer = 51
         self.assertEqual(kwargs.get("is_isolated"), True)
         self.assertEqual(kwargs.get("symbol"), "BTCUSDC")
 
