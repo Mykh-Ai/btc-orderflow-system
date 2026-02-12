@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from decimal import Decimal, ROUND_UP
 from typing import Any, Dict, Optional
 
@@ -78,15 +79,17 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
 
 
 def _get_env(api: Any) -> Dict[str, Any]:
+    # Merge: os.environ (has ASSET_STEP_SIZE_* etc.) + api._env() overlay
+    merged = dict(os.environ)
     env_fn = getattr(api, "_env", None)
     if callable(env_fn):
         try:
             env = env_fn()
             if isinstance(env, dict):
-                return env
+                merged.update(env)
         except Exception:
-            return {}
-    return {}
+            pass
+    return merged
 
 
 def _asset_step_size(plan: Dict[str, Any], api: Any, asset: str, symbol: str) -> Optional[Decimal]:
