@@ -9,10 +9,15 @@ from typing import Any, Dict, Optional
 
 def _ensure_margin_state(st: Dict[str, Any]) -> Dict[str, Any]:
     margin = st.setdefault("margin", {})
-    margin.setdefault("borrowed_assets", {})
-    margin.setdefault("borrowed_by_trade", {})
-    margin.setdefault("borrowed_trade_keys", [])
-    margin.setdefault("repaid_trade_keys", [])
+    # setdefault won't overwrite None values, so force-fix them
+    if not isinstance(margin.get("borrowed_assets"), dict):
+        margin["borrowed_assets"] = {}
+    if not isinstance(margin.get("borrowed_by_trade"), dict):
+        margin["borrowed_by_trade"] = {}
+    if not isinstance(margin.get("borrowed_trade_keys"), list):
+        margin["borrowed_trade_keys"] = []
+    if not isinstance(margin.get("repaid_trade_keys"), list):
+        margin["repaid_trade_keys"] = []
     margin.setdefault("active_trade_key", None)
     return margin
 
@@ -243,7 +248,7 @@ def repay_if_any(st: Dict[str, Any], api: Any, symbol: str) -> None:
     if trade_key and trade_key in margin["borrowed_by_trade"]:
         tracked = margin["borrowed_by_trade"][trade_key]
     else:
-        tracked = margin.get("borrowed_assets", {})
+        tracked = margin.get("borrowed_assets") or {}
     global_borrowed = margin["borrowed_assets"]
     tracked_is_global = tracked is global_borrowed
     if not tracked:
