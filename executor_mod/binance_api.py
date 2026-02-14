@@ -385,10 +385,17 @@ def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
         p.setdefault("symbol", env["SYMBOL"])
         p.setdefault("isIsolated", _tf(env.get("MARGIN_ISOLATED", "FALSE")))  # Binance expects "TRUE"/"FALSE"
         if _margin_borrow_mode(env) == "manual":
-            # Manual mode: prevent auto-borrow/repay from order side effects.
-            p["sideEffectType"] = "NO_SIDE_EFFECT"
-            if "autoRepayAtCancel" in p:
-                p["autoRepayAtCancel"] = "FALSE"
+            cid = str(p.get("newClientOrderId") or "")
+            is_exit_order = cid.startswith("EX_TP") or cid.startswith("EX_SL")
+            if is_exit_order:
+                # Exit orders (TP/SL) use AUTO_BORROW_REPAY so Binance handles
+                # balance locking on cross margin without manual borrow for exits.
+                p["sideEffectType"] = "AUTO_BORROW_REPAY"
+            else:
+                # Entry orders: manual borrow, no side effects.
+                p["sideEffectType"] = "NO_SIDE_EFFECT"
+                if "autoRepayAtCancel" in p:
+                    p["autoRepayAtCancel"] = "FALSE"
         else:
             p.setdefault("sideEffectType", _margin_side_effect(env))
             # Inject auto repay at cancel if configured
