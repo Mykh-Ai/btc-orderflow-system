@@ -754,6 +754,16 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
 
     side: "LONG" | "SHORT"
     prices: {entry, sl, tp1, tp2} in *USDC* terms (already rounded)
+
+    Order of placement: SL first, then TP1, TP2.
+    Reason: on cross margin with NO_SIDE_EFFECT, Binance locks base asset
+    for each SELL order independently. SL (full qty) + TP1 + TP2 > entry qty,
+    so if TPs are placed first they lock part of the balance and SL is rejected
+    with insufficient balance. Placing SL first locks full qty, then TPs are
+    accepted as LIMIT_MAKER on cross margin even if total exceeds balance.
+
+    Rollback: if any order after SL fails, cancel already placed orders
+    before raising, to prevent duplicate exits on retry.
     """
     # Ensure qty is aligned to lot step before splitting
     qty_total_r = round_qty(qty_total)
@@ -767,28 +777,10 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
 
     tp1_s = fmt_price(float(prices["tp1"]))
     tp2_s = fmt_price(float(prices["tp2"]))
-    sl_s = fmt_price(float(prices["sl"]))
 
     exit_side = "SELL" if side == "LONG" else "BUY"
 
-    tp1 = _place_limit_maker_then_limit({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "LIMIT_MAKER",
-        "quantity": qty1_s,
-        "price": tp1_s,
-        "newClientOrderId": f"EX_TP1_{int(time.time())}",
-    })
-    tp2 = _place_limit_maker_then_limit({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "LIMIT_MAKER",
-        "quantity": qty2_s,
-        "price": tp2_s,
-        "newClientOrderId": f"EX_TP2_{int(time.time())}",
-    })
-    # Stop-loss for the whole remaining position (we adjust after TP1 in manage_v15_position)
-    #    # STOP_LOSS_LIMIT safety gap (limit price vs stop trigger)
+    # --- SL first (locks full qty, avoids insufficient balance for LONG exits) ---
     stop_p = float(prices["sl"])
     tick = float(ENV["TICK_SIZE"])
     gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
@@ -796,19 +788,49 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     limit_p = (stop_p - gap) if exit_side == "SELL" else (stop_p + gap)
     sl_stop_s = fmt_price(stop_p)
     sl_price_s = fmt_price(limit_p)
-    # Ensure price != stopPrice even after rounding to tick size
     if sl_price_s == sl_stop_s:
         sl_price_s = fmt_price((stop_p - tick) if exit_side == "SELL" else (stop_p + tick))
-    sl = binance_api.place_order_raw({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "STOP_LOSS_LIMIT",
-        "quantity": qty_total_s,
-        "stopPrice": sl_stop_s,
-        "price": sl_price_s,
-        "timeInForce": "GTC",
-        "newClientOrderId": f"EX_SL_{int(time.time())}",
-    })
+
+    placed: Dict[str, int] = {}
+    try:
+        sl = binance_api.place_order_raw({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "STOP_LOSS_LIMIT",
+            "quantity": qty_total_s,
+            "stopPrice": sl_stop_s,
+            "price": sl_price_s,
+            "timeInForce": "GTC",
+            "newClientOrderId": f"EX_SL_{int(time.time())}",
+        })
+        placed["sl"] = sl["orderId"]
+
+        tp1 = _place_limit_maker_then_limit({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "LIMIT_MAKER",
+            "quantity": qty1_s,
+            "price": tp1_s,
+            "newClientOrderId": f"EX_TP1_{int(time.time())}",
+        })
+        placed["tp1"] = tp1["orderId"]
+
+        tp2 = _place_limit_maker_then_limit({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "LIMIT_MAKER",
+            "quantity": qty2_s,
+            "price": tp2_s,
+            "newClientOrderId": f"EX_TP2_{int(time.time())}",
+        })
+        placed["tp2"] = tp2["orderId"]
+
+    except Exception:
+        # Rollback: cancel any already placed orders to prevent orphans/duplicates on retry
+        for oid in placed.values():
+            with suppress(Exception):
+                binance_api.cancel_order(symbol, oid)
+        raise
 
     return {
         "tp1": tp1["orderId"],
