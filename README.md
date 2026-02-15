@@ -8,16 +8,17 @@
 - [Архітектура](#архітектура)
 - [Основний модуль: executor.py](#основний-модуль-executorpy)
 - [Допоміжні модулі](#допоміжні-модулі)
+  - [baseline_policy.py](#baseline_policypy)
   - [binance_api.py](#binance_apipy)
-  - [state_store.py](#state_storepy)
-  - [notifications.py](#notificationspy)
   - [event_dedup.py](#event_deduppy)
   - [exits_flow.py](#exits_flowpy)
-  - [margin_policy.py](#margin_policypy)
-  - [margin_guard.py](#margin_guardpy)
   - [invariants.py](#invariantspy)
-  - [risk_math.py](#risk_mathpy)
+  - [margin_guard.py](#margin_guardpy)
+  - [margin_policy.py](#margin_policypy)
   - [market_data.py](#market_datapy)
+  - [notifications.py](#notificationspy)
+  - [risk_math.py](#risk_mathpy)
+  - [state_store.py](#state_storepy)
   - [trail.py](#trailpy)
 - [Конфігурація](#конфігурація)
 - [Режими роботи](#режими-роботи)
@@ -49,29 +50,42 @@ Executor — це Python-застосунок для автоматизован�
 
 ```
 Executor/
-├── executor.py              # Головний виконавчий механізм
-├── executor_mod/            # Модульна архітектура
+├── executor.py                # Головний виконавчий механізм
+├── executor_mod/              # Модульна архітектура
 │   ├── __init__.py
-│   ├── binance_api.py       # REST API адаптер
-│   ├── state_store.py       # Менеджер стану
-│   ├── notifications.py     # Логування та вебхуки
-│   ├── event_dedup.py       # Дедуплікація подій
-│   ├── exits_flow.py        # Логіка виходів
-│   ├── margin_policy.py     # Політика маржі
-│   ├── margin_guard.py      # Хуки маржинальної торгівлі
-│   ├── invariants.py        # Детектори інваріантів
-│   ├── risk_math.py         # Ризик-менеджмент математика
-│   ├── market_data.py       # Ринкові дані
-│   └── trail.py             # Trailing stop логіка
-└── test/                    # Тести
-    ├── test_executor.py
+│   ├── baseline_policy.py     # Baseline snapshots балансів
+│   ├── binance_api.py         # REST API адаптер
+│   ├── event_dedup.py         # Дедуплікація подій
+│   ├── exits_flow.py          # Логіка виходів
+│   ├── invariants.py          # Детектори інваріантів
+│   ├── margin_guard.py        # Хуки маржинальної торгівлі
+│   ├── margin_policy.py       # Політика маржі
+│   ├── market_data.py         # Ринкові дані
+│   ├── notifications.py       # Логування та вебхуки
+│   ├── risk_math.py           # Ризик-менеджмент математика
+│   ├── state_store.py         # Менеджер стану
+│   └── trail.py               # Trailing stop логіка
+└── test/                      # Тести
     ├── test_binance_api_smoke.py
-    ├── test_state_store.py
-    ├── test_notifications.py
     ├── test_event_dedup.py
-    ├── test_invariants_*.py
-    ├── test_margin_*.py
-    └── test_trail.py
+    ├── test_executor.py
+    ├── test_executor_invariants_wiring.py
+    ├── test_executor_market_data_wrappers.py
+    ├── test_i2_be_tolerance.py
+    ├── test_invariants_margin.py
+    ├── test_invariants_module.py
+    ├── test_margin_guard.py
+    ├── test_margin_policy.py
+    ├── test_margin_policy_isolated.py
+    ├── test_market_data.py
+    ├── test_notifications.py
+    ├── test_recon_missing_alerts.py
+    ├── test_risk_math.py
+    ├── test_smoke_imports.py
+    ├── test_state_store.py
+    ├── test_trail.py
+    ├── test_wiring_market_data.py
+    └── test_wiring_recon_exit_missing.py
 ```
 
 ---
@@ -104,7 +118,7 @@ Executor/
 - `validate_exit_plan()` — валідація плану виходів (sl, tp1, tp2)
 - `place_exits_v15()` — розміщення всіх exit ордерів (3 ноги)
 - `check_entry_status()` — перевірка статусу entry ордера
-- `manage_position()` — керування відкритою позицією (TP fills, trailing)
+- `manage_v15_position()` — керування відкритою позицією (TP fills, trailing)
 
 #### Trailing stop
 - `activate_trail()` — активація trailing після TP2
@@ -133,6 +147,27 @@ Executor/
 
 ## Допоміжні модулі
 
+### baseline_policy.py
+
+**Призначення**: Baseline snapshots балансів для pre/post-trade порівняння
+
+#### Функції
+
+```python
+take_snapshot(api, env, symbol, trade_key, baseline_kind) -> dict
+# Знімає snapshot балансів (spot або margin) з debt-інформацією
+# baseline_kind: ідентифікатор типу snapshot (напр. "pre_entry", "post_close")
+```
+
+#### Особливості
+
+- Підтримує spot та margin режими з відповідними API endpoints
+- Для margin: отримує debt snapshot через `binance_api.get_margin_debt_snapshot()`
+- Для spot: зчитує balances через spot account API
+- Результат зберігається в `state["baseline"]` (керується через `state_store`)
+
+---
+
 ### binance_api.py
 
 **Призначення**: Адаптер для Binance REST API з підтримкою spot та margin
@@ -146,9 +181,11 @@ Executor/
 #### Ордери
 - `place_spot_limit(symbol, side, qty, price, client_id)` — LIMIT ордер (spot/margin)
 - `place_spot_market(symbol, side, qty, client_id)` — MARKET ордер
+- `place_order_raw(endpoint_params)` — низькорівневий ордер з автоматичною ін'єкцією margin параметрів
 - `flatten_market(symbol, pos_side, qty, client_id)` — аварійне закриття
 - `cancel_order(symbol, order_id)` — скасування ордера
 - `check_order_status(symbol, order_id)` — статус ордера
+- `get_order(symbol, order_id)` — аліас для `check_order_status`
 - `open_orders(symbol)` — всі відкриті ордери
 
 #### Margin
@@ -160,90 +197,14 @@ Executor/
 #### Sanity
 - `binance_sanity_check()` — перевірка підключення та автентифікації
 - `get_mid_price(symbol)` — mid price з bookTicker
+- `_planb_exec_price(symbol, entry_side)` — conservative executable price для Plan B
 
 #### Особливості
 - Автоматична синхронізація часу через `_BINANCE_TIME_OFFSET_MS`
 - Підтримка `MARGIN_BORROW_MODE`: `manual` (NO_SIDE_EFFECT) / `auto` (AUTO_BORROW_REPAY)
 - `isIsolated` нормалізується до `"TRUE"/"FALSE"` strings
-
----
-
-### state_store.py
-
-**Призначення**: Менеджер персистентного стану виконавця
-
-#### Структура стану
-
-```python
-{
-  "meta": {
-    "seen_keys": [...],      # дедуплікація подій
-    "dedup_fp": "...",       # fingerprint алгоритму
-    "boot_ts": "ISO8601"
-  },
-  "position": {              # активна позиція або None
-    "mode": "live",
-    "side": "LONG",
-    "status": "OPEN_FILLED",
-    "qty": 0.001,
-    "entry": 95000.0,
-    "order_id": 123456,
-    "client_id": "EX_...",
-    "orders": {              # exit ордери
-      "sl": 789,
-      "tp1": 790,
-      "tp2": 791,
-      "qty1": 0.0003,
-      "qty2": 0.0003,
-      "qty3": 0.0004
-    },
-    "prices": {
-      "entry": 95000.0,
-      "sl": 94800.0,
-      "tp1": 95200.0,
-      "tp2": 95400.0
-    },
-    "trail_active": true,
-    "trail_sl_price": 95100.0,
-    ...
-  },
-  "last_closed": {...},      # остання закрита позиція
-  "cooldown_until": 1234567890.0,
-  "lock_until": 1234567890.0,
-  "margin": {                # margin стан (якщо margin mode)
-    "borrowed_assets": {"USDC": 100.0},
-    "borrowed_by_trade": {},
-    "active_trade_key": "..."
-  }
-}
-```
-
-#### Функції
-
-- `load_state()` — завантаження з `STATE_FN` (JSON)
-- `save_state(st)` — атомарний запис через `.tmp` + `os.replace`
-- `has_open_position(st)` — чи є активна позиція (PENDING/OPEN/OPEN_FILLED)
-- `in_cooldown(st)` — чи активний cooldown
-- `locked(st)` — чи активний lock
-
----
-
-### notifications.py
-
-**Призначення**: Логування та вебхуки
-
-#### Функції
-
-- `log_event(action, **fields)` — додає JSON-рядок до `EXEC_LOG`
-- `append_line_with_cap(path, line, cap)` — запис з обмеженням `LOG_MAX_LINES`
-- `send_webhook(payload)` — POST до `N8N_WEBHOOK_URL` з basic auth
-- `iso_utc(dt)` — ISO8601 timestamp
-
-#### Формат лога
-
-```json
-{"ts": "2025-01-13T20:00:00+00:00", "source": "executor", "action": "ENTRY_PLACED", "symbol": "BTCUSDC", ...}
-```
+- **HTTP retry/failover**: автоматичний retry з backoff через кілька Binance API hosts (`api.binance.com`, `api1-3.binance.com`), конфігурується через `BINANCE_API_BASES`
+- В manual mode exit ордери (TP/SL) автоматично отримують `sideEffectType=AUTO_BORROW_REPAY`
 
 ---
 
@@ -303,35 +264,51 @@ ensure_exits(st, pos, reason, best_effort=True, attempt=None, save_on_success=Tr
 
 ---
 
-### margin_policy.py
+### invariants.py
 
-**Призначення**: Управління запозиченнями в margin режимі
+**Призначення**: Детектори аномалій стану (detector-only, не виконують actions)
 
-#### Функції
+#### Інваріанти
+
+- **I1**: Protection present — SL має бути після OPEN_FILLED
+- **I2**: Exit price sanity — sl < entry < tp1 < tp2 (LONG); підтримує BE-tolerance після TP1
+- **I3**: Quantity accounting — qty1 + qty2 + qty3 = qty_total
+- **I4**: Entry state consistency — order_id, client_id, entry_mode присутні
+- **I5**: Trail state sane — trail_qty > 0, trail_last_update_s
+- **I6**: Feed freshness for trail — aggregated.csv не stale (`INVAR_FEED_STALE_SEC`)
+- **I7**: TP orders after fill — tp1_id, tp2_id після OPEN_FILLED
+- **I8**: State shape — orders/prices є dict
+- **I9**: Trail active SL missing — якщо trail_active, SL має бути
+- **I10**: Repeated trail errors — детектує -2010 loops (з персистентним runtime state)
+- **I11**: Margin config sanity — manual mode потребує NO_SIDE_EFFECT
+- **I12**: Trade key consistency — всі hooks бачать один trade_key
+- **I13**: No debt after close — exchange має не показувати debt після закриття
+
+#### Конфігурація
 
 ```python
-ensure_borrow_if_needed(st, api, symbol, side, qty, plan)
-# Запозичує якщо free balance < needed
-# LONG: запозичує quote (USDC)
-# SHORT: запозичує base (BTC)
+INVAR_ENABLED=1                         # увімкнути
+INVAR_EVERY_SEC=20                      # частота перевірок
+INVAR_THROTTLE_SEC=600                  # throttle між алертами (default 60 в invariants.py)
+INVAR_GRACE_SEC=15                      # grace period для нових позицій
+INVAR_FEED_STALE_SEC=180                # поріг stale для aggregated.csv (I6)
+INVAR_PERSIST=false                     # персистентність metadata
+INVAR_KILL_ON_DEBT=false                # halt executor якщо I13 ERROR
+I2_BE_TOLERANCE_USD=0.1                 # tolerance для SL ≈ entry після TP1 (I2)
+I13_GRACE_SEC=300                       # grace для I13 перед exchange check
+I13_ESCALATE_SEC=180                    # ескалація до ERROR
+I13_EXCHANGE_CHECK=true                 # увімкнути exchange check
+I13_EXCHANGE_MIN_INTERVAL_SEC=60        # мінімальний інтервал exchange checks
+I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=false # очистити margin state коли борг = 0
+MARGIN_DEBT_EPS=0.0                     # поріг для визначення debt (I13)
 ```
 
-```python
-repay_if_any(st, api, symbol)
-# Погашає всі борги після закриття позиції
-```
+#### Вивід
 
-#### Трекінг
-
-```python
-st["margin"] = {
-  "borrowed_assets": {"USDC": 100.0},       # глобальний лічильник
-  "borrowed_by_trade": {"trade_key": {...}}, # per-trade трекінг
-  "borrowed_trade_keys": ["trade_key"],
-  "repaid_trade_keys": ["trade_key"],
-  "active_trade_key": "trade_key"
-}
-```
+- `log_event("INVARIANT_FAIL", invariant_id=..., severity=..., msg=..., **details)`
+- `send_webhook({"event": "INVARIANT_FAIL", ...})`
+- Throttling per `invariant_id:position_key`
+- Metadata (throttle timestamps, I10 runtime) зберігається окремо в `invariants_state.json`
 
 ---
 
@@ -367,43 +344,88 @@ on_shutdown(state)
 
 ---
 
-### invariants.py
+### margin_policy.py
 
-**Призначення**: Детектори аномалій стану (detector-only, не виконують actions)
+**Призначення**: Управління запозиченнями в margin режимі
 
-#### Інваріанти
-
-- **I1**: Protection present — SL має бути після OPEN_FILLED
-- **I2**: Exit price sanity — sl < entry < tp1 < tp2 (LONG)
-- **I3**: Quantity accounting — qty1 + qty2 + qty3 = qty_total
-- **I4**: Entry state consistency — order_id, client_id, entry_mode присутні
-- **I5**: Trail state sane — trail_qty > 0, trail_last_update_s
-- **I6**: Feed freshness for trail — aggregated.csv не stale
-- **I7**: TP orders after fill — tp1_id, tp2_id після OPEN_FILLED
-- **I8**: State shape — orders/prices є dict
-- **I9**: Trail active SL missing — якщо trail_active, SL має бути
-- **I10**: Repeated trail errors — детектує -2010 loops
-- **I11**: Margin config sanity — manual mode потребує NO_SIDE_EFFECT
-- **I12**: Trade key consistency — всі hooks бачать один trade_key
-- **I13**: No debt after close — exchange має не показувати debt після закриття
-
-#### Конфігурація
+#### Функції
 
 ```python
-INVAR_ENABLED=1               # увімкнути
-INVAR_EVERY_SEC=20            # частота перевірок
-INVAR_THROTTLE_SEC=600        # throttle між алертами
-INVAR_GRACE_SEC=15            # grace period для нових позицій
-I13_GRACE_SEC=300             # grace для I13 перед exchange check
-I13_ESCALATE_SEC=180          # ескалація до ERROR
-I13_KILL_ON_DEBT=false        # halt executor якщо I13 ERROR
+ensure_borrow_if_needed(st, api, symbol, side, qty, plan)
+# Запозичує якщо free balance < needed
+# LONG: запозичує quote (USDC)
+# SHORT: запозичує base (BTC)
+# Додає 2% буфер для покриття rounding/conversion drift
 ```
 
-#### Вивід
+```python
+repay_if_any(st, api, symbol)
+# Погашає всі борги після закриття позиції
+```
 
-- `log_event("INVARIANT_FAIL", invariant_id=..., severity=..., msg=..., **details)`
-- `send_webhook({"event": "INVARIANT_FAIL", ...})`
-- Throttling per `invariant_id:position_key`
+#### Трекінг
+
+```python
+st["margin"] = {
+  "borrowed_assets": {"USDC": 100.0},       # глобальний лічильник
+  "borrowed_by_trade": {"trade_key": {...}}, # per-trade трекінг
+  "borrowed_trade_keys": ["trade_key"],
+  "repaid_trade_keys": ["trade_key"],
+  "active_trade_key": "trade_key"
+}
+```
+
+#### Особливості
+
+- Округлення borrow amount вгору до `stepSize` через `_round_amount_up()`
+- Step size визначається через ENV змінні (`ASSET_STEP_SIZE_*`, `QTY_STEP`) або `plan`
+- Per-trade dedup через `borrowed_trade_keys` / `repaid_trade_keys`
+
+---
+
+### market_data.py
+
+**Призначення**: Утиліти для роботи з ринковими даними (aggregated.csv)
+
+#### Функції
+
+```python
+load_df_sorted() -> pd.DataFrame
+# Завантажує aggregated.csv, нормалізує Timestamp, повертає відсортований DataFrame
+# Колонки: Timestamp, price (з ClosePrice/AvgPrice), HiPrice, LowPrice
+
+locate_index_by_ts(df, ts) -> int
+# Знаходить індекс рядка за timestamp (minute resolution)
+
+latest_price(df) -> float
+# Повертає останню ціну з DataFrame
+```
+
+#### Схема aggregated.csv v2
+
+```
+Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice
+2025-01-13T20:00:00Z,123,1.5,0.01,0.8,0.7,95000.0,95010.0,95020.0,94990.0
+```
+
+---
+
+### notifications.py
+
+**Призначення**: Логування та вебхуки
+
+#### Функції
+
+- `log_event(action, **fields)` — додає JSON-рядок до `EXEC_LOG`
+- `append_line_with_cap(path, line, cap)` — запис з обмеженням `LOG_MAX_LINES`
+- `send_webhook(payload)` — POST до `N8N_WEBHOOK_URL` з basic auth
+- `iso_utc(dt)` — ISO8601 timestamp
+
+#### Формат лога
+
+```json
+{"ts": "2025-01-13T20:00:00+00:00", "source": "executor", "action": "ENTRY_PLACED", "symbol": "BTCUSDC", ...}
+```
 
 ---
 
@@ -446,30 +468,67 @@ split_qty_3legs_place(qty_total_r) -> (qty1, qty2, qty3)
 
 ---
 
-### market_data.py
+### state_store.py
 
-**Призначення**: Утиліти для роботи з ринковими даними (aggregated.csv)
+**Призначення**: Менеджер персистентного стану виконавця
+
+#### Структура стану
+
+```python
+{
+  "meta": {
+    "seen_keys": [...],      # дедуплікація подій
+    "dedup_fp": "...",       # fingerprint алгоритму
+    "boot_ts": "ISO8601"
+  },
+  "position": {              # активна позиція або None
+    "mode": "live",
+    "side": "LONG",
+    "status": "OPEN_FILLED",
+    "qty": 0.001,
+    "entry": 95000.0,
+    "order_id": 123456,
+    "client_id": "EX_...",
+    "orders": {              # exit ордери
+      "sl": 789,
+      "tp1": 790,
+      "tp2": 791,
+      "qty1": 0.0003,
+      "qty2": 0.0003,
+      "qty3": 0.0004
+    },
+    "prices": {
+      "entry": 95000.0,
+      "sl": 94800.0,
+      "tp1": 95200.0,
+      "tp2": 95400.0
+    },
+    "trail_active": true,
+    "trail_sl_price": 95100.0,
+    ...
+  },
+  "last_closed": {...},      # остання закрита позиція
+  "cooldown_until": 1234567890.0,
+  "lock_until": 1234567890.0,
+  "baseline": {              # baseline snapshots
+    "active": null,
+    "truth": null
+  },
+  "margin": {                # margin стан (якщо margin mode)
+    "borrowed_assets": {"USDC": 100.0},
+    "borrowed_by_trade": {},
+    "active_trade_key": "..."
+  }
+}
+```
 
 #### Функції
 
-```python
-load_df_sorted() -> pd.DataFrame
-# Завантажує aggregated.csv, нормалізує Timestamp, повертає відсортований DataFrame
-# Колонки: Timestamp, price (з ClosePrice/AvgPrice), HiPrice, LowPrice
-
-locate_index_by_ts(df, ts) -> int
-# Знаходить індекс рядка за timestamp (minute resolution)
-
-latest_price(df) -> float
-# Повертає останню ціну з DataFrame
-```
-
-#### Схема aggregated.csv v2
-
-```
-Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice
-2025-01-13T20:00:00Z,123,1.5,0.01,0.8,0.7,95000.0,95010.0,95020.0,94990.0
-```
+- `load_state()` — завантаження з `STATE_FN` (JSON)
+- `save_state(st)` — атомарний запис через `.tmp` + `os.replace`
+- `has_open_position(st)` — чи є активна позиція (PENDING/OPEN/OPEN_FILLED)
+- `in_cooldown(st)` — чи активний cooldown
+- `locked(st)` — чи активний lock
 
 ---
 
@@ -531,6 +590,7 @@ DELTASCOUT_LOG=/data/logs/deltascout.log   # лог DeltaScout
 AGG_CSV=/data/feed/aggregated.csv          # aggregated market data
 STATE_FN=/data/state/executor_state.json   # стан executor
 EXEC_LOG=/data/logs/executor.log           # лог executor
+LOG_MAX_LINES=200                          # максимум рядків в executor.log
 
 # Символ та sizing
 SYMBOL=BTCUSDC
@@ -549,6 +609,18 @@ TP_R_LIST=1,2               # R-multiples для TP1, TP2
 POLL_SEC=5.0
 COOLDOWN_SEC=180
 LOCK_SEC=15
+MANAGE_EVERY_SEC=15         # інтервал manage_position
+```
+
+### Дедуплікація та сигнали
+
+```bash
+TAIL_LINES=80                   # кількість рядків tail для DeltaScout лога
+MAX_PEAK_AGE_SEC=600            # максимальний вік PEAK сигналу
+DEDUP_PRICE_DECIMALS=1          # кількість десяткових для дедуплікації ціни
+STRICT_SOURCE=true              # фільтр source=DeltaScout
+SEEN_KEYS_MAX=500               # максимум ключів дедуплікації
+RECON_THROTTLE_SEC=600          # throttle для reconciliation алертів
 ```
 
 ### Binance API
@@ -558,6 +630,8 @@ BINANCE_BASE_URL=https://api.binance.com
 BINANCE_API_KEY=your_api_key
 BINANCE_API_SECRET=your_api_secret
 RECV_WINDOW=5000
+BINANCE_API_BASES=https://api.binance.com,https://api1.binance.com   # failover hosts (опціонально)
+BINANCE_HTTP_READ_TIMEOUT_SEC=15                                      # HTTP read timeout
 ```
 
 ### Режим торгівлі
@@ -570,15 +644,32 @@ MARGIN_ISOLATED=FALSE                      # TRUE для isolated, FALSE для 
 MARGIN_SIDE_EFFECT=AUTO_BORROW_REPAY       # або NO_SIDE_EFFECT
 MARGIN_BORROW_MODE=manual                  # manual | auto
 MARGIN_AUTO_REPAY_AT_CANCEL=false
+MARGIN_DEBT_EPS=0.0                        # поріг для визначення наявності debt
+PREFLIGHT_EXPECT_QUOTE=USDC                # очікуваний quote asset для preflight-перевірки (опціонально)
 ```
 
 ### Entry/Exit
 
 ```bash
 ENTRY_OFFSET_USD=0.5
-ENTRY_MODE=LIMIT_THEN_MARKET   # LIMIT_ONLY | LIMIT_THEN_MARKET | MARKET_ONLY
+ENTRY_MODE=LIMIT_THEN_MARKET        # LIMIT_ONLY | LIMIT_THEN_MARKET | MARKET_ONLY
 LIVE_ENTRY_TIMEOUT_SEC=90
+LIVE_VALIDATE_ONLY=false             # тільки валідація без реальних ордерів
+LIVE_STATUS_POLL_EVERY=10            # інтервал опитування статусу entry
 EXITS_RETRY_EVERY_SEC=15
+SL_LIMIT_GAP_TICKS=2                # gap між stopPrice та limitPrice для STOP_LOSS_LIMIT
+ORPHAN_CANCEL_EVERY_SEC=30           # інтервал повторного cancel старого SL
+
+# Plan B
+PLANB_MAX_DEV_R_MULT=0.25           # макс. відхилення від entry як множник R
+PLANB_MAX_DEV_USD=0.0                # макс. відхилення від entry в USD (0 = вимкнено)
+PLANB_REQUIRE_PRICE=true             # вимагати price check перед market fallback
+PLANB_ABORT_IF_PAST_TP1=true         # abort якщо ціна вже за TP1
+
+# Failsafe
+FAILSAFE_FLATTEN=false               # аварійне закриття market ордером
+FAILSAFE_EXITS_MAX_TRIES=5           # макс. спроб розміщення exits
+FAILSAFE_EXITS_GRACE_SEC=60          # grace period перед failsafe
 ```
 
 ### Trailing
@@ -591,6 +682,7 @@ TRAIL_SWING_LR=2
 TRAIL_SWING_BUFFER_USD=15.0
 TRAIL_CONFIRM_BUFFER_USD=0.0
 TRAIL_UPDATE_EVERY_SEC=20
+TRAIL_STEP_USD=20.0                  # мінімальний крок для оновлення trailing stop
 ```
 
 ### Інваріанти
@@ -600,10 +692,16 @@ INVAR_ENABLED=1
 INVAR_EVERY_SEC=20
 INVAR_THROTTLE_SEC=600
 INVAR_GRACE_SEC=15
+INVAR_FEED_STALE_SEC=180
+INVAR_PERSIST=false
+INVAR_KILL_ON_DEBT=false
+I2_BE_TOLERANCE_USD=0.1
 I13_GRACE_SEC=300
 I13_ESCALATE_SEC=180
 I13_EXCHANGE_CHECK=true
-I13_KILL_ON_DEBT=false
+I13_EXCHANGE_MIN_INTERVAL_SEC=60
+I13_CLEAR_STATE_ON_EXCHANGE_CLEAR=false
+MARGIN_DEBT_EPS=0.0
 ```
 
 ### Вебхуки
@@ -683,7 +781,15 @@ MARGIN_BORROW_MODE=manual
 
 13 детекторів аномалій стану з throttling та severity (WARN/ERROR)
 
-### 6. Атомарний запис стану
+### 6. Baseline Snapshots
+
+Pre/post-trade snapshots балансів через `baseline_policy.take_snapshot()` для аудиту та верифікації
+
+### 7. HTTP Retry та Failover
+
+Binance API виклики автоматично retry-ятся з backoff через кілька hosts (api.binance.com, api1-3.binance.com). Transient помилки (429, 500-504, timeout, connection error) обробляються прозоро.
+
+### 8. Атомарний запис стану
 
 ```python
 tmp = STATE_FN + ".tmp"
