@@ -99,39 +99,44 @@ Executor/
 
 #### Ініціалізація та конфігурація
 - `_validate_trade_mode()` — перевірка режиму торгівлі (spot/margin)
-- `_preflight_margin_cross_usdc()` — preflight-перевірки для cross margin
-- ENV словник — всі налаштування з environment variables
+- `_preflight_margin_cross_usdc()` — preflight-перевірки для cross margin USDC
+- `main()` — головна точка входу: ініціалізація ENV, configure всіх модулів, polling loop
 
 #### Робота з сигналами
-- `read_tail_lines(path, n)` — читання останніх N рядків без повного сканування файлу
-- `stable_event_key(evt)` — стабільний ключ дедуплікації з `event_dedup`
-- `bootstrap_seen_keys_from_tail()` — ініціалізація seen_keys при старті
+- `read_tail_lines(path, n)` — читання останніх N рядків без повного сканування файлу (seek від EOF)
+- Використовує `event_dedup.stable_event_key(evt)` та `event_dedup.bootstrap_seen_keys_from_tail()` для дедуплікації
 
 #### Обчислення entry/exit цін
-- `build_entry_price(kind, close_price)` — розрахунок ціни входу з урахуванням офсету
-- `notional_to_qty(entry, usd)` — конвертація USD в quantity
-- `validate_qty(qty, entry)` — перевірка MIN_QTY та MIN_NOTIONAL
-- `swing_stop_far(df, i, side, entry)` — розрахунок stop-loss на основі swing
+- `build_entry_price(kind, close_price)` — розрахунок ціни входу з урахуванням `ENTRY_OFFSET_USD`
+- `notional_to_qty(entry, usd)` — конвертація USD в quantity через `QTY_STEP`
+- `validate_qty(qty, entry)` — перевірка `MIN_QTY` та `MIN_NOTIONAL`
+- `swing_stop_far(df, i, side, entry)` — розрахунок stop-loss на основі swing high/low
+- `compute_tps(entry, sl, side)` — розрахунок TP рівнів через R-multiples з `TP_R_LIST`
+- `validate_exit_plan(symbol, side, qty_total, prices)` — валідація sl < entry < tp1 < tp2 (LONG)
 
 #### Управління ордерами
-- `place_entry_live()` — розміщення entry ордера (LIMIT/MARKET)
-- `validate_exit_plan()` — валідація плану виходів (sl, tp1, tp2)
-- `place_exits_v15()` — розміщення всіх exit ордерів (3 ноги)
-- `check_entry_status()` — перевірка статусу entry ордера
-- `manage_v15_position()` — керування відкритою позицією (TP fills, trailing)
+- `place_exits_v15(symbol, side, qty_total, prices)` — розміщення 3 exit ордерів (SL/TP1/TP2)
+- `_is_limit_maker_reject(exc)` — детекція LIMIT_MAKER reject (-1013)
+- `_place_limit_maker_then_limit(payload)` — LIMIT_MAKER → LIMIT fallback
+- `manage_v15_position(symbol, st)` — керування відкритою позицією (TP fills, trailing, cancel orphans)
+
+#### Plan B
+- `_planb_market_allowed(posi, px_exec)` — перевірка чи допустимий market fallback (deviation, past TP1)
 
 #### Trailing stop
-- `activate_trail()` — активація trailing після TP2
-- `update_trail()` — оновлення trailing stop
-- `cancel_and_replace_sl()` — заміна SL ордера при trailing
+- `_trail_desired_stop_from_agg(pos)` — wrapper для `trail._trail_desired_stop_from_agg()` (swing-based stop)
 
 #### Життєвий цикл позиції
-- `open_flow()` — повний цикл відкриття позиції
-- `close_position()` — закриття позиції з cooldown
-- `failsafe_flatten()` — аварійне закриття market ордером
+- `_clear_position_slot(st, reason, **fields)` — очищення позиції, встановлення cooldown, логування
+- `handle_open_filled_exits_retry(st)` — retry exits для stuck OPEN_FILLED позицій
+- `sync_from_binance(st)` — reconciliation стану з exchange (open orders, fill status)
+- `_exchange_position_exists(symbol)` — перевірка чи є відкриті ордери на exchange
 
-#### Головний цикл
-- `main_loop()` — нескінченний polling loop
+#### Допоміжні
+- `_avg_fill_price(order)` — середня ціна fill з order response
+- `get_usdt_usdc_k()` — USDT→USDC cross-rate через bookTicker
+
+#### Головний цикл (всередині `main()`)
 - Інваріанти перевіряються кожні `INVAR_EVERY_SEC`
 - Управління позицією кожні `MANAGE_EVERY_SEC`
 - Trailing оновлюється кожні `TRAIL_UPDATE_EVERY_SEC`
