@@ -445,7 +445,7 @@ def _check_i2_exit_price_sanity(st: Dict[str, Any]) -> None:
         return
 
     side = str(pos.get("side", "") or "").upper()
-    entry = _as_float(prices.get("entry"), 0.0)
+    entry = _as_float(pos.get("entry_actual") or prices.get("entry"), 0.0)
     sl = _as_float(prices.get("sl"), 0.0)
     tp1 = _as_float(prices.get("tp1"), 0.0)
     tp2 = _as_float(prices.get("tp2"), 0.0)
