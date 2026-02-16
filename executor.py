@@ -986,6 +986,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         pos["orders"]["sl_prev"] = old_sl_id
                         pos["sl_prev_next_cancel_s"] = _now_s()
                     pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
+                    pos["prices"]["sl"] = be_stop
                     pos["tp1_done"] = True
                     st["position"] = pos
                     save_state(st)
