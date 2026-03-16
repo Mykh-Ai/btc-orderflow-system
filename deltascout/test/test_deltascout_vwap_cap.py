@@ -253,3 +253,4 @@ def test_short_over_cap_blocked(monkeypatch, ds):
 
     peaks = _peaks(emitted, "short")
     assert len(peaks) == 0
+
