@@ -236,9 +236,12 @@ def test_comparison_reject_3of3(monkeypatch, ds, tmp_dirs):
 
     events = _read_archive(tmp_dirs["archive"])
     rejects = [e for e in events if e["event"] == "CANDIDATE_COMPARISON_REJECT"]
-    assert len(rejects) > 0
-    reasons = [r["reject_reason"] for r in rejects]
-    assert "no_prev_peak" in reasons or "3of3_fail" in reasons
+    # row 1 sets prev_peak (no_prev_peak). row 2 is a new max owner with
+    # higher price and vwap but LOWER vol (20 vs 20) → 3of3 fails on vol.
+    # Filter to only the reject from the third row (the actual 3of3 path).
+    rejects_3of3 = [r for r in rejects if r["reject_reason"] == "3of3_fail"]
+    assert len(rejects_3of3) == 1, f"expected exactly one 3of3_fail, got {[r['reject_reason'] for r in rejects]}"
+    assert rejects_3of3[0]["kind"] == "long"
 
 
 # ── Test: CANDIDATE_GATE_REJECT on IMB gate ──
@@ -295,29 +298,51 @@ def test_peak_still_emitted(monkeypatch, ds, tmp_dirs):
 
     peak_events = [p for p in peaks if p.get("action") == "PEAK"]
     assert len(peak_events) == 1
-    assert peak_events[0]["kind"] == "long"
-    assert peak_events[0]["source"] == "DeltaScout"
+    pk = peak_events[0]
+
+    # PEAK must go through _emit_json (live bus), not research archive
+    assert pk["source"] == "DeltaScout"
+    assert pk["action"] == "PEAK"
+    assert pk["kind"] == "long"
+
+    # Contract fields that existed before Patch 1 — must still be present
+    for field in ("ts", "source", "action", "kind", "delta", "vol", "imb", "price", "vwap", "poc"):
+        assert field in pk, f"PEAK missing contract field: {field}"
 
 
 # ── Test: archive write failure soft-fails ──
 
 def test_archive_write_failure_softfails(monkeypatch, ds, tmp_dirs):
-    # Point archive to a path that cannot be written
-    monkeypatch.setattr(ds, "RESEARCH_ARCHIVE_DIR", "/nonexistent/impossible/path")
+    from unittest.mock import patch as mock_patch
 
     vwap_by_ts = {
         "2026-01-01 00:00:00": 9900,
         "2026-01-01 00:01:00": 9500,
+        "2026-01-01 00:02:00": 10000,
     }
     state, peaks = _wire(monkeypatch, ds, tmp_dirs, vwap_by_ts=vwap_by_ts)
-    monkeypatch.setattr(ds, "RESEARCH_ARCHIVE_DIR", "/nonexistent/impossible/path")
-
     s = ds.Scout()
-    # Must not raise
+
+    # Force deterministic write failure via monkeypatch on builtins.open
+    original_open = open
+
+    def _failing_open(path, *args, **kwargs):
+        if "archive" in str(path):
+            raise OSError("injected archive write failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", _failing_open)
+
+    # Must not raise despite archive write failure
     _run(ds, state, s, [
         {"Timestamp": "2026-01-01 00:00:00", "Trades": 1, "TotalQty": 10,
          "BuyQty": 1, "SellQty": 3, "AvgPrice": 9800},
         {"Timestamp": "2026-01-01 00:01:00", "Trades": 1, "TotalQty": 20,
          "BuyQty": 15, "SellQty": 5, "AvgPrice": 10000},
+        {"Timestamp": "2026-01-01 00:02:00", "Trades": 1, "TotalQty": 30,
+         "BuyQty": 18, "SellQty": 6, "AvgPrice": 10500},
     ])
-    # If we get here without exception, the test passes
+
+    # Live PEAK still emitted despite archive failure
+    peak_events = [p for p in peaks if p.get("action") == "PEAK"]
+    assert len(peak_events) == 1, "PEAK must still emit when archive write fails"
