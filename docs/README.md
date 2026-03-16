@@ -34,16 +34,20 @@ The system maintains four data channels relevant to research and analysis:
 
 | Channel | Path | Format | Role |
 |---------|------|--------|------|
-| **Canonical input** | `/root/volume-alert/data/feed/aggregated.csv` (live) | CSV, 10 columns | Minute-level market feed from Aggregator |
-| **Decision archive** | *(planned)* `/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl` | JSONL | Research delta archive capturing every decision point |
+| **Canonical input** | `/data/feed/aggregated.csv` (live) | CSV, 10 columns | Minute-level market feed from Aggregator |
+| **Decision archive** | *(planned)* `/data/archive/deltascout/YYYY-MM-DD.jsonl` | JSONL | Research delta archive capturing additive Phase 1 decision events |
 | **Live signal bus** | `/data/logs/deltascout.log` | JSONL | PEAK events consumed by Buyer and Executor |
 | **Execution outcome** | `/data/logs/executor.log` | JSONL | Executor action log (open, close, state transitions) |
+
+Implementation safety notes:
+- Research archive is a separate file/channel and must not reuse `deltascout.log`.
+- Research archive writes must not use live-bus truncation behavior.
+- Module defaults may still diverge (`/data/...` vs `/root/volume-alert/...`), so deployment must set explicit paths.
 
 For the full research infrastructure specification, see [DeltaScout_Research_Phase1_Spec.md](DeltaScout_Research_Phase1_Spec.md).
 
 ## Notes
 This repository is intended as a **portfolio and technical showcase**
 to demonstrate system design and engineering approach.
-
 
 

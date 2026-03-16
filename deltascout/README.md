@@ -23,6 +23,9 @@ DeltaScout monitors the aggregated trade feed produced by the Aggregator (`aggre
   - one JSON object per line
   - includes event types such as `PEAK` and warmup/init events (`INIT_MAX`, `INIT_MIN`) depending on settings
 
+`deltascout.log` is the live PEAK bus for Buyer/Executor. Planned research instrumentation
+must write to a separate archive file path and must not reuse this bus file.
+
 ## Configuration
 
 The script uses environment variables for configuration.
@@ -45,4 +48,3 @@ Install deps:
 
 ```bash
 pip install pandas numpy
-

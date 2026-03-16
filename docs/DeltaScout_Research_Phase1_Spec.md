@@ -44,7 +44,7 @@ Aggregator
 DeltaScout
     │  reads:  aggregated.csv (tail polling, POLL_SECS=20)
     │  stdout: Δ1m max/min/zero/init_* lines (Docker logs)
-    │  writes: /data/logs/deltascout.log (JSONL: PEAK, INIT_MAX, INIT_MIN, TIER_TP1)
+    │  writes: /data/logs/deltascout.log (JSONL: PEAK, INIT_MAX, INIT_MIN)
     ├──────────────────┐
     ▼                  ▼
   Buyer            Executor
@@ -63,6 +63,11 @@ DeltaScout
 | Executor log       | `/data/logs/executor.log`           | `EXEC_LOG`          |
 | Executor state     | `/data/state/executor_state.json`   | `STATE_FN`          |
 | Buyer state        | `/root/volume-alert/buyer_state.json` | `STATE_FN`        |
+
+> Implementation note: defaults are not fully harmonized across modules (for example,
+> Buyer path defaults differ from DeltaScout/Executor defaults). Phase 1 archive
+> implementation must use explicit archive path configuration and must not assume
+> all services already share identical defaults.
 
 ### Confirmed log channels
 
@@ -277,6 +282,18 @@ during the trade, and how it closed — in a single self-contained artifact.
 
 ## Phase 1 Research Events (Planned)
 
+### Smallest safe Patch 1 scope (frozen)
+
+Patch 1 must log only the following additive research events:
+
+- `DELTA_MAX`
+- `DELTA_MIN`
+- `CANDIDATE_COMPARISON_REJECT`
+- `CANDIDATE_GATE_REJECT`
+
+These events are additive research instrumentation only and must not change
+PEAK emission, thresholds, gates, cooldown/state logic, or Buyer/Executor contracts.
+
 These events will be emitted to a dedicated research archive (not `deltascout.log`)
 in a future implementation phase:
 
@@ -289,6 +306,17 @@ in a future implementation phase:
 | `WINDOW_OWNERSHIP_MISS`       | Strong delta but not window owner | ts, delta, vol, imb, price, window_max, window_min |
 | `PEAK_EMIT`                   | Successful PEAK (mirror)         | Full PEAK payload + gate_values (chop30, coh10, ema50) |
 | `EXEC_CLOSE`                  | Position closed                  | ts, reason, entry, exit, pnl, triggering_peak, position_state |
+
+### Patch 1 out of scope
+
+The following are explicitly excluded from the smallest Patch 1:
+
+- `PEAK_EMIT`
+- Executor close linkage / `EXEC_CLOSE`
+- Runtime `WINDOW_OWNERSHIP_MISS` emission (offline-derived only)
+- Buyer/Executor contract changes
+- Any PEAK payload or PEAK path change
+- Large archive-manager abstraction
 
 ### Reject classification
 
@@ -463,8 +491,8 @@ Phase 1 implementation will **directly log** a subset of these events in real ti
 | `DELTA_MAX` / `DELTA_MIN` | yes | Raw peaks — foundation for all analysis |
 | `CANDIDATE_COMPARISON_REJECT` | yes | Direct insertion at `return` statements |
 | `CANDIDATE_GATE_REJECT` | yes | Direct insertion at `return` statements |
-| `PEAK_EMIT` | yes | Mirror of live PEAK with enriched context |
-| `EXEC_CLOSE` | yes | Executor close snapshots |
+| `PEAK_EMIT` | no (Patch 1) | Out of smallest patch scope; can be added later in a separate change |
+| `EXEC_CLOSE` | no (Patch 1) | Out of smallest patch scope; requires separate executor linkage work |
 | `WINDOW_OWNER_MISS` | **derived** | Computed offline by comparing `DELTA_MAX/MIN` timestamps against feed data |
 | `BASELINE_INITIALIZATION_EVENT` | **derived** | Identifiable from `DELTA_MAX/MIN` sequences where no comparison event follows |
 | `LATE_PEAK_RECOGNITION` | **derived** | Computed offline by measuring price move before `PEAK_EMIT` timestamp |
@@ -477,10 +505,12 @@ mandatory event stream.
 
 ### Research archive layout (planned)
 
-All research data lives under the local runtime root:
+Canonical runtime root for Phase 1 archive writes is `/data`.
+
+All research data for Phase 1 lives under:
 
 ```
-/root/volume-alert/data/archive/
+/data/archive/
     deltascout/
         YYYY-MM-DD.jsonl          # decision-level research events
     executor_close/
@@ -490,6 +520,12 @@ All research data lives under the local runtime root:
 ```
 
 This archive is append-only and never read by the live trading system.
+
+### Live bus isolation requirements (mandatory)
+
+- Research archive must use a separate archive file and must not reuse `deltascout.log`.
+- Research archive writes must not go through the live-bus truncation logic used for `deltascout.log`.
+- Research archive must remain fully isolated from Buyer/Executor PEAK bus consumers.
 
 ### Record format
 
@@ -523,13 +559,12 @@ writable or locally available at runtime.
 
 ## Runtime Topology Note
 
-This Phase 1 archive is local to the DeltaScout / volume-alert environment
-under `/root/volume-alert`.
+Current repository/runtime defaults are mixed between `/data/...` and `/root/volume-alert/...`.
+For Phase 1 implementation, archive pathing is canonicalized to `/data/archive/...` for
+implementation safety.
 
-- Runtime project root: `/root/volume-alert`
-- DeltaScout code: `/root/volume-alert/delta_scout.py`
-- Live data: `/root/volume-alert/data/` (feed, logs, state)
-- Research archive: `/root/volume-alert/data/archive/`
+- Live data and bus defaults in code: `/data/feed`, `/data/logs`, `/data/state`
+- Research archive (Phase 1 canonical): `/data/archive/`
 
 Any datasets under `/opt/aitrader` or other containers/projects are
 external references only and are not part of the local runtime root.
@@ -542,4 +577,11 @@ external references only and are not part of the local runtime root.
 - Research events must be **additive** (new code paths only, no modification of existing logic)
 - Research archive must be **isolated** from the live signal bus (`deltascout.log`)
 - Research logging must not introduce latency into the hot path
+- Archive writes must be **soft-fail**: write errors must never block or alter PEAK emission
+- Archive writes must not alter `handle_row()` control flow or state behavior
 - All research events must include a monotonic sequence number for ordering
+
+## Dormant Runtime Item Note
+
+`TIER_TP1` exists in code as a helper path, but it is not part of the verified active
+runtime emission flow and is not in scope for the smallest Phase 1 patch unless explicitly wired later.
