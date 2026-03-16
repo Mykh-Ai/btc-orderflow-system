@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from scripts.offline.build_close_outcomes import (
+    _filter_df_by_date as _filter_close_df_by_date,
     _dedupe_close_events,
     _filter_close_events_by_date,
     derive_close_outcomes,
@@ -96,4 +97,63 @@ def test_close_dedup_state_and_log_duplicate():
     daily = _filter_close_events_by_date(events, "2026-01-01")
     deduped = _dedupe_close_events(daily)
     assert len(daily) == 2
+    assert len(deduped) == 1
+
+
+def test_close_date_scoping_handles_empty_peak_frame():
+    peaks = _filter_close_df_by_date(
+        pd.DataFrame(columns=["event_ts", "kind", "price", "delta", "imb", "vol", "seq"]),
+        "event_ts",
+        "2026-01-01",
+    )
+    assert peaks.empty
+
+
+def test_close_dedup_cross_source_with_different_close_ts():
+    log_row = {
+        "ts": "2026-01-01T00:30:02Z",
+        "side": "LONG",
+        "mode": "paper",
+        "reason": "TP1",
+        "close_price": 102.0,
+        "entry": 100.0,
+        "sl": 99.0,
+        "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long", "price": 100.0},
+    }
+    state_row = {
+        "closed_at": "2026-01-01T00:30:06Z",
+        "side": "LONG",
+        "mode": "paper",
+        "close_reason": "TP1",
+        "close_price": 102,
+        "entry": 100,
+        "sl": 99,
+        "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long", "price": 100},
+    }
+    deduped = _dedupe_close_events([log_row, state_row])
+    assert len(deduped) == 1
+
+
+def test_close_dedup_cross_source_ignores_case_and_whitespace():
+    log_row = {
+        "ts": "2026-01-01T00:30:02Z",
+        "side": " LONG ",
+        "mode": " Paper ",
+        "reason": " tp1 ",
+        "close_price": 102.0,
+        "entry": 100.0,
+        "sl": 99.0,
+        "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": " Long ", "price": 100.0},
+    }
+    state_row = {
+        "closed_at": "2026-01-01T00:30:06Z",
+        "side": "long",
+        "mode": "PAPER",
+        "close_reason": "TP1",
+        "close_price": 102,
+        "entry": 100,
+        "sl": 99,
+        "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long", "price": 100},
+    }
+    deduped = _dedupe_close_events([log_row, state_row])
     assert len(deduped) == 1
