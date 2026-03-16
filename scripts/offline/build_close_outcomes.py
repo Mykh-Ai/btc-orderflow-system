@@ -24,7 +24,17 @@ def _safe_load_json(path: Path) -> dict[str, Any]:
 def _load_peak_events(archive_file: Path) -> pd.DataFrame:
     rows = [r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT"]
     if not rows:
-        return pd.DataFrame(columns=["event_ts", "kind", "price", "delta", "imb", "vol", "seq"])
+        return pd.DataFrame(
+            {
+                "event_ts": pd.Series(dtype="datetime64[ns, UTC]"),
+                "kind": pd.Series(dtype="object"),
+                "price": pd.Series(dtype="float64"),
+                "delta": pd.Series(dtype="float64"),
+                "imb": pd.Series(dtype="float64"),
+                "vol": pd.Series(dtype="float64"),
+                "seq": pd.Series(dtype="Int64"),
+            }
+        )
     df = pd.DataFrame(rows)
     df["event_ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     if df["event_ts"].isna().any():
@@ -57,16 +67,26 @@ def _load_close_events(exec_log_file: Path, state_file: Path) -> list[dict[str, 
 
 
 def _close_identity_key(row: dict[str, Any]) -> str:
-    ts = str(row.get("ts") or row.get("closed_at") or "")
-    reason = str(row.get("reason") or row.get("close_reason") or "")
-    mode = str(row.get("mode") or "")
-    side = str(row.get("side") or "")
-    close_price = str(row.get("close_price") or "")
-    entry = str(row.get("entry") or "")
-    sl = str(row.get("sl") or "")
+    close_ts = pd.to_datetime(row.get("ts") or row.get("closed_at"), utc=True, errors="coerce")
+    # tiny skew tolerance for cross-source evidence (e.g. log vs state +/-1s)
+    ts = "" if pd.isna(close_ts) else close_ts.floor("2s").isoformat()
+    reason = str(row.get("reason") or row.get("close_reason") or "").strip().upper()
+    mode = str(row.get("mode") or "").strip().upper()
+    side = str(row.get("side") or "").strip().upper()
+
+    def _norm_num(v: Any) -> str:
+        try:
+            return f"{float(v):.8f}"
+        except Exception:
+            return ""
+
+    close_price = _norm_num(row.get("close_price"))
+    entry = _norm_num(row.get("entry"))
+    sl = _norm_num(row.get("sl"))
     src_evt = row.get("src_evt") if isinstance(row.get("src_evt"), dict) else {}
-    src_evt_ts = str(src_evt.get("ts") or "")
-    src_evt_kind = str(src_evt.get("kind") or "")
+    src_evt_ts_parsed = pd.to_datetime(src_evt.get("ts"), utc=True, errors="coerce")
+    src_evt_ts = "" if pd.isna(src_evt_ts_parsed) else src_evt_ts_parsed.floor("s").isoformat()
+    src_evt_kind = str(src_evt.get("kind") or "").strip().lower()
     raw = "|".join([ts, reason, mode, side, close_price, entry, sl, src_evt_ts, src_evt_kind])
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
