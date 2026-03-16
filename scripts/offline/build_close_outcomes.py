@@ -24,7 +24,17 @@ def _safe_load_json(path: Path) -> dict[str, Any]:
 def _load_peak_events(archive_file: Path) -> pd.DataFrame:
     rows = [r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT"]
     if not rows:
-        return pd.DataFrame(columns=["event_ts", "kind", "price", "delta", "imb", "vol", "seq"])
+        return pd.DataFrame(
+            {
+                "event_ts": pd.Series(dtype="datetime64[ns, UTC]"),
+                "kind": pd.Series(dtype="object"),
+                "price": pd.Series(dtype="float64"),
+                "delta": pd.Series(dtype="float64"),
+                "imb": pd.Series(dtype="float64"),
+                "vol": pd.Series(dtype="float64"),
+                "seq": pd.Series(dtype="int64"),
+            }
+        )
     df = pd.DataFrame(rows)
     df["event_ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     if df["event_ts"].isna().any():
@@ -36,6 +46,11 @@ def _filter_df_by_date(df: pd.DataFrame, ts_col: str, source_date: str) -> pd.Da
     out = df.copy()
     if ts_col not in out.columns:
         raise OfflineBuildError(f"missing timestamp column '{ts_col}' for date scoping")
+    if out.empty:
+        return out
+    out[ts_col] = pd.to_datetime(out[ts_col], utc=True, errors="coerce")
+    if out[ts_col].isna().any():
+        raise OfflineBuildError(f"invalid timestamp values in '{ts_col}' for date scoping")
     out["_date"] = out[ts_col].dt.strftime("%Y-%m-%d")
     out = out[out["_date"] == source_date].copy()
     return out.drop(columns=["_date"])
@@ -57,17 +72,42 @@ def _load_close_events(exec_log_file: Path, state_file: Path) -> list[dict[str, 
 
 
 def _close_identity_key(row: dict[str, Any]) -> str:
-    ts = str(row.get("ts") or row.get("closed_at") or "")
-    reason = str(row.get("reason") or row.get("close_reason") or "")
-    mode = str(row.get("mode") or "")
-    side = str(row.get("side") or "")
-    close_price = str(row.get("close_price") or "")
-    entry = str(row.get("entry") or "")
-    sl = str(row.get("sl") or "")
+    def _norm_scalar(v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (int, float)):
+            return f"{float(v):.8f}"
+        return str(v)
+
+    def _norm_text(v: Any, *, upper: bool = False, lower: bool = False) -> str:
+        text = _norm_scalar(v).strip()
+        if upper:
+            return text.upper()
+        if lower:
+            return text.lower()
+        return text
+
+    reason = _norm_text(row.get("reason") or row.get("close_reason"), upper=True)
+    mode = _norm_text(row.get("mode"), upper=True)
+    side = _norm_text(row.get("side"), upper=True)
+    close_price = _norm_scalar(row.get("close_price"))
+    entry = _norm_scalar(row.get("entry"))
+    sl = _norm_scalar(row.get("sl"))
     src_evt = row.get("src_evt") if isinstance(row.get("src_evt"), dict) else {}
-    src_evt_ts = str(src_evt.get("ts") or "")
-    src_evt_kind = str(src_evt.get("kind") or "")
-    raw = "|".join([ts, reason, mode, side, close_price, entry, sl, src_evt_ts, src_evt_kind])
+    src_evt_ts = _norm_scalar(src_evt.get("ts"))
+    src_evt_kind = _norm_text(src_evt.get("kind"), lower=True)
+    src_evt_price = _norm_scalar(src_evt.get("price"))
+
+    # executor.log and state.last_closed often emit different close timestamps for the
+    # same close; when src_evt is present prefer a ts-free key so cross-source evidence
+    # hashes together. Without src_evt, keep a coarse time bucket to avoid collapsing
+    # unrelated closes that happen to share reason/price.
+    fallback_ts = pd.to_datetime(row.get("ts") or row.get("closed_at"), utc=True, errors="coerce")
+    ts_bucket = ""
+    if pd.notna(fallback_ts) and not src_evt_ts:
+        ts_bucket = fallback_ts.floor("min").isoformat()
+
+    raw = "|".join([reason, mode, side, close_price, entry, sl, src_evt_ts, src_evt_kind, src_evt_price, ts_bucket])
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
