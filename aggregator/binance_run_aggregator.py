@@ -19,6 +19,11 @@ lock_file_path = os.path.join(logs_dir, "analyzer.lock")
 AGG_INTERVAL = 60
 first_aggregation = True
 MAX_RECORDS = 1500
+
+# --- feed archive ---
+FEED_ARCHIVE_DIR = os.getenv("FEED_ARCHIVE_DIR", "/data/archive/feed")
+os.makedirs(FEED_ARCHIVE_DIR, exist_ok=True)
+_archive_header = "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice\n"
 LOCK_TIMEOUT = 300  # 5 хвилин
 
 # ===========================
@@ -94,6 +99,32 @@ def writer_loop():
 # ===========================
 # Aggregator
 # ===========================
+def _archive_feed_row(row_ts, row_line):
+    """Append row to /data/archive/feed/YYYY-MM-DD.csv (dedup by Timestamp)."""
+    try:
+        date_part = row_ts[:10]  # "YYYY-MM-DD"
+        archive_path = os.path.join(FEED_ARCHIVE_DIR, f"{date_part}.csv")
+        if os.path.exists(archive_path):
+            # read last line to check for duplicate timestamp
+            with open(archive_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if size > 2:
+                    # seek back enough to read last complete line
+                    f.seek(max(0, size - 256))
+                    chunk = f.read().decode("utf-8", errors="replace")
+                    last_line = chunk.rstrip("\n").rsplit("\n", 1)[-1]
+                    if last_line.startswith(row_ts):
+                        return  # already archived
+        else:
+            with open(archive_path, "w") as f:
+                f.write(_archive_header)
+        with open(archive_path, "a") as f:
+            f.write(row_line)
+    except Exception as e:
+        print(f"⚠️ feed archive write error: {e}", flush=True)
+
+
 def aggregate_and_clear():
     global first_aggregation
     if first_aggregation:
@@ -142,10 +173,14 @@ def aggregate_and_clear():
     avg_size = total_qty / num_trades if num_trades > 0 else 0
     avg_price = total_price / total_qty if total_qty > 0 else 0
     file_exists = os.path.isfile(aggregated_file_path)
+    row_ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    row_line = f"{row_ts},{num_trades},{total_qty:.6f},{avg_size:.6f},{buy_qty:.6f},{sell_qty:.6f},{avg_price:.6f},{close_price:.0f},{high_price:.0f},{low_price:.0f}\n"
     with open(aggregated_file_path, "a") as f:
         if not file_exists:
-            f.write("Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice\n")
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{num_trades},{total_qty:.6f},{avg_size:.6f},{buy_qty:.6f},{sell_qty:.6f},{avg_price:.6f},{close_price:.0f},{high_price:.0f},{low_price:.0f}\n")
+            f.write(_archive_header)
+        f.write(row_line)
+    # --- append to daily feed archive (dedup by Timestamp) ---
+    _archive_feed_row(row_ts, row_line)
     with open(aggregated_file_path, "r") as f:
         rows = f.readlines()
     if len(rows) > MAX_RECORDS + 1:
