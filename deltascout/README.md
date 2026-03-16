@@ -204,6 +204,22 @@ The research archive is **permanent and immutable**.
 
 ---
 
+
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FILE_PATH` | `/data/feed/aggregated.csv` | Input CSV path |
+| `DELTASCOUT_LOG` | `/data/logs/deltascout.log` | Live signal bus output |
+| `RESEARCH_ARCHIVE_DIR` | `/data/archive/deltascout` | Research archive directory |
+| `POLL_SECS` | `20` | Feed poll interval |
+| `ROLL_WINDOW_MIN` | `180` | Rolling window (minutes) |
+| `STARTUP_LOOKBACK_MIN` | `1500` | Warmup rows |
+| `WEBHOOK_URL` | — | Debug webhook |
+
+Gate parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN/MAX`, `IMB_SHORT_MIN/MAX`, `VWAP_MAX_DIST_USD`. See `.env.example`.
+
 ## Як користуватись дослідницьким шаром (Phase-1)
 
 Фаза 1 додає до системи дослідницький шар, який дозволяє аналізувати
@@ -267,9 +283,6 @@ signal → trade → результат
 ```
 /data/archive/datasets/close_outcomes.csv
 ```
-
----
-
 ### 4. Аналіз сигналів
 
 Після побудови dataset можна запускати дослідницькі скрипти.
@@ -298,7 +311,7 @@ python scripts/offline/build_phase1_derived.py
 python scripts/offline/build_close_outcomes.py
 ```
 
-Після цього можна запускати дослідницькі скрипти для аналізу.
+Після цього отримані dataset можна використовувати для статистичного аналізу.
 
 ---
 
@@ -341,17 +354,126 @@ python scripts/offline/build_phase1_derived.py
 
 ### Phase 2 — Signal research
 
-Мета: знайти статистичний edge.
+Мета Phase 2 — аналіз накопичених сигналів і пошук статистичного edge.
 
-Напрями досліджень:
+На цьому етапі досліджуються характеристики сигналів DeltaScout на основі накопичених архівів:
 
-- signal density maps
-- profitability by delta bucket
-- profitability by regime
-- reject signal analysis
-- threshold sensitivity.
+/data/archive/feed/
+/data/archive/deltascout/
 
----
+Основні напрями досліджень:
+
+signal density maps
+
+profitability by delta bucket
+
+profitability by regime
+
+reject signal analysis
+
+threshold sensitivity
+
+Dataset registry
+
+Починаючи з Phase 2, усі дослідницькі dataset реєструються у файлі:
+
+/data/archive/datasets/manifest.json
+
+Цей файл містить метадані побудованих dataset:
+
+назву dataset
+
+файл dataset
+
+час побудови
+
+часовий діапазон джерельних даних
+
+скрипт, яким dataset був згенерований
+
+кількість рядків
+
+Приклад запису:
+
+{
+  "name": "phase1_derived",
+  "file": "phase1_derived_2026-03-16.csv",
+  "built_at": "2026-03-16T18:21:00Z",
+  "source_feed_start": "2026-03-01",
+  "source_feed_end": "2026-03-16",
+  "rows": 12483,
+  "script": "build_phase1_derived.py"
+}
+
+manifest.json дозволяє:
+
+відстежувати всі побудовані dataset
+
+відтворювати дослідження
+
+розуміти, з яких даних був отриманий результат
+
+Це забезпечує reproducible research для дослідницького шару системи.
+
+Research data principles
+
+Дослідницький шар системи дотримується таких принципів:
+
+Append-only datasets
+Dataset не редагуються після побудови. Нові версії створюються як нові файли.
+
+Deterministic builds
+Офлайн-скрипти повинні будувати однаковий dataset з однакових архівів.
+
+Traceable lineage
+Кожен dataset реєструється у manifest.json і містить інформацію про джерело даних і скрипт побудови.
+
+Research isolation
+Дослідницькі dataset не використовуються безпосередньо у runtime-логіці торгівлі.
+
+Майбутні дослідницькі інструменти
+
+У Phase 2 планується додати інструменти для аналізу сигналів:
+
+scripts/offline/signal_density_map.py
+scripts/offline/reject_signal_analysis.py
+scripts/offline/threshold_sensitivity.py
+
+Ці інструменти дозволять досліджувати:
+
+розподіл сигналів
+
+ефективність гейтів
+
+пропущені сигнали
+
+чутливість порогів
+
+Результат Phase 2 
+
+Очікуваний результат цієї фази:
+
+виявлення статистичного edge
+визначення оптимальних порогів сигналів
+аналіз ефективності фільтрів
+підготовка моделей для Phase 3.
+
+Phase 2 — Success criteria
+
+Phase 2 вважається завершеною після виконання наступних умов:
+
+накопичено щонайменше 4–12 тижнів хвилинних даних
+
+побудовано дослідницькі dataset сигналів і результатів угод
+
+проведено базовий аналіз сигналів (density, regime, reject)
+
+виявлено кандидатні джерела статистичного edge
+
+сформовано гіпотези для моделей Phase 3
+
+Результатом Phase 2 є набір перевірених гіпотез, які переходять у фазу Strategy modelling.
+
 
 ### Phase 3 — Strategy modelling
 
@@ -377,20 +499,6 @@ python scripts/offline/build_phase1_derived.py
 - нові типи сигналів.
 
 ---
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FILE_PATH` | `/data/feed/aggregated.csv` | Input CSV path |
-| `DELTASCOUT_LOG` | `/data/logs/deltascout.log` | Live signal bus output |
-| `RESEARCH_ARCHIVE_DIR` | `/data/archive/deltascout` | Research archive directory |
-| `POLL_SECS` | `20` | Feed poll interval |
-| `ROLL_WINDOW_MIN` | `180` | Rolling window (minutes) |
-| `STARTUP_LOOKBACK_MIN` | `1500` | Warmup rows |
-| `WEBHOOK_URL` | — | Debug webhook |
-
-Gate parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN/MAX`, `IMB_SHORT_MIN/MAX`, `VWAP_MAX_DIST_USD`. See `.env.example`.
 
 ## Run
 
