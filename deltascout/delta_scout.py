@@ -59,6 +59,27 @@ try:
 except Exception as _e:
     print(f"[LOG TOUCH ERROR] {_e} -> {LOG_PATH}", file=sys.stderr, flush=True)
 
+# ===== RESEARCH ARCHIVE (Phase 1, additive) =====
+RESEARCH_ARCHIVE_DIR = os.getenv("RESEARCH_ARCHIVE_DIR", "/data/archive/deltascout")
+ENABLE_RESEARCH_LOG  = os.getenv("ENABLE_RESEARCH_LOG", "true").lower() in {"1","true","yes"}
+
+def _research_append(payload: dict):
+    """Append one JSONL line to daily research archive.
+    Separate from live deltascout.log — no truncation, no live bus interaction.
+    Soft-fail only: never raises into caller."""
+    if not ENABLE_RESEARCH_LOG:
+        return
+    try:
+        ts_str = str(payload.get("ts", ""))[:10]
+        if len(ts_str) < 10:
+            ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        fn = os.path.join(RESEARCH_ARCHIVE_DIR, f"{ts_str}.jsonl")
+        os.makedirs(RESEARCH_ARCHIVE_DIR, exist_ok=True)
+        with open(fn, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[RESEARCH WRITE ERROR] {e}", file=sys.stderr, flush=True)
+
 ENV = {
     "AGG_CSV": FILE_PATH,
     "ROLL_WINDOW_MIN": ROLL_WINDOW_MIN,
@@ -189,6 +210,7 @@ class Scout:
         self._print_i = 0
         self.log_path = LOG_PATH
         self.prev_peak = None   # нова база для порівнянь між піками
+        self._research_seq = 0
         self._init_state()
 
     # ---- time helpers ----
@@ -197,6 +219,14 @@ class Scout:
 
     def _ts_iso(self, dt: datetime | None = None) -> str:
         return (dt or self._now()).isoformat().replace("+00:00", "Z")
+
+    # ---- RESEARCH (Phase 1) ----
+    def _emit_research(self, event: str, fields: dict):
+        """Emit a research event to daily archive. Side-channel only."""
+        self._research_seq += 1
+        payload = {"schema": 1, "event": event, "seq": self._research_seq}
+        payload.update(fields)
+        _research_append(payload)
 
     # ---- JSON SIGNAL ----
     def _emit_json(self, payload: dict):
@@ -452,18 +482,53 @@ class Scout:
 
             curr = {"kind":"long","price":ap,"vol":vol,"vwap":vwap_now,"imb":imba}
 
+            # --- RESEARCH: DELTA_MAX ---
+            self._emit_research("DELTA_MAX", {
+                "ts": str(ts), "kind": "long", "delta": round(delta, 2),
+                "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
+                "vwap": vwap_now, "poc": poc_now,
+            })
+
             # --- базові перевірки ---
             if not self.prev_peak:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "no_prev_peak",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if curr["kind"] != self.prev_peak["kind"]:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "direction_mismatch",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if vwap_now is not None and curr["price"] < vwap_now:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "vwap_side",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if vwap_now is not None:
                 vwap_f = float(vwap_now)
                 if (float(curr["price"]) - vwap_f) > VWAP_MAX_DIST_USD:
+                    self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                        "ts": str(ts), "kind": "long", "reject_reason": "vwap_distance",
+                        "delta": round(delta, 2), "vol": round(vol, 2),
+                        "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                    })
                     self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "3of3_fail",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                    "prev_price": self.prev_peak.get("price"),
+                    "prev_vol": self.prev_peak.get("vol"),
+                    "prev_vwap": self.prev_peak.get("vwap"),
+                })
                 self.prev_peak = curr; return
 
             # завжди оновлюємо базу
@@ -471,10 +536,30 @@ class Scout:
 
             # --- ворота ---
             if not (price_now > ema50_now and (vwap_now is None or price_now > vwap_now)):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "ema50_vwap_regime",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                })
                 return
             if not (chop <= CHOP30_MAX and coh >= COH10_MIN):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "chop_coh",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                    "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
+                })
                 return
             if not (IMB_MIN <= imba <= IMB_MAX):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "long", "reject_reason": "imb_band",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                })
                 return
 
 
@@ -514,18 +599,53 @@ class Scout:
 
             curr = {"kind":"short","price":ap,"vol":vol,"vwap":vwap_now,"imb":imba}
 
+            # --- RESEARCH: DELTA_MIN ---
+            self._emit_research("DELTA_MIN", {
+                "ts": str(ts), "kind": "short", "delta": round(delta, 2),
+                "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
+                "vwap": vwap_now, "poc": poc_now,
+            })
+
             # --- базові перевірки ---
             if not self.prev_peak:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "no_prev_peak",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if curr["kind"] != self.prev_peak["kind"]:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "direction_mismatch",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if vwap_now is not None and curr["price"] > vwap_now:
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "vwap_side",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                })
                 self.prev_peak = curr; return
             if vwap_now is not None:
                 vwap_f = float(vwap_now)
                 if (vwap_f - float(curr["price"])) > VWAP_MAX_DIST_USD:
+                    self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                        "ts": str(ts), "kind": "short", "reject_reason": "vwap_distance",
+                        "delta": round(delta, 2), "vol": round(vol, 2),
+                        "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                    })
                     self.prev_peak = curr; return
             if not prev_pass_3of3(curr, self.prev_peak):
+                self._emit_research("CANDIDATE_COMPARISON_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "3of3_fail",
+                    "delta": round(delta, 2), "vol": round(vol, 2),
+                    "imb": round(imba, 3), "price": ap, "vwap": vwap_now,
+                    "prev_price": self.prev_peak.get("price"),
+                    "prev_vol": self.prev_peak.get("vol"),
+                    "prev_vwap": self.prev_peak.get("vwap"),
+                })
                 self.prev_peak = curr; return
 
             # завжди оновлюємо базу
@@ -533,10 +653,30 @@ class Scout:
 
             # --- ворота ---
             if not (price_now < ema50_now and (vwap_now is None or price_now < vwap_now)):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "ema50_vwap_regime",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                })
                 return
             if not (chop <= CHOP30_MAX and coh >= COH10_MIN):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "chop_coh",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                    "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
+                })
                 return
             if not (IMB_MIN <= imba <= IMB_MAX):
+                self._emit_research("CANDIDATE_GATE_REJECT", {
+                    "ts": str(ts), "kind": "short", "reject_reason": "imb_band",
+                    "price_now": price_now, "ema50_now": ema50_now,
+                    "vwap_now": vwap_now, "chop30": round(chop, 2),
+                    "coh10": round(coh, 3), "imb": round(imba, 3),
+                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                })
                 return
 
 

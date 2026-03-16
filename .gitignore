@@ -18,6 +18,9 @@ __pycache__/
 *.pyd
 
 
+# Review artifacts
+PATCH_REVIEW.md
+
 # OS
 .DS_Store
 Thumbs.db
