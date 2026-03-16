@@ -280,7 +280,7 @@ during the trade, and how it closed — in a single self-contained artifact.
 
 ---
 
-## Phase 1 Research Events (Planned)
+## Phase 1 Research Events (Runtime status + offline scope)
 
 ### Smallest safe Patch 1 scope (frozen)
 
@@ -294,25 +294,24 @@ Patch 1 must log only the following additive research events:
 These events are additive research instrumentation only and must not change
 PEAK emission, thresholds, gates, cooldown/state logic, or Buyer/Executor contracts.
 
-These events will be emitted to a dedicated research archive (not `deltascout.log`)
-in a future implementation phase:
+These events are emitted to a dedicated research archive (not `deltascout.log`) in the
+current runtime implementation:
 
 | Event                         | Trigger point                    | Fields (planned) |
 |-------------------------------|----------------------------------|-------------------|
 | `DELTA_MAX`                   | New rolling window maximum       | ts, delta, vol, imb, price, vwap, poc |
 | `DELTA_MIN`                   | New rolling window minimum       | ts, delta, vol, imb, price, vwap, poc |
-| `CANDIDATE_COMPARISON_REJECT` | Failed base check or 3/3         | ts, kind, reject_reason, reject_class, curr, prev |
-| `CANDIDATE_GATE_REJECT`       | Failed gate check                | ts, kind, reject_reason, reject_class, gate_values, thresholds |
+| `CANDIDATE_COMPARISON_REJECT` | Failed base check or 3/3         | ts, kind, reject_reason, curr, prev *(runtime)* + `reject_class` *(offline-derived)* |
+| `CANDIDATE_GATE_REJECT`       | Failed gate check                | ts, kind, reject_reason, gate_values, thresholds *(runtime)* + `reject_class` *(offline-derived)* |
 | `WINDOW_OWNERSHIP_MISS`       | Strong delta but not window owner | ts, delta, vol, imb, price, window_max, window_min |
 | `PEAK_EMIT`                   | Successful PEAK (mirror)         | Full PEAK payload + gate_values (chop30, coh10, ema50) |
-| `EXEC_CLOSE`                  | Position closed                  | ts, reason, entry, exit, pnl, triggering_peak, position_state |
+| `EXEC_CLOSE`                  | Position closed *(offline-derived dataset row type)* | ts, reason, entry, exit, pnl, triggering_peak, position_state |
 
 ### Patch 1 out of scope
 
 The following are explicitly excluded from the smallest Patch 1:
 
-- `PEAK_EMIT`
-- Executor close linkage / `EXEC_CLOSE`
+- Executor runtime emission of `EXEC_CLOSE` (close outcomes are derived offline)
 - Runtime `WINDOW_OWNERSHIP_MISS` emission (offline-derived only)
 - Buyer/Executor contract changes
 - Any PEAK payload or PEAK path change
@@ -320,7 +319,10 @@ The following are explicitly excluded from the smallest Patch 1:
 
 ### Reject classification
 
-Each `CANDIDATE_COMPARISON_REJECT` and `CANDIDATE_GATE_REJECT` event must include:
+In Phase 1, `reject_reason` is emitted at runtime, while `reject_class` is derived
+offline from the emitted reject events and gate/comparison context.
+
+Offline reject datasets should include:
 
 | Field           | Type   | Description |
 |-----------------|--------|-------------|
@@ -484,15 +486,15 @@ latency.
 
 ### Implementation priority
 
-Phase 1 implementation will **directly log** a subset of these events in real time:
+Phase 1 implementation **already logs** a subset of these events in real time:
 
 | Event | Logged at runtime | Rationale |
 |-------|:-:|---|
 | `DELTA_MAX` / `DELTA_MIN` | yes | Raw peaks — foundation for all analysis |
 | `CANDIDATE_COMPARISON_REJECT` | yes | Direct insertion at `return` statements |
 | `CANDIDATE_GATE_REJECT` | yes | Direct insertion at `return` statements |
-| `PEAK_EMIT` | no (Patch 1) | Out of smallest patch scope; can be added later in a separate change |
-| `EXEC_CLOSE` | no (Patch 1) | Out of smallest patch scope; requires separate executor linkage work |
+| `PEAK_EMIT` | yes | Runtime mirror event in research archive (side-channel only) |
+| `EXEC_CLOSE` | **derived** | Offline-derived close outcome dataset from existing executor artifacts |
 | `WINDOW_OWNER_MISS` | **derived** | Computed offline by comparing `DELTA_MAX/MIN` timestamps against feed data |
 | `BASELINE_INITIALIZATION_EVENT` | **derived** | Identifiable from `DELTA_MAX/MIN` sequences where no comparison event follows |
 | `LATE_PEAK_RECOGNITION` | **derived** | Computed offline by measuring price move before `PEAK_EMIT` timestamp |
@@ -503,7 +505,7 @@ mandatory event stream.
 
 ---
 
-### Research archive layout (planned)
+### Research archive layout
 
 Canonical runtime root for Phase 1 archive writes is `/data`.
 
