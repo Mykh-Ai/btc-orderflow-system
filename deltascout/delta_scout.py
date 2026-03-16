@@ -577,6 +577,17 @@ class Scout:
                 "poc": poc_now,
             })
 
+            # --- RESEARCH: PEAK_EMIT mirror (side-channel only) ---
+            self._emit_research("PEAK_EMIT", {
+                "ts": str(ts), "kind": "long", "delta": round(delta, 2),
+                "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
+                "vwap": vwap_now, "poc": poc_now,
+                "price_now": price_now, "ema50_now": ema50_now,
+                "chop30": round(chop, 2), "coh10": round(coh, 3),
+                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
+            })
+
             # оновлення бази
             self.prev_peak = curr
 
@@ -692,6 +703,17 @@ class Scout:
                 "price": ap,
                 "vwap": vwap_now,
                 "poc": poc_now,
+            })
+
+            # --- RESEARCH: PEAK_EMIT mirror (side-channel only) ---
+            self._emit_research("PEAK_EMIT", {
+                "ts": str(ts), "kind": "short", "delta": round(delta, 2),
+                "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
+                "vwap": vwap_now, "poc": poc_now,
+                "price_now": price_now, "ema50_now": ema50_now,
+                "chop30": round(chop, 2), "coh10": round(coh, 3),
+                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
             })
 
             # оновлення бази

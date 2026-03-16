@@ -309,6 +309,79 @@ def test_peak_still_emitted(monkeypatch, ds, tmp_dirs):
     for field in ("ts", "source", "action", "kind", "delta", "vol", "imb", "price", "vwap", "poc"):
         assert field in pk, f"PEAK missing contract field: {field}"
 
+    events = _read_archive(tmp_dirs["archive"])
+    peak_emit = [e for e in events if e["event"] == "PEAK_EMIT"]
+    assert len(peak_emit) == 1
+    pe = peak_emit[0]
+    for field in (
+        "ts", "kind", "delta", "vol", "imb", "price", "vwap", "poc",
+        "price_now", "ema50_now", "chop30", "coh10",
+        "imb_min", "imb_max", "chop30_max", "coh10_min",
+    ):
+        assert field in pe, f"PEAK_EMIT missing field: {field}"
+
+
+# ── Test: PEAK_EMIT emitted for short PEAK success ──
+
+def test_peak_emit_short_emitted(monkeypatch, ds, tmp_dirs):
+    vwap_by_ts = {
+        "2026-01-01 00:00:00": 10100,
+        "2026-01-01 00:01:00": 10050,
+        "2026-01-01 00:02:00": 9950,
+    }
+    state, peaks = _wire(monkeypatch, ds, tmp_dirs, vwap_by_ts=vwap_by_ts)
+    s = ds.Scout()
+    _run(ds, state, s, [
+        {"Timestamp": "2026-01-01 00:00:00", "Trades": 1, "TotalQty": 10,
+         "BuyQty": 3, "SellQty": 7, "AvgPrice": 10200},
+        {"Timestamp": "2026-01-01 00:01:00", "Trades": 1, "TotalQty": 20,
+         "BuyQty": 5, "SellQty": 15, "AvgPrice": 10000},
+        {"Timestamp": "2026-01-01 00:02:00", "Trades": 1, "TotalQty": 30,
+         "BuyQty": 6, "SellQty": 24, "AvgPrice": 9900},
+    ])
+
+    peak_events = [p for p in peaks if p.get("action") == "PEAK"]
+    assert len(peak_events) == 1
+    assert peak_events[0]["kind"] == "short"
+
+    events = _read_archive(tmp_dirs["archive"])
+    peak_emit = [e for e in events if e["event"] == "PEAK_EMIT"]
+    assert len(peak_emit) == 1
+    assert peak_emit[0]["kind"] == "short"
+
+
+# ── Test: no PEAK_EMIT on reject-only path ──
+
+def test_no_peak_emit_on_reject_path(monkeypatch, ds, tmp_dirs):
+    # Set tight IMB band so gate rejects
+    monkeypatch.setattr(ds, "IMB_MIN", 0.90)
+    monkeypatch.setattr(ds, "IMB_MAX", 0.95)
+
+    vwap_by_ts = {
+        "2026-01-01 00:00:00": 9900,
+        "2026-01-01 00:01:00": 9500,
+        "2026-01-01 00:02:00": 10000,
+    }
+    state, peaks = _wire(monkeypatch, ds, tmp_dirs, vwap_by_ts=vwap_by_ts)
+    monkeypatch.setattr(ds, "IMB_MIN", 0.90)
+    monkeypatch.setattr(ds, "IMB_MAX", 0.95)
+
+    s = ds.Scout()
+    _run(ds, state, s, [
+        {"Timestamp": "2026-01-01 00:00:00", "Trades": 1, "TotalQty": 10,
+         "BuyQty": 1, "SellQty": 3, "AvgPrice": 9800},
+        {"Timestamp": "2026-01-01 00:01:00", "Trades": 1, "TotalQty": 20,
+         "BuyQty": 15, "SellQty": 5, "AvgPrice": 10000},
+        {"Timestamp": "2026-01-01 00:02:00", "Trades": 1, "TotalQty": 30,
+         "BuyQty": 18, "SellQty": 6, "AvgPrice": 10500},
+    ])
+
+    assert not [p for p in peaks if p.get("action") == "PEAK"]
+
+    events = _read_archive(tmp_dirs["archive"])
+    peak_emit = [e for e in events if e["event"] == "PEAK_EMIT"]
+    assert len(peak_emit) == 0
+
 
 # ── Test: archive write failure soft-fails ──
 
