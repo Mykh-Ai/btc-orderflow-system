@@ -4,16 +4,12 @@ Order-flow signal detection module with research instrumentation.
 
 Monitors the aggregated trade feed (`aggregated.csv`) produced by the Aggregator,
 processes each minute row through a five-stage decision pipeline,
-and emits JSONL events for downstream consumers (Buyer, Executor)
-and a separate research archive for offline analysis.
+and emits PEAK signals for downstream consumers (Buyer, Executor).
 
-## Pipeline stages
+## Pipeline
 
 ```
 CSV row → Delta Detection → Comparison (3/3 rule) → Gate Logic → PEAK Emit
-              │                    │                      │           │
-          DELTA_MAX/MIN    COMPARISON_REJECT      GATE_REJECT    PEAK_EMIT
-          (archive)            (archive)            (archive)    (archive + live bus)
 ```
 
 1. **Feed Ingestion** — tail-poll `aggregated.csv`, yield dict per row
@@ -22,60 +18,379 @@ CSV row → Delta Detection → Comparison (3/3 rule) → Gate Logic → PEAK Em
 4. **Gate Logic** — regime filters: EMA50 position, VWAP position, CHOP30, COH10, IMB range
 5. **PEAK Emit** — write JSONL to live signal bus + mirror to research archive
 
-## Outputs
+---
 
-### Live signal bus
+## Storage
 
-`deltascout.log` (configured via `DELTASCOUT_LOG`) — JSONL consumed by Buyer and Executor.
-Truncated at 500 lines (keeps last 30). Contains `PEAK`, `INIT_MAX`, `INIT_MIN` events.
+### Хвилинний feed (вхідні дані)
 
-### Research archive
+| Що | Шлях | Опис |
+|----|------|------|
+| Live feed | `/data/feed/aggregated.csv` | Rolling 1500 рядків. Пише Aggregator кожну хвилину. DeltaScout читає |
+| **Feed archive** | `/data/archive/feed/YYYY-MM-DD.csv` | Повний добовий архів хвилинок. Append-only, dedup по Timestamp. Пише Aggregator |
 
-`/data/archive/deltascout/YYYY-MM-DD.jsonl` (configured via `RESEARCH_ARCHIVE_DIR`) —
-append-only daily JSONL capturing every decision point in the pipeline.
-
-Events recorded at runtime:
-
-| Event | Trigger | Fields |
-|-------|---------|--------|
-| `DELTA_MAX` | New rolling window maximum | ts, delta, vol, imb, price, vwap, poc |
-| `DELTA_MIN` | New rolling window minimum | ts, delta, vol, imb, price, vwap, poc |
-| `CANDIDATE_COMPARISON_REJECT` | Failed base check or 3/3 | ts, kind, reject_reason, curr/prev values |
-| `CANDIDATE_GATE_REJECT` | Failed gate check | ts, kind, reject_reason, gate_values, thresholds |
-| `PEAK_EMIT` | Successful PEAK (mirror) | Full PEAK payload + gate values (chop30, coh10, ema50) |
-
-Record format:
-```json
-{"schema": 1, "event": "DELTA_MAX", "seq": 42, "ts": "2026-03-16 14:44:00", ...}
+Формат CSV (10 колонок):
+```
+Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
 ```
 
-- `schema` — format version (integer, starts at 1)
-- `seq` — monotonic sequence number per session
-- `event` — event type name
+### PEAK сигнали (вихід для трейдингу)
 
-### Isolation
+| Що | Шлях | Опис |
+|----|------|------|
+| **Live signal bus** | `/data/logs/deltascout.log` | JSONL. Читають Buyer і Executor. Truncate на 500 рядків (залишає 30). Містить `PEAK`, `INIT_MAX`, `INIT_MIN` |
 
-- Research archive is a **separate file** from `deltascout.log`
-- Research writes do not use live-bus truncation logic
-- Write errors are soft-fail — never block or alter PEAK emission
-- Archive files are never read by live trading components
+Приклад PEAK:
+```json
+{"ts": "2026-03-16 19:09:00", "source": "DeltaScout", "action": "PEAK", "kind": "long", "delta": 114.88, "vol": 195.12, "imb": 0.589, "price": 74148.10, "vwap": 73398, "poc": 73980}
+```
+
+### Дослідницький архів (Research Phase 1)
+
+| Що | Шлях | Опис |
+|----|------|------|
+| **Decision archive** | `/data/archive/deltascout/YYYY-MM-DD.jsonl` | Append-only, один файл на добу. Всі дельти, всі реджекти, всі PEAK. Ніколи не truncate'ується |
+
+Тут зберігається **кожна подія** конвеєра DeltaScout:
+
+| Подія | Коли записується | Що зберігає |
+|-------|------------------|-------------|
+| `DELTA_MAX` | Знайдено новий максимум дельти в rolling window | ts, delta, vol, imb, price, vwap, poc |
+| `DELTA_MIN` | Знайдено новий мінімум дельти в rolling window | ts, delta, vol, imb, price, vwap, poc |
+| `CANDIDATE_COMPARISON_REJECT` | Кандидат не пройшов базові перевірки або правило 3/3 | ts, kind, reject_reason (`no_prev_peak`, `direction_mismatch`, `vwap_side`, `vwap_distance`, `3of3_fail`), prev_* значення |
+| `CANDIDATE_GATE_REJECT` | Кандидат пройшов порівняння, але зрізався на гейті | ts, kind, reject_reason (`ema50_regime`, `vwap_regime`, `chop30`, `coh10`, `imb_band`), gate_values, thresholds |
+| `PEAK_EMIT` | PEAK пройшов всі перевірки | Повний PEAK payload + значення гейтів (chop30, coh10, ema50) |
+
+Приклад запису:
+```json
+{"schema": 1, "event": "CANDIDATE_GATE_REJECT", "seq": 15, "ts": "2026-03-16 15:40:00", "kind": "short", "reject_reason": "chop30", "gate_values": {"chop30": 2.8, "coh10": 0.35}, "thresholds": {"chop30_max": 2.6}}
+```
+
+Кожен запис містить: `schema` (версія формату), `seq` (порядковий номер за сесію), `event` (тип події).
+
+### Derived datasets (offline)
+
+| Що | Шлях | Будується з | Скрипт |
+|----|------|-------------|--------|
+| Пропущені вікна | `/data/archive/datasets/` | DELTA_MAX/MIN + feed archive | `scripts/offline/build_phase1_derived.py` |
+| Закриття позицій | `/data/archive/datasets/` | Executor log + state | `scripts/offline/build_close_outcomes.py` |
+
+---
+
+## Data Contracts
+
+To guarantee reproducible research and deterministic replay, all storage
+channels follow strict data contracts.
+
+### Feed archive contract
+
+`/data/archive/feed/YYYY-MM-DD.csv`
+
+Properties:
+
+* Append-only
+* One file per UTC day
+* Deduplicated by `Timestamp`
+* Same schema as `aggregated.csv`
+* Chronologically ordered
+
+Schema (10 columns):
+
+```
+Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty,
+AvgPrice, ClosePrice, HiPrice, LowPrice
+```
+
+Rules:
+
+* `Timestamp` is unique within a file
+* `Timestamp` is minute-aligned
+* Rows must be strictly increasing in time
+* Files are immutable after day close
+
+The feed archive is the **canonical historical dataset** for research
+and backtesting.
+
+All offline analysis must use the archive rather than the rolling
+`aggregated.csv` file.
+
+---
+
+### Research decision archive contract
+
+`/data/archive/deltascout/YYYY-MM-DD.jsonl`
+
+Properties:
+
+* Append-only
+* Never truncated
+* One JSON object per event
+* Events written in runtime order
+
+Every record contains:
+
+```
+schema
+seq
+event
+ts
+```
+
+Where:
+
+* `schema` — archive schema version
+* `seq` — monotonic session sequence number
+* `event` — event type
+* `ts` — event timestamp
+
+Supported events:
+
+```
+DELTA_MAX
+DELTA_MIN
+CANDIDATE_COMPARISON_REJECT
+CANDIDATE_GATE_REJECT
+PEAK_EMIT
+```
+
+---
+
+### Event ordering guarantees
+
+Within a single runtime session:
+
+```
+seq strictly increases
+```
+
+Across sessions:
+
+```
+timestamp order is preserved
+```
+
+The archive therefore forms a **complete deterministic trace
+of the DeltaScout decision pipeline**.
+
+---
+
+### Separation from runtime logs
+
+Runtime log:
+
+```
+/data/logs/deltascout.log
+```
+
+Research archive:
+
+```
+/data/archive/deltascout/
+```
+
+The runtime log may be truncated and is used only for live consumers
+(Buyer / Executor).
+
+The research archive is **permanent and immutable**.
+
+---
+
+## Ізоляція дослідницького архіву
+
+- Окремий файл від `deltascout.log` — Buyer і Executor його **не читають**
+- Не використовує truncation логіку live bus
+- Помилки запису в архів **ніколи** не блокують емісію PEAK
+- Архівні файли — read-only для аналізу, write-only для DeltaScout
+
+---
+
+## Як користуватись дослідницьким шаром (Phase-1)
+
+Фаза 1 додає до системи дослідницький шар, який дозволяє аналізувати
+сигнали DeltaScout на основі накопичених архівів.
+Нижче описано типовий workflow використання.
+
+---
+
+### 1. Накопичення даних
+
+Система автоматично накопичує два архіви:
+
+```
+/data/archive/feed/YYYY-MM-DD.csv
+/data/archive/deltascout/YYYY-MM-DD.jsonl
+```
+
+Ніяких дій виконувати не потрібно.
+Рекомендовано накопичити **1–2 тижні даних**, щоб отримати статистично корисну вибірку.
+
+---
+
+### 2. Побудова дослідницького dataset сигналів
+
+Запустіть:
+
+```
+python scripts/offline/build_phase1_derived.py
+```
+
+Скрипт об'єднає:
+
+```
+feed archive + DeltaScout events
+```
+
+та побудує dataset сигналів. Результат з'явиться у:
+
+```
+/data/archive/datasets/
+```
+
+---
+
+### 3. Побудова dataset результатів угод
+
+Запустіть:
+
+```
+python scripts/offline/build_close_outcomes.py
+```
+
+Скрипт пов'яже:
+
+```
+signal → trade → результат
+```
+
+та побудує dataset результатів. Результат з'явиться у:
+
+```
+/data/archive/datasets/close_outcomes.csv
+```
+
+---
+
+### 4. Аналіз сигналів
+
+Після побудови dataset можна запускати дослідницькі скрипти.
+
+Приклад:
+
+```
+python scripts/offline/signal_density_map.py
+```
+
+Ці скрипти дозволяють аналізувати:
+
+- розподіл сигналів
+- прибутковість сигналів
+- ефективність фільтрів
+- пропущені можливості
+
+---
+
+### Рекомендований workflow
+
+Раз на тиждень виконувати:
+
+```
+python scripts/offline/build_phase1_derived.py
+python scripts/offline/build_close_outcomes.py
+```
+
+Після цього можна запускати дослідницькі скрипти для аналізу.
+
+---
+
+### Важливо
+
+Запускайте офлайн-скрипти **з кореня репозиторію**.
+
+```
+cd project_root
+python scripts/offline/build_phase1_derived.py
+```
+
+Це гарантує правильні шляхи до архівів.
+
+---
+
+## Подальший розвиток дослідницького шару
+
+Дослідницький шар буде розвиватись у декілька фаз.
+
+---
+
+### Phase 1 — Data accumulation
+
+Мета: накопичити великий масив спостережень.
+
+Очікуваний обсяг:
+
+```
+3–6 місяців хвилинних даних
+```
+
+Завдання:
+
+- накопичення feed archive
+- накопичення DeltaScout decision archive
+- побудова базових dataset.
+
+---
+
+### Phase 2 — Signal research
+
+Мета: знайти статистичний edge.
+
+Напрями досліджень:
+
+- signal density maps
+- profitability by delta bucket
+- profitability by regime
+- reject signal analysis
+- threshold sensitivity.
+
+---
+
+### Phase 3 — Strategy modelling
+
+Мета: побудувати нові моделі сигналів.
+
+Можливі напрямки:
+
+- adaptive thresholds
+- regime-specific signals
+- multi-factor signal scoring.
+
+---
+
+### Phase 4 — Production strategy
+
+Після статистичної перевірки моделі можуть бути інтегровані
+у торгову систему.
+
+Це може включати:
+
+- нові гейти
+- зміну порогів
+- нові типи сигналів.
+
+---
 
 ## Configuration
-
-Environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FILE_PATH` | `/data/feed/aggregated.csv` | Input CSV path |
 | `DELTASCOUT_LOG` | `/data/logs/deltascout.log` | Live signal bus output |
 | `RESEARCH_ARCHIVE_DIR` | `/data/archive/deltascout` | Research archive directory |
-| `POLL_SECS` | `20` | Feed poll interval (seconds) |
-| `ROLL_WINDOW_MIN` | `180` | Rolling window size (minutes) |
-| `STARTUP_LOOKBACK_MIN` | `1500` | Warmup lookback rows |
-| `WEBHOOK_URL` | — | Optional debug webhook endpoint |
+| `POLL_SECS` | `20` | Feed poll interval |
+| `ROLL_WINDOW_MIN` | `180` | Rolling window (minutes) |
+| `STARTUP_LOOKBACK_MIN` | `1500` | Warmup rows |
+| `WEBHOOK_URL` | — | Debug webhook |
 
-Gate/threshold parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN`, `IMB_LONG_MAX`,
-`IMB_SHORT_MIN`, `IMB_SHORT_MAX`, `VWAP_MAX_DIST_USD`, etc. See `.env.example`.
+Gate parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN/MAX`, `IMB_SHORT_MIN/MAX`, `VWAP_MAX_DIST_USD`. See `.env.example`.
 
 ## Run
 
@@ -83,8 +398,6 @@ Gate/threshold parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN`, `IMB_LONG_
 pip install pandas numpy
 python -u delta_scout.py
 ```
-
-Or via Docker (see `docker-compose.yml` in project root).
 
 ## Tests
 

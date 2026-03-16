@@ -1,95 +1,133 @@
 ## Execution-first Order-Flow Analytics Stack for Binance Spot
 (VPS • Docker • n8n • Telegram • Binance Spot)
 
-This repository is an end-to-end **market data → analytics → alerts → execution** stack deployed on a VPS.
-Goal: demonstrate a **full spectrum system**, not a single script.
+End-to-end **market data → analytics → alerts → execution** stack deployed on a VPS.
 
-**Pipeline:** Binance Market Feed → VPS (Docker) → Aggregator/Analytics → n8n automation → Telegram alerts → Binance Spot API (Executor)
+**Pipeline:** Binance WS → Aggregator → DeltaScout → Buyer / Executor → Telegram / Binance API
 
-> **Disclaimer:** This is an educational/engineering project. **Not financial advice.** Use at your own risk.
+> **Disclaimer:** Educational/engineering project. **Not financial advice.**
 
-### Scope
-This is a demonstration / research project focused on:
-
-- real-time market data ingestion and aggregation
-- order-flow based signal detection
-- execution flow with explicit risk and state control
-- safe separation between data, signals, and execution
-- designing systems that can survive partial fills, latency, and API failures
-- **research instrumentation** for offline analysis and signal quality evaluation
-
-## Important
-- No trading strategy or profitability claims are included
-- Production-ready execution logic and integrations are developed
-  separately and adapted within individual client projects
+---
 
 ## Components
 
-| Module | Path | Role |
-|--------|------|------|
-| **Aggregator** | `aggregator/` | Real-time Binance WS → 1-minute CSV feed + daily feed archive |
-| **DeltaScout** | `deltascout/` | Order-flow signal detection with Phase 1 research instrumentation |
-| **Executor** | `executor/` | Execution flow (orders, state, risk handling) |
-| **Buyer** | `buyer/` | Alert / action handling module |
-| **Offline scripts** | `scripts/offline/` | Derived dataset builders for research analysis |
+| Module | Path | What it does |
+|--------|------|--------------|
+| **Aggregator** | `aggregator/` | Connects to Binance WS, aggregates trades into 1-minute CSV rows |
+| **DeltaScout** | `deltascout/` | Reads CSV feed, detects delta peaks, emits PEAK signals |
+| **Buyer** | `buyer/` | Reacts to PEAK signals, sends Telegram alerts via n8n |
+| **Executor** | `executor/` | Reacts to PEAK signals, manages positions on Binance Spot API |
+| **Offline scripts** | `scripts/offline/` | Builds derived research datasets from archived data |
 
-## Data Architecture
+---
 
-### Live data channels
+## What writes where
 
-| Channel | Container path | Host path | Format | Role |
-|---------|---------------|-----------|--------|------|
-| **Market feed** | `/app/feed/aggregated.csv` | `data/feed/aggregated.csv` | CSV, 10 columns | Rolling 1500-row live feed from Aggregator |
-| **Signal bus** | `/data/logs/deltascout.log` | `data/logs/deltascout.log` | JSONL | PEAK events consumed by Buyer and Executor (truncated at 500 rows) |
-| **Execution log** | `/data/logs/executor.log` | `data/logs/executor.log` | JSONL | Executor actions (open, close, state transitions) |
+### Aggregator writes
 
-### Research archive (Phase 1)
+| What | Path (container) | Path (host) | Format | Behaviour |
+|------|-------------------|-------------|--------|-----------|
+| Live feed | `/app/feed/aggregated.csv` | `data/feed/aggregated.csv` | CSV, 10 columns | Rolling 1500 rows (oldest dropped) |
+| **Feed archive** | `/data/archive/feed/YYYY-MM-DD.csv` | `data/archive/feed/YYYY-MM-DD.csv` | CSV, 10 columns | Append-only, one file per day, dedup by Timestamp |
 
-| Channel | Container path | Host path | Format | Retention |
-|---------|---------------|-----------|--------|-----------|
-| **Feed archive** | `/data/archive/feed/YYYY-MM-DD.csv` | `data/archive/feed/YYYY-MM-DD.csv` | CSV, 10 columns | Append-only, daily files, dedup by Timestamp |
-| **Decision archive** | `/data/archive/deltascout/YYYY-MM-DD.jsonl` | `data/archive/deltascout/YYYY-MM-DD.jsonl` | JSONL | Append-only, all decision events per day |
+Every minute the Aggregator writes one row to the live feed **and** appends the same row to the daily archive.
+The live feed is a sliding window for DeltaScout. The archive is permanent storage for research.
 
-### Feed CSV schema (10 columns)
+### DeltaScout writes
+
+| What | Path (container) | Path (host) | Format | Behaviour |
+|------|-------------------|-------------|--------|-----------|
+| **PEAK signals** | `/data/logs/deltascout.log` | `data/logs/deltascout.log` | JSONL | Live bus for Buyer/Executor. Truncated at 500 rows |
+| **Research archive** | `/data/archive/deltascout/YYYY-MM-DD.jsonl` | `data/archive/deltascout/YYYY-MM-DD.jsonl` | JSONL | Append-only, one file per day. Never truncated |
+
+### Executor writes
+
+| What | Path (container) | Path (host) | Format |
+|------|-------------------|-------------|--------|
+| Action log | `/data/logs/executor.log` | `data/logs/executor.log` | JSONL |
+| State | `/data/state/executor_state.json` | `data/state/executor_state.json` | JSON |
+
+---
+
+## PEAK signal lifecycle
+
+```
+Aggregator                DeltaScout                    Buyer / Executor
+    │                         │                              │
+    │  aggregated.csv row     │                              │
+    ├────────────────────────►│                              │
+    │                         │  delta detection             │
+    │                         │  comparison (3/3 rule)       │
+    │                         │  gate checks                 │
+    │                         │         │                    │
+    │                         │    PASS │ FAIL               │
+    │                         │         │                    │
+    │                         │    ┌────┴────┐               │
+    │                         │    │ PEAK    │ reject event  │
+    │                         │    │ signal  │ → research    │
+    │                         │    └────┬────┘   archive     │
+    │                         │         │                    │
+    │                         │  deltascout.log (JSONL)      │
+    │                         ├────────────────────────────►│
+    │                         │                         reads PEAK,
+    │                         │  research archive       opens position
+    │                         │  (PEAK_EMIT mirror)     or sends alert
+    │                         │                              │
+```
+
+**PEAK** is the core signal. It means DeltaScout detected a delta extreme that passed all checks:
+- Rolling window ownership (strongest delta in the window)
+- 3/3 comparison rule (beats previous peak on price, volume, AND vwap)
+- Gate filters (EMA50, VWAP position, CHOP30, COH10, IMB range)
+
+Each PEAK is written to `deltascout.log` (live bus) and mirrored as `PEAK_EMIT` to the research archive.
+
+---
+
+## Research archive
+
+The research archive captures every decision point in the DeltaScout pipeline.
+It is **separate** from the live signal bus and is never read by trading components.
+
+### Events recorded at runtime
+
+| Event | When | What it tells you |
+|-------|------|-------------------|
+| `DELTA_MAX` | New rolling window max detected | Raw delta peak before any filtering |
+| `DELTA_MIN` | New rolling window min detected | Raw delta peak before any filtering |
+| `CANDIDATE_COMPARISON_REJECT` | Peak failed base check or 3/3 rule | Why a candidate was rejected (reason: `no_prev_peak`, `direction_mismatch`, `vwap_side`, `vwap_distance`, `3of3_fail`) |
+| `CANDIDATE_GATE_REJECT` | Peak passed comparison but failed a gate | Which gate blocked it (reason: `ema50_regime`, `vwap_regime`, `chop30`, `coh10`, `imb_band`) + all gate values |
+| `PEAK_EMIT` | Peak passed everything | Full PEAK payload + gate values at emission time |
+
+### Events derived offline
+
+| Event | Built from | Script |
+|-------|-----------|--------|
+| `WINDOW_OWNERSHIP_MISS` | DELTA_MAX/MIN + feed archive | `scripts/offline/build_phase1_derived.py` |
+| `EXEC_CLOSE` | Executor log + state | `scripts/offline/build_close_outcomes.py` |
+
+### Record format
+
+```json
+{"schema": 1, "event": "DELTA_MAX", "seq": 42, "ts": "2026-03-16 14:44:00", "kind": "long", "delta": 114.88, ...}
+```
+
+`schema` — format version, `seq` — monotonic counter per session, `event` — type name.
+
+---
+
+## Feed CSV schema
 
 ```
 Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
 ```
 
-### Research event types (runtime)
+Used by both live feed and feed archive (identical format).
 
-| Event | Trigger | Key fields |
-|-------|---------|------------|
-| `DELTA_MAX` | New rolling window maximum | ts, delta, vol, imb, price, vwap, poc |
-| `DELTA_MIN` | New rolling window minimum | ts, delta, vol, imb, price, vwap, poc |
-| `CANDIDATE_COMPARISON_REJECT` | Failed base check or 3/3 rule | ts, kind, reject_reason, prev_* |
-| `CANDIDATE_GATE_REJECT` | Failed gate check (EMA50/VWAP/CHOP30/COH10/IMB) | ts, kind, reject_reason, gate_values, thresholds |
-| `PEAK_EMIT` | Successful PEAK (mirror to archive) | Full PEAK payload + gate values |
-
-Every research event includes `schema` (version), `event` (type), `seq` (monotonic counter), `ts` (timestamp).
-
-### Derived events (offline)
-
-| Event | Source | Script |
-|-------|--------|--------|
-| `WINDOW_OWNERSHIP_MISS` | Reconstructed from DELTA_MAX/MIN + feed data | `scripts/offline/build_phase1_derived.py` |
-| `EXEC_CLOSE` | Executor log + state snapshots | `scripts/offline/build_close_outcomes.py` |
-
-### Isolation guarantees
-
-- Research archive is a **separate channel** from the live signal bus (`deltascout.log`)
-- Research writes never pass through live-bus truncation logic
-- Research write failures are soft-fail and never block PEAK emission
-- Archive files are never read by live trading components
-
-## Architecture notes
-
-- Aggregator maintains a rolling 1500-row live CSV and simultaneously appends each row to the daily feed archive
-- DeltaScout processes the live CSV through a five-stage pipeline (feed → delta detection → comparison → gates → PEAK emit), logging research events at each decision point
-- The research archive enables offline reconstruction of the full decision funnel, including events invisible to the live system (window ownership misses, late peak recognition)
-
-For the full research specification, see [DeltaScout_Research_Phase1_Spec.md](DeltaScout_Research_Phase1_Spec.md).
+---
 
 ## Notes
-This repository is intended as a **portfolio and technical showcase**
-to demonstrate system design and engineering approach.
+
+This repository is a **portfolio and technical showcase** demonstrating system design and engineering approach.
+
+For the full research specification, see [DeltaScout_Research_Phase1_Spec.md](DeltaScout_Research_Phase1_Spec.md).
