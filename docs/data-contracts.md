@@ -71,7 +71,9 @@ Each line is one JSON object.
 
 Notes
 
-Buyer and Executor must not write back to deltascout.log.
+Buyer and Executor consume the PEAK stream from `deltascout.log`.
+Current repository behavior also includes Buyer feedback events (for example `CLOSED`) appended to
+the same file and consumed by DeltaScout state handling.
 
 Consumers should implement deduplication (hash or event id).
 
