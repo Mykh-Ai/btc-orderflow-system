@@ -51,7 +51,65 @@ def _filter_df_by_date(df: pd.DataFrame, ts_col: str, source_date: str) -> pd.Da
     return out.drop(columns=["_date"])
 
 
-def _load_close_events(exec_log_file: Path, state_file: Path) -> list[dict[str, Any]]:
+def _load_trade_outcomes_events(trade_outcomes_file: Path, source_date: str | None = None) -> list[dict[str, Any]]:
+    if not trade_outcomes_file.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for row in read_jsonl(trade_outcomes_file):
+        if not isinstance(row, dict):
+            continue
+        lc = row.get("last_closed") if isinstance(row.get("last_closed"), dict) else None
+        if not lc:
+            continue
+        evt: dict[str, Any] = {
+            # top-level record metadata
+            "schema": row.get("schema"),
+            "event": row.get("event"),
+            "record_ts": row.get("ts"),
+            "symbol": row.get("symbol"),
+            "source": row.get("source"),
+            # compatibility hints
+            "action": "CLOSE",
+        }
+
+        # flatten full last_closed snapshot with stable prefix
+        for k, v in lc.items():
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                evt[f"lc_{k}"] = v
+            elif isinstance(v, dict) and k == "prices":
+                for pk, pv in v.items():
+                    if isinstance(pv, (str, int, float, bool)) or pv is None:
+                        evt[f"lc_prices_{pk}"] = pv
+            else:
+                # keep small nested event payload for exact join support
+                if k == "src_evt" and isinstance(v, dict):
+                    evt["src_evt"] = v
+
+        # normalized aliases to keep existing join/derivation semantics
+        evt["ts"] = lc.get("ts") or row.get("ts")
+        evt["closed_at"] = lc.get("closed_at")
+        evt["mode"] = lc.get("mode")
+        evt["reason"] = lc.get("reason") or lc.get("close_reason")
+        evt["close_reason"] = lc.get("close_reason") or lc.get("reason")
+        evt["close_price"] = lc.get("close_price")
+        evt["side"] = lc.get("side")
+        evt["entry"] = lc.get("entry")
+        evt["sl"] = lc.get("sl")
+
+        if source_date:
+            evt_ts = pd.to_datetime(evt.get("ts") or evt.get("closed_at"), utc=True, errors="coerce")
+            if pd.isna(evt_ts) or evt_ts.strftime("%Y-%m-%d") != source_date:
+                continue
+        events.append(evt)
+    return events
+
+
+def _load_close_events(exec_log_file: Path, state_file: Path, trade_outcomes_file: Path, source_date: str) -> list[dict[str, Any]]:
+    trade_events = _load_trade_outcomes_events(trade_outcomes_file, source_date=source_date)
+    if trade_events:
+        return trade_events
+
+    # legacy/backfill compatibility path when canonical trade outcomes are unavailable
     events = []
     if exec_log_file.exists():
         for r in read_jsonl(exec_log_file):
@@ -83,6 +141,13 @@ def _close_identity_key(row: dict[str, Any]) -> str:
     close_price = _norm_num(row.get("close_price"))
     entry = _norm_num(row.get("entry"))
     sl = _norm_num(row.get("sl"))
+    trade_key = str(row.get("lc_trade_key") or row.get("trade_key") or "").strip()
+    symbol = str(row.get("symbol") or row.get("lc_symbol") or "").strip().upper()
+
+    if trade_key:
+        raw = "|".join(["trade_key", trade_key, symbol, reason, ts, side])
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
     src_evt = row.get("src_evt") if isinstance(row.get("src_evt"), dict) else {}
     src_evt_ts_parsed = pd.to_datetime(src_evt.get("ts"), utc=True, errors="coerce")
     src_evt_ts = "" if pd.isna(src_evt_ts_parsed) else src_evt_ts_parsed.floor("s").isoformat()
@@ -198,6 +263,13 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "peak_imb": (peak or {}).get("imb"),
             "peak_vol": (peak or {}).get("vol"),
         }
+
+        extra_cols = {
+            k: v
+            for k, v in r.items()
+            if k.startswith("lc_") or k in {"schema", "event", "record_ts", "symbol", "source"}
+        }
+        row.update(extra_cols)
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -227,6 +299,11 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "peak_delta",
             "peak_imb",
             "peak_vol",
+            "schema",
+            "event",
+            "record_ts",
+            "symbol",
+            "source",
         ],
     )
 
@@ -239,9 +316,10 @@ def run(args: argparse.Namespace) -> None:
     archive_file = input_root / "archive" / "deltascout" / f"{args.date}.jsonl"
     exec_log = Path(args.exec_log) if args.exec_log else input_root / "logs" / "executor.log"
     state_file = Path(args.state_file) if args.state_file else input_root / "state" / "executor_state.json"
+    trade_outcomes_file = Path(args.trade_outcomes_file) if args.trade_outcomes_file else input_root / "state" / "trade_outcomes.jsonl"
 
     peaks = _load_peak_events(archive_file)
-    close_events = _load_close_events(exec_log, state_file)
+    close_events = _load_close_events(exec_log, state_file, trade_outcomes_file, args.date)
     peaks = _filter_df_by_date(peaks, "event_ts", args.date)
     close_events = _filter_close_events_by_date(close_events, args.date)
     close_events = _dedupe_close_events(close_events)
@@ -256,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date", required=True, help="Date in YYYY-MM-DD")
     p.add_argument("--input-root", default="/data", help="Root with archive/logs/state")
     p.add_argument("--output-root", default="/data/archive/datasets", help="Output dataset root")
+    p.add_argument("--trade-outcomes-file", default=None, help="Optional explicit trade_outcomes.jsonl path")
     p.add_argument("--exec-log", default=None, help="Optional explicit executor.log path")
     p.add_argument("--state-file", default=None, help="Optional explicit executor_state.json path")
     p.add_argument("--window-min", type=int, default=360, help="Fallback join window in minutes")
