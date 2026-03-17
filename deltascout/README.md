@@ -236,62 +236,71 @@ Gate parameters: `CHOP30_MAX`, `COH10_MIN`, `IMB_LONG_MIN/MAX`, `IMB_SHORT_MIN/M
 /data/archive/feed/YYYY-MM-DD.csv
 /data/archive/deltascout/YYYY-MM-DD.jsonl
 ```
-
 Ніяких дій виконувати не потрібно.
 Рекомендовано накопичити **1–2 тижні даних**, щоб отримати статистично корисну вибірку.
 
 ---
 
-### 2. Побудова дослідницького dataset сигналів
+###### 2. Побудова dataset-ів у день закриття угоди
 
-Запустіть:
+У день закриття угоди на сервері потрібно запустити Phase-1 rebuild.
 
-```
-python scripts/offline/build_phase1_derived.py
-```
+Використовується мікрокоманда:
 
-Скрипт об'єднає:
-
-```
-feed archive + DeltaScout events
-```
-
-та побудує dataset сигналів. Результат з'явиться у:
-
-```
-/data/archive/datasets/
-```
-
----
-
-### 3. Побудова dataset результатів угод
-
-Запустіть:
-
-```
-python scripts/offline/build_close_outcomes.py
-```
-
-Скрипт пов'яже:
-
-```
-signal → trade → результат
-```
-
-та побудує dataset результатів. Результат з'явиться у:
-
-```
-/data/archive/datasets/close_outcomes.csv
-```
-### 4. Аналіз сигналів
-
-Після побудови dataset можна запускати дослідницькі скрипти.
+```bash
+./run_phase1_after_close.sh MM-DD
 
 Приклад:
 
-```
-python scripts/offline/signal_density_map.py
-```
+./run_phase1_after_close.sh 03-17
+
+Скрипт автоматично підставляє рік 2026 і виконує:
+
+build_phase1_derived
+
+build_close_outcomes
+
+3. Що повинно з’явитись після запуску
+
+Після виконання мікрокоманди потрібно перевірити:
+
+ls /root/volume-alert/data/archive/datasets
+
+Очікування:
+
+створені або оновлені файли за дату закриття:
+
+reject_dataset_YYYY-MM-DD.csv
+
+baseline_init_YYYY-MM-DD.csv
+
+window_owner_miss_YYYY-MM-DD.csv
+
+late_peak_YYYY-MM-DD.csv
+
+close_outcomes_YYYY-MM-DD.csv
+
+4. Перевірка результату угоди
+
+Перевірка dataset результатів угод:
+
+head -n 20 /root/volume-alert/data/archive/datasets/close_outcomes_YYYY-MM-DD.csv
+
+Очікування:
+
+у файлі є рядок по закритій угоді
+
+close_reason відповідає фактичному результату (SL, TP тощо)
+
+5. Важливо
+
+запуск виконується вручну
+
+дата для запуску — це дата закриття угоди (UTC)
+
+дата відкриття угоди значення не має
+
+якщо join_status = missing, це означає, що відповідний PEAK_EMIT відсутній у research archive
 
 Ці скрипти дозволяють аналізувати:
 
@@ -299,32 +308,6 @@ python scripts/offline/signal_density_map.py
 - прибутковість сигналів
 - ефективність фільтрів
 - пропущені можливості
-
----
-
-### Рекомендований workflow
-
-Раз на тиждень виконувати:
-
-```
-python scripts/offline/build_phase1_derived.py
-python scripts/offline/build_close_outcomes.py
-```
-
-Після цього отримані dataset можна використовувати для статистичного аналізу.
-
----
-
-### Важливо
-
-Запускайте офлайн-скрипти **з кореня репозиторію**.
-
-```
-cd project_root
-python scripts/offline/build_phase1_derived.py
-```
-
-Це гарантує правильні шляхи до архівів.
 
 ---
 
