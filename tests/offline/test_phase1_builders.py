@@ -6,6 +6,8 @@ from scripts.offline.build_close_outcomes import (
     _filter_df_by_date as _filter_close_df_by_date,
     _dedupe_close_events,
     _filter_close_events_by_date,
+    _load_close_events,
+    _load_trade_outcomes_events,
     _load_peak_events,
     derive_close_outcomes,
 )
@@ -158,4 +160,98 @@ def test_close_dedup_log_and_state_one_second_timestamp_skew():
         "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long"},
     }
     deduped = _dedupe_close_events([log_evt, state_evt])
+    assert len(deduped) == 1
+
+
+def test_trade_outcomes_primary_and_last_closed_flatten(tmp_path):
+    trade_outcomes = tmp_path / "trade_outcomes.jsonl"
+    trade_outcomes.write_text(
+        "\n".join(
+            [
+                '{"schema":2,"event":"EXEC_CLOSE","ts":"2026-01-01T00:31:00Z","symbol":"BTCUSDC","source":"executor","last_closed":{"ts":"2026-01-01T00:30:00Z","mode":"paper","reason":"TP1","side":"LONG","qty":0.01,"entry":100.0,"entry_ref":100.2,"entry_actual":100.1,"opened_at":"2026-01-01T00:05:00Z","sl":99.0,"close_price":102.0,"trade_key":"TK-1","order_id":999,"order_id_sl":111,"order_id_tp1":222,"order_id_tp2":333,"qty1":0.003,"qty2":0.003,"qty3":0.004,"tp1_done":true,"tp2_done":false,"sl_done":false,"trail_active":true,"trail_sl_price":99.5,"prices":{"entry":100.0,"sl":99.0},"src_evt":{"ts":"2026-01-01T00:10:00Z","kind":"long","price":100.0}}}',
+                '{"schema":2,"event":"EXEC_CLOSE","ts":"2026-01-01T01:31:00Z","symbol":"BTCUSDC","source":"executor","last_closed":{"ts":"2026-01-01T01:30:00Z","mode":"paper","reason":"SL","side":"SHORT","entry":105.0,"sl":106.0,"close_price":106.0,"trade_key":"TK-2"}}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    exec_log = tmp_path / "executor.log"
+    exec_log.write_text('{"action":"CLOSE","ts":"2026-01-01T05:00:00Z","reason":"LEGACY"}\n', encoding="utf-8")
+    state_file = tmp_path / "executor_state.json"
+    state_file.write_text('{"last_closed":{"ts":"2026-01-01T05:10:00Z","reason":"LEGACY_STATE"}}', encoding="utf-8")
+
+    loaded = _load_trade_outcomes_events(trade_outcomes)
+    assert len(loaded) == 2
+    assert loaded[0]["schema"] == 2
+    assert loaded[0]["event"] == "EXEC_CLOSE"
+    assert loaded[0]["record_ts"] == "2026-01-01T00:31:00Z"
+    assert loaded[0]["lc_trade_key"] == "TK-1"
+    assert loaded[0]["lc_entry_actual"] == 100.1
+    assert loaded[0]["lc_order_id_tp1"] == 222
+    assert loaded[0]["lc_qty3"] == 0.004
+    assert loaded[0]["lc_order_id_sl"] == 111
+    assert loaded[0]["lc_tp1_done"] is True
+    assert loaded[0]["lc_trail_active"] is True
+    assert loaded[0]["lc_prices_entry"] == 100.0
+
+    peaks = pd.DataFrame(
+        [{"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "long", "price": 100.0, "delta": 1.0, "imb": 0.6, "vol": 10.0, "seq": 1}]
+    )
+    out = derive_close_outcomes(loaded, peaks, "2026-01-01", window_min=60)
+    assert "schema" in out.columns
+    assert "event" in out.columns
+    assert "record_ts" in out.columns
+    assert "symbol" in out.columns
+    assert "source" in out.columns
+    assert "lc_trade_key" in out.columns
+    assert "lc_entry_actual" in out.columns
+    assert "lc_order_id_tp1" in out.columns
+    assert "lc_qty3" in out.columns
+    assert "lc_order_id_sl" in out.columns
+    assert "lc_tp1_done" in out.columns
+    assert "lc_trail_active" in out.columns
+    assert "lc_prices_entry" in out.columns
+
+    primary = _load_close_events(exec_log, state_file, trade_outcomes, "2026-01-01")
+    assert len(primary) == 2
+    assert all(evt.get("event") == "EXEC_CLOSE" for evt in primary)
+
+
+def test_trade_outcomes_date_aware_fallback_to_legacy(tmp_path):
+    trade_outcomes = tmp_path / "trade_outcomes.jsonl"
+    trade_outcomes.write_text(
+        '{"schema":2,"event":"EXEC_CLOSE","ts":"2026-01-02T00:31:00Z","symbol":"BTCUSDC","source":"executor","last_closed":{"ts":"2026-01-02T00:30:00Z","mode":"paper","reason":"TP1"}}\n',
+        encoding="utf-8",
+    )
+    exec_log = tmp_path / "executor.log"
+    exec_log.write_text('{"action":"CLOSE","ts":"2026-01-01T05:00:00Z","reason":"LEGACY"}\n', encoding="utf-8")
+    state_file = tmp_path / "executor_state.json"
+    state_file.write_text('{"last_closed":{"ts":"2026-01-01T05:10:00Z","reason":"LEGACY_STATE"}}', encoding="utf-8")
+
+    primary = _load_close_events(exec_log, state_file, trade_outcomes, "2026-01-01")
+    assert len(primary) == 2
+    assert all(evt.get("event") != "EXEC_CLOSE" for evt in primary)
+
+
+def test_trade_outcomes_dedupe_prefers_trade_key_identity():
+    e1 = {
+        "ts": "2026-01-01T00:30:00Z",
+        "side": "LONG",
+        "reason": "TP1",
+        "symbol": "BTCUSDC",
+        "lc_trade_key": "TK-777",
+        "close_price": 102.0,
+        "entry": 100.0,
+        "sl": 99.0,
+    }
+    e2 = {
+        "ts": "2026-01-01T00:30:01Z",
+        "side": "LONG",
+        "reason": "TP1",
+        "symbol": "BTCUSDC",
+        "lc_trade_key": "TK-777",
+        "close_price": 102.1,
+        "entry": 100.0,
+        "sl": 99.0,
+    }
+    deduped = _dedupe_close_events([e1, e2])
     assert len(deduped) == 1
