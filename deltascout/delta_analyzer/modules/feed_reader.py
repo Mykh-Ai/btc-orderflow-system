@@ -29,5 +29,14 @@ def read_feed_rows(paths: Iterable[Path]) -> list[FeedRow]:
                 price = _to_float(raw_row.get("ClosePrice"))
                 if price is None:
                     price = _to_float(raw_row.get("AvgPrice"))
-                rows.append(FeedRow(ts=ts, price=price, row=raw_row, source_file=path.name))
+                rows.append(
+                    FeedRow(
+                        ts=ts,
+                        price=price,
+                        buy_qty=_to_float(raw_row.get("BuyQty")),
+                        sell_qty=_to_float(raw_row.get("SellQty")),
+                        row=raw_row,
+                        source_file=path.name,
+                    )
+                )
     return sorted(rows, key=lambda item: item.ts)
