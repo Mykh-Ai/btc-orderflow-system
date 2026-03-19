@@ -25,6 +25,8 @@ class NormalizedEvent:
 class FeedRow:
     ts: datetime
     price: float | None
+    buy_qty: float | None
+    sell_qty: float | None
     row: dict[str, Any]
     source_file: str
 
@@ -44,6 +46,32 @@ class EventsBaseRow:
     matched_feed_ts: datetime | None
     source_file: str
     terminal_decision_present: bool
+
+
+@dataclass(frozen=True)
+class EventsContextRow:
+    ts: datetime
+    event_type: str
+    kind: str | None
+    reject_reason: str | None
+    delta: float | None
+    vol: float | None
+    imb: float | None
+    price: float | None
+    vwap: float | None
+    poc: float | None
+    matched_feed_ts: datetime | None
+    source_file: str
+    terminal_decision_present: bool
+    cum_delta_24h: float | None
+    cum_delta_180m: float | None
+    cum_delta_60m: float | None
+    cum_delta_utc_day: float | None
+    ret_15m: float | None
+    ret_60m: float | None
+    dist_vwap: float | None
+    abs_dist_vwap: float | None
+    price_vs_vwap_side: str
 
 
 @dataclass(frozen=True)
