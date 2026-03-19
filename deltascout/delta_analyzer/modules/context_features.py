@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..types import FeedRow
 
@@ -11,12 +11,13 @@ PRICE_VS_VWAP_BELOW = "below"
 
 
 class FeedContextIndex:
-    """Index feed rows once so research datasets can reuse consistent context math."""
+    """Index globally merged feed rows so Phase 2 windows stay continuous across files."""
 
     def __init__(self, feed_rows: list[FeedRow]):
+        # Feed rows are treated as one merged UTC timeline across all source files.
         self.feed_rows = sorted(feed_rows, key=lambda item: item.ts)
         self.feed_ts = [row.ts for row in self.feed_rows]
-        self.prefix_delta = self._build_prefix_delta()
+        self.prefix_delta, self.prefix_unknown = self._build_prefix_flow_state()
 
     def match_row(self, event_ts: datetime) -> FeedRow | None:
         idx = self._index_at_or_before(event_ts)
@@ -30,14 +31,18 @@ class FeedContextIndex:
             return None
         start_boundary = event_ts - lookback
         start_idx = bisect_right(self.feed_ts, start_boundary - timedelta(microseconds=1))
+        if self.prefix_unknown[end_idx + 1] - self.prefix_unknown[start_idx] > 0:
+            return None
         return self.prefix_delta[end_idx + 1] - self.prefix_delta[start_idx]
 
     def utc_day_cum_delta(self, event_ts: datetime) -> float | None:
         end_idx = self._index_at_or_before(event_ts)
         if end_idx is None:
             return None
-        day_start = event_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = self._utc_day_start(event_ts)
         start_idx = bisect_right(self.feed_ts, day_start - timedelta(microseconds=1))
+        if self.prefix_unknown[end_idx + 1] - self.prefix_unknown[start_idx] > 0:
+            return None
         return self.prefix_delta[end_idx + 1] - self.prefix_delta[start_idx]
 
     def price_delta(self, event_ts: datetime, lookback: timedelta) -> float | None:
@@ -68,10 +73,22 @@ class FeedContextIndex:
             return None
         return idx
 
-    def _build_prefix_delta(self) -> list[float]:
-        prefix = [0.0]
-        running = 0.0
+    @staticmethod
+    def _utc_day_start(ts: datetime) -> datetime:
+        if ts.tzinfo is None:
+            return ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _build_prefix_flow_state(self) -> tuple[list[float], list[int]]:
+        prefix_delta = [0.0]
+        prefix_unknown = [0]
+        running_delta = 0.0
+        running_unknown = 0
         for row in self.feed_rows:
-            running += (row.buy_qty or 0.0) - (row.sell_qty or 0.0)
-            prefix.append(running)
-        return prefix
+            if row.buy_qty is None or row.sell_qty is None:
+                running_unknown += 1
+            else:
+                running_delta += row.buy_qty - row.sell_qty
+            prefix_delta.append(running_delta)
+            prefix_unknown.append(running_unknown)
+        return prefix_delta, prefix_unknown

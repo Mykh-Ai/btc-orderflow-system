@@ -31,7 +31,7 @@ Phase 2 adds `events_context`, a research-only extension of `events_base` that r
 
 Phase 2 currently adds:
 
-- rolling cumulative delta over `24h`, `180m`, and `60m`
+- rolling cumulative delta over `24h`, `180m`, and `60m` using the full merged feed history across all discovered CSV files
 - UTC-day cumulative delta as an explicit reference frame (`cum_delta_utc_day`)
 - backward-looking price deltas over `15m` and `60m`
 - event-price distance from VWAP
@@ -39,8 +39,10 @@ Phase 2 currently adds:
 Important naming rule:
 
 - `cum_delta_24h` means rolling cumulative delta over the last 24 hours ending at the event timestamp
-- `cum_delta_utc_day` means cumulative delta from `00:00 UTC` to the event timestamp
-- these two fields must remain distinct and are not interchangeable
+- `cum_delta_24h`, `cum_delta_180m`, and `cum_delta_60m` are computed from one continuous, globally sorted feed stream across all discovered CSV files; early rows can therefore reuse prior-file / prior-day tail history when it exists
+- `cum_delta_utc_day` means cumulative delta from the true `00:00 UTC` boundary to the event timestamp, even when `event_ts` carries a non-UTC timezone offset
+- if any feed row inside the requested cumulative-delta window has missing `BuyQty` or `SellQty`, the cumulative delta field is `null` rather than silently zero-filling unknown flow
+- these fields must remain distinct and are not interchangeable
 
 The `ret_15m` and `ret_60m` fields are simple backward-looking price differences, not percentage returns.
 

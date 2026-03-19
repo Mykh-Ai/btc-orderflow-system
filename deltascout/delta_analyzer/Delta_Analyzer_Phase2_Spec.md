@@ -67,6 +67,8 @@ For each event timestamp `event_ts`, rolling windows include all feed rows where
 - `feed_ts <= event_ts`
 - `feed_ts` is inside the requested lookback duration
 
+Feed rows must be read as one merged, timestamp-sorted stream across all discovered CSV files. CSV file boundaries are not time boundaries, so early rows in one file may still consume tail history from the prior file/day when it falls inside the requested lookback window.
+
 Fields:
 
 - `cum_delta_24h`: rolling cumulative delta over the last 24 hours ending at `event_ts`
@@ -75,9 +77,11 @@ Fields:
 
 If full history is not available, compute with whatever feed rows exist in the window. Do not pad or extrapolate.
 
+If any feed row inside the requested rolling window has missing `BuyQty` or `SellQty`, cumulative delta for that window must be `null`. Unknown flow must not be silently coerced to `0.0`.
+
 ### UTC day cumulative delta reference
 
-- `cum_delta_utc_day`: cumulative delta from `00:00 UTC` on the event date through `event_ts`
+- `cum_delta_utc_day`: cumulative delta from the true `00:00 UTC` boundary on the event date through `event_ts`
 
 This field is a reference frame and must remain distinct from `cum_delta_24h`.
 
