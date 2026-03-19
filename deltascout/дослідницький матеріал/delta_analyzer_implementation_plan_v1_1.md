@@ -1,35 +1,33 @@
-# Delta Analyzer Implementation Plan v1
+# Delta Analyzer Implementation Plan v1.1
 
-## Document Status
-
-This is a working implementation plan for the `research` branch.
-
-It should be treated as:
-
-- a live design and implementation roadmap
-- a guide for future analyzer work
-- a document that may be refined as archive coverage, feature design, and research priorities evolve
-
-It should not be treated as a frozen final specification.
-
-## 1. Purpose
+## 1. Primary mission
 
 `delta_analyzer` is a research-layer component for DeltaScout.
 
-Its purpose is **not** to generate live trading signals directly and **not** to mechanically expand the existing `PEAK` logic.
+Its purpose is **not** to do academic market commentary, **not** to produce beautiful hindsight explanations, and **not** to mechanically expand the existing `PEAK` logic.
 
-Its purpose is to:
+Its real purpose is:
 
-- reconstruct market context around delta events,
-- describe market state and state transitions,
-- build research datasets from archive and feed data,
-- identify recurring market behavior patterns,
-- evaluate whether those patterns are associated with meaningful directional movement,
-- prepare the basis for future `PEAK` families and setup classes.
+- to help discover **tradable market behavior**,
+- to identify **entry contexts with asymmetric move potential**,
+- to separate noise from repeatable opportunity,
+- and to support the creation of future setup classes that can make money in live trading.
 
-The practical target of the research layer is:
+The final business objective is simple:
 
-> identify entry contexts with potential for **$1000+ directional move**.
+> **find market states and entry contexts that can help generate profitable trades.**
+
+Everything else is secondary.
+
+The research target is not “more events”.
+The research target is not “better-looking charts”.
+The research target is not “more elegant theory”.
+
+The research target is:
+
+> **trading edge with real profit potential.**
+
+In practical terms, the analyzer should prioritize contexts that can produce **large directional movement**, with special interest in moves on the order of **$1000+**.
 
 ---
 
@@ -55,11 +53,25 @@ not:
 
 **single event → instant signal conclusion**
 
+This ordering matters because the project is not trying to predict every fluctuation.
+It is trying to identify the conditions under which a trade has meaningful move potential.
+
 ---
 
 ## 3. Core research principles
 
-### 3.1 Context over isolated events
+### 3.1 Profit-first discipline
+
+All research should be evaluated against the practical objective:
+
+- can this help identify better trades?
+- can this help avoid low-quality trades?
+- can this help detect conditions that precede meaningful movement?
+- can this eventually support profitable execution?
+
+If a research path is interesting but does not move the project toward tradeable edge, it is lower priority.
+
+### 3.2 Context over isolated events
 
 A strong delta event is not sufficient on its own.
 
@@ -73,7 +85,7 @@ Each event must be studied together with:
 - structural state,
 - local and broad flow alignment or divergence.
 
-### 3.2 Market state first
+### 3.3 Market state first
 
 The analyzer must learn to describe the broader market condition before evaluating local candidates.
 
@@ -90,7 +102,7 @@ Important states include:
 - absorption-like non-progression,
 - honest directional flow.
 
-### 3.3 Research discipline
+### 3.4 Research discipline
 
 The analyzer and all future research agents must avoid the following:
 
@@ -101,7 +113,7 @@ The analyzer and all future research agents must avoid the following:
 - treating all rejects as missed opportunities,
 - using filter-loosening as the default research path.
 
-### 3.4 Existing PEAK is not the destination
+### 3.5 Existing PEAK is not the destination
 
 Current `PEAK` logic remains valuable as a reference, but the main research objective is broader:
 
@@ -119,6 +131,7 @@ Current `PEAK` logic remains valuable as a reference, but the main research obje
 4. Which events belong to reversal onset, reversal confirmation, continuation, exhaustion, or trap contexts?
 5. Which classes are associated with potential for large directional movement such as $1000+?
 6. Which families deserve formalization into future `PEAK_*` setup classes?
+7. Which findings are most likely to improve live trade selection and future profitability?
 
 ---
 
@@ -131,7 +144,8 @@ The first versions of `delta_analyzer` should **not** attempt to do the followin
 - optimize thresholds for the current `PEAK` blindly,
 - use ML before a stable feature and dataset layer exists,
 - infer profitability from visual hindsight alone,
-- collapse all event types into one generic “good/bad” score.
+- collapse all event types into one generic “good/bad” score,
+- drift into abstract research that does not help the trading mission.
 
 ---
 
@@ -344,7 +358,10 @@ Examples:
 - rolling percentiles,
 - alignment between delta and price,
 - divergence flags,
-- proximity to strong delta zones.
+- proximity to strong delta zones,
+- distance to strong delta zones,
+- return-to-delta-zone behavior,
+- reaction after revisit of strong delta zones.
 
 ### 9.4 Regime/context features
 These describe the broader market condition.
@@ -390,6 +407,9 @@ The move is already stretched and may be losing quality.
 
 ### H. Trap / false break
 The event appears directional but quickly reverses or fails.
+
+### I. Strong delta zone interaction
+Price later returns to a strong delta area and either launches, rejects, absorbs, or fails there.
 
 These are research labels, not live signals.
 
@@ -568,6 +588,10 @@ Every future model, analyzer, and research agent in DeltaScout should follow thi
 
 > DeltaScout Research does not exist to worship the current PEAK logic. It exists to map market behavior, discover repeatable formations, reconstruct market state, and turn validated behavior classes into future trading setup families with real profit potential.
 
+And one more rule:
+
+> If a research direction does not improve the ability to find profitable trades, it is not a core priority.
+
 ---
 
 ## 15. Final implementation stance
@@ -586,4 +610,4 @@ It is a structured way to answer:
 - what class of event is happening,
 - and whether that class has the potential to produce meaningful movement.
 
-That is the correct foundation for discovering future DeltaScout setup families.
+That is the correct foundation for discovering future DeltaScout setup families and, ultimately, improving trading results.

@@ -80,10 +80,10 @@ When future agents inspect early research state, this folder should be treated a
 
 ## Core Research Documents
 
-Future agents should read these documents before proposing analyzer design changes:
+Read these documents before proposing analyzer design, research priorities, or PEAK-family expansion:
 
 - `deltascout/дослідницький матеріал/research_manifesto.md`
-- `deltascout/дослідницький матеріал/delta_analyzer_implementation_plan_v1.md`
+- `deltascout/дослідницький матеріал/delta_analyzer_implementation_plan_v1_1.md`
 - `deltascout/дослідницький матеріал/2026-03-16_to_2026-03-19_initial_findings.md`
 
 ## Server Workflow
