@@ -12,8 +12,9 @@ def build_events_context_dataset(
 ) -> list[EventsContextRow]:
     """Extend Phase 1 rows with backward-looking flow and price context.
 
-    Rolling windows use all available feed rows inside each lookback window and do
-    not pad missing history; partial history is preserved as-is for honest research.
+    Rolling windows use the globally merged, timestamp-sorted feed history across
+    all discovered feed files. They do not reset at file/day boundaries, do not pad
+    missing history, and return None when the requested window includes unknown flow.
     """
 
     context_index = FeedContextIndex(feed_rows)
