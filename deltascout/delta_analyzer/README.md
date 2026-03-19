@@ -47,7 +47,7 @@ python -m deltascout.delta_analyzer.cli
 Optional overrides:
 
 ```bash
-python -m deltascout.delta_analyzer.cli --archive-glob "deltascout/дослідницький матеріал/raw_archive/*.jsonl" --feed-glob "deltascout/дослідницький матеріал/raw_feed/*.csv"
+python -m deltascout.delta_analyzer.cli --archive-glob "deltascout/research_material/raw_archive/*.jsonl" --feed-glob "deltascout/research_material/raw_feed/*.csv"
 ```
 
 The default globs already point to the local research-material folder copied for DeltaScout research.

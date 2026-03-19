@@ -68,7 +68,7 @@ Do not assume accepted-signal analytics is the first priority unless new archive
 
 The first copied working material is stored here:
 
-- `deltascout/дослідницький матеріал/`
+- `deltascout/research_material/`
 
 Current contents:
 
@@ -82,9 +82,9 @@ When future agents inspect early research state, this folder should be treated a
 
 Read these documents before proposing analyzer design, research priorities, or PEAK-family expansion:
 
-- `deltascout/дослідницький матеріал/research_manifesto.md`
-- `deltascout/дослідницький матеріал/delta_analyzer_implementation_plan_v1_1.md`
-- `deltascout/дослідницький матеріал/2026-03-16_to_2026-03-19_initial_findings.md`
+- `deltascout/research_material/research_manifesto.md`
+- `deltascout/research_material/delta_analyzer_implementation_plan_v1_1.md`
+- `deltascout/research_material/2026-03-16_to_2026-03-19_initial_findings.md`
 
 ## Server Workflow
 
@@ -166,7 +166,7 @@ ls -lh /data/archive/datasets | tail -n 20
 - Prefer additive instrumentation and analysis over broad refactors
 - When making research claims, anchor them to copied archive material or server inspection
 - If the next step is analytics, start from the reject funnel and event coverage before inventing strategy changes
-- When useful, copy raw server material into `deltascout/дослідницький матеріал/` before designing analysis code
+- When useful, copy raw server material into `deltascout/research_material/` before designing analysis code
 
 ## Recommended Next Work
 
