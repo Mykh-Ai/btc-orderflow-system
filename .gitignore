@@ -20,6 +20,7 @@ __pycache__/
 
 # Review artifacts
 PATCH_REVIEW.md
+AGENTS.md
 
 # OS
 .DS_Store
