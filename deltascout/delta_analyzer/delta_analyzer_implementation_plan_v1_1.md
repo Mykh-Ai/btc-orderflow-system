@@ -758,6 +758,73 @@ Recommended pattern:
 
 - `python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root ... --output-root ...`
 
+### Incremental build discipline for Phase 2.5+
+
+This is a **forward design rule** for Phase 2.5 and later review/output layers.
+It describes the intended long-term operating model.
+It does **not** claim that incremental manifests or rebuild-skipping logic already exist today unless later implementation explicitly adds them.
+
+The current research archive is still small, so occasional full-history rebuilds remain acceptable during active phase development, schema churn, and research iteration.
+However, as the archive grows across multiple months, routine analyzer and review runs should become **incremental by default**.
+A full rebuild should remain available, but only as an **explicit operator action**.
+
+#### Operating modes
+
+Future Phase 2.5+ builders should distinguish between two operating modes:
+
+1. **Incremental update**
+   - the routine default mode
+   - process only dates that are new, missing, incomplete, outdated, explicitly marked dirty, or otherwise eligible for rebuild
+2. **Full rebuild**
+   - an intentional operator-triggered mode
+   - recompute all targeted dates after builder/schema/version changes, migration work, or deliberate historical regeneration
+
+#### Date-scoped outputs
+
+Review and output artifacts should remain **date-scoped**.
+They should be built by:
+
+- a single date, or
+- an explicit date range
+
+Future routine operation should **not** blindly recompute the entire archived research base on every run.
+
+#### Lightweight processed-days manifest
+
+To support future incremental behavior, each review or output family may maintain a lightweight manifest or registry.
+This should stay simple and file-based unless a stronger need appears later.
+
+A per-date manifest row or entry may include:
+
+- `date`
+- `output_family`
+- `build_status`
+- `built_at`
+- `builder_version` or `schema_version`
+- optional `dirty` / `needs_rebuild`
+
+This is intentionally minimal.
+It does **not** require database infrastructure, queue orchestration, content hashes, or DAG scheduling as part of the Phase 2.5 design rule.
+
+#### Minimal rebuild criteria
+
+In future incremental mode, a date should be eligible for rebuild if any of the following are true:
+
+- expected outputs are missing
+- prior build status is not successful
+- builder/schema version changed
+- source inputs changed materially
+- operator requests a force rebuild
+- the date is explicitly marked dirty
+
+Otherwise, a date with already-built successful outputs should normally be skipped during routine runs.
+
+#### Watcher relationship
+
+The future post-close watcher should remain naturally incremental.
+For ordinary daily operation, it should process only the date implied by the newly detected close event.
+It should **not** trigger full-history analyzer or review rebuilds as part of the normal daily path.
+
 This mode should:
 
 1. locate the required daily inputs
