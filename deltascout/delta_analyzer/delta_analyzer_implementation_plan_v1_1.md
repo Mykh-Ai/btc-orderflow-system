@@ -461,6 +461,11 @@ Success criteria:
 
 Phase 2.5 introduces a deterministic research-review build layer on top of the already validated Phase 2 `events_context` dataset.
 
+Status note:
+- Phase 2.5 is implemented.
+- Current implemented outputs are `accepted_event_context_YYYY-MM-DD.csv`, `reject_event_context_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and `daily_review_summary_YYYY-MM-DD.md`.
+- `interesting_rejects_YYYY-MM-DD.csv` and `event_sequence_review_YYYY-MM-DD.csv` remain future review-layer extensions beyond the current implemented baseline.
+
 Its purpose is **not** to expand signal logic or redesign PEAK.
 Its purpose is to convert archived daily materials into a research-operable review package that helps accumulate evidence for:
 
@@ -539,14 +544,17 @@ Recommended output directory:
 
 - `data/archive/datasets/reviews/YYYY-MM-DD/`
 
-Required outputs:
+Current implemented outputs:
 
 - `accepted_event_context_YYYY-MM-DD.csv`
 - `reject_event_context_YYYY-MM-DD.csv`
-- `interesting_rejects_YYYY-MM-DD.csv`
 - `reject_reason_summary_YYYY-MM-DD.csv`
-- `event_sequence_review_YYYY-MM-DD.csv`
 - `daily_review_summary_YYYY-MM-DD.md`
+
+Future review-layer extensions:
+
+- `interesting_rejects_YYYY-MM-DD.csv`
+- `event_sequence_review_YYYY-MM-DD.csv`
 
 CSV tables are the **primary outputs**.
 The Markdown file is a **derived human-readable summary** and must be generated from the tables rather than written manually.
@@ -963,17 +971,21 @@ Success criteria:
 ### Current status
 - Phase 1: closed
 - Phase 2: closed and validated
-- Immediate next step: Phase 2.5 review loop
+- Phase 2.5: implemented
+- accepted-event linkage: implemented
+- reject-event linkage: implemented
+- reject reason summary: implemented
+- daily review summary: implemented
 
 ### Next
 Should focus on:
-- accepted-event to close-outcome research linkage
-- interesting reject triage
-- reject reason / context sanity review
+- `interesting_rejects` as the next review-layer extension
 - repeated daily review outputs built on top of validated `events_context`
+- continued accepted/reject review against accumulated evidence
 
-### After Phase 2.5 evidence accumulates
+### After current review outputs accumulate more evidence
 Should focus on:
+- evidence-based review of whether sequence features are justified next
 - evidence-based Phase 3 planning
 - evidence-based state-layer review
 - evidence-based outcome-layer expansion

@@ -130,13 +130,19 @@ Typical outputs:
 - `baseline_init_YYYY-MM-DD.parquet|csv`
 - `window_owner_miss_YYYY-MM-DD.parquet|csv`
 - `late_peak_YYYY-MM-DD.parquet|csv`
+- `events_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_reason_summary_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
 
 Builders:
 
-| Dataset area | Source | Script |
-|--------------|--------|--------|
-| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + feed archive | `scripts/offline/build_phase1_derived.py` |
-| Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts/offline/build_close_outcomes.py` |
+| Dataset area | Source | Builder |
+|--------------|--------|---------|
+| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + feed archive | `scripts.offline.build_phase1_derived` |
+| Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts.offline.build_close_outcomes` |
+| Event context + daily review artifacts | DeltaScout archive + feed archive; optional close outcomes join for accepted review rows | `deltascout.delta_analyzer` |
 
 ---
 
@@ -231,11 +237,12 @@ No manual action is required during collection.
 
 ### 2. Rebuild datasets after a trade close
 
-Run the offline builders for the UTC close date:
+In routine operation this is handled by the post-close watcher / cron flow. For a manual rebuild of the UTC close date, run:
 
 ```bash
-python scripts/offline/build_phase1_derived.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-python scripts/offline/build_close_outcomes.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
+python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
 Expected outputs:
@@ -245,6 +252,11 @@ Expected outputs:
 - `window_owner_miss_YYYY-MM-DD.*`
 - `late_peak_YYYY-MM-DD.*`
 - `close_outcomes_YYYY-MM-DD.*`
+- `events_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_reason_summary_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
 
 ### 3. Validate outputs
 
@@ -261,43 +273,31 @@ If `join_status = missing`, it means the corresponding `PEAK_EMIT` was not found
 
 ## Research Roadmap
 
-### Phase 1: Data accumulation
+### Phase 1: Foundation / base derived layer
 
 Goal:
 
 - accumulate feed archive
 - accumulate DeltaScout decision archive
-- build baseline derived datasets
+- build the base derived datasets used for reject and close-outcome research
 
-### Phase 2: Signal research
+### Phase 2: Backward-looking event context
 
-Typical directions:
+Current focus:
 
-- signal density maps
-- profitability by delta bucket
-- profitability by regime
-- reject signal analysis
-- threshold sensitivity
+- build `events_context` as the per-event context layer
+- reconstruct cumulative delta and return context around archive events
+- preserve a deterministic research surface for later review and outcome joins
 
-Future dataset registry:
+### Phase 2.5: Daily review package
 
-```text
-/data/archive/datasets/manifest.json
-```
+Current focus:
 
-This should track dataset metadata such as name, file, build time, source date range, row count, and builder script.
+- build accepted and reject review tables from `events_context`
+- summarize reject reasons for the day
+- produce a deterministic daily review summary for repeated research use
 
-### Phase 3: Strategy modeling
-
-Potential directions:
-
-- adaptive thresholds
-- regime-specific signals
-- multi-factor signal scoring
-
-### Phase 4: Production strategy
-
-After statistical validation, new signal logic may be promoted into the live trading system.
+Later phases remain research-facing and should be defined from accumulated evidence rather than assumed in advance.
 
 ---
 
@@ -305,11 +305,11 @@ After statistical validation, new signal logic may be promoted into the live tra
 
 ```bash
 pip install pandas numpy
-python -u delta_scout.py
+python -u deltascout/delta_scout.py
 ```
 
 ## Tests
 
 ```bash
-pytest deltascout/test/ -v
+pytest tests/ deltascout/test/ -v
 ```
