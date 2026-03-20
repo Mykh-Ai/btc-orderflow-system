@@ -70,6 +70,9 @@ Optional overrides:
 python -m deltascout.delta_analyzer.cli --archive-glob "deltascout/research_material/raw_archive/*.jsonl" --feed-glob "deltascout/research_material/raw_feed/*.csv"
 python -m deltascout.delta_analyzer.cli --dataset events_base
 python -m deltascout.delta_analyzer.cli --dataset events_context
+python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
 The default globs already point to the local research-material folder copied for DeltaScout research.
+
+The review-builder mode is the Phase 2.5 skeleton only: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`.
