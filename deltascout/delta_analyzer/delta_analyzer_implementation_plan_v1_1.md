@@ -256,15 +256,19 @@ Suggested fields:
 ### 8.2 `events_context`
 One row per event with local context.
 
-Suggested fields:
-- all `events_base` fields,
-- `cum_delta_day`
-- `cum_delta_60m`
+Current validated Phase 2 fields:
+- `cum_delta_24h`
 - `cum_delta_180m`
-- `cum_delta_24h` when available,
-- `ret_5m`
+- `cum_delta_60m`
 - `ret_15m`
 - `ret_60m`
+- `dist_vwap`
+- `abs_dist_vwap`
+- `price_vs_vwap_side`
+
+Future candidate context features:
+- `cum_delta_day`
+- `ret_5m`
 - `ret_180m`
 - `range_5m`
 - `range_15m`
@@ -272,11 +276,11 @@ Suggested fields:
 - `vol_pct_180`
 - `imb_pct_180`
 - `delta_pct_180`
-- `dist_vwap`
-- `abs_dist_vwap`
 - `delta_price_alignment_1m`
 - `delta_price_alignment_60m`
 - `cumdelta_price_divergence_flag`
+
+These candidate fields should be treated as future context wishlist items, not as part of the currently validated Phase 2 contract.
 
 ### 8.3 `events_market_state`
 One row per event with broader state description.
@@ -451,11 +455,368 @@ Deliverables:
 Success criteria:
 - each event can be described not only by its own row but also by its 60m/180m/day context.
 
+## Phase 2.5 — Review Builder Layer
+
+### Purpose
+
+Phase 2.5 introduces a deterministic research-review build layer on top of the already validated Phase 2 `events_context` dataset.
+
+Its purpose is **not** to expand signal logic or redesign PEAK.
+Its purpose is to convert archived daily materials into a research-operable review package that helps accumulate evidence for:
+
+- market state,
+- transition behavior,
+- candidate setup classes,
+- and later entry-timing research.
+
+This layer exists because Phase 2 already provides useful backward-looking event context, but that context still needs to be transformed into daily review artifacts that can support ongoing research.
+
+### Position in the roadmap
+
+Phase 2.5 sits between:
+
+- **Phase 2** — backward-looking event context reconstruction
+- and later phases that may introduce:
+  - sequence analysis,
+  - market-state classification,
+  - setup taxonomy,
+  - or richer outcome-aware research layers
+
+Phase 2.5 is intentionally narrow.
+It should be treated as a **review-package builder**, not as a new prediction layer.
+
+### Why this layer is needed
+
+At this point, DeltaScout already preserves:
+
+- archive events,
+- feed data,
+- `events_context`,
+- accepted `PEAK_EMIT` rows when present,
+- and close outcomes as a separate research-side source
+
+However, these materials still remain too fragmented for disciplined daily research unless they are assembled into deterministic review outputs.
+
+Without this layer:
+
+- accepted events remain isolated,
+- rejects remain difficult to triage systematically,
+- reject reasons are hard to review against real context,
+- and transition-like sequences remain hidden inside raw rows.
+
+Phase 2.5 solves that by producing daily review artifacts that can be accumulated over time.
+
+### Non-goals
+
+Phase 2.5 does **not** include:
+
+- market-state classification as established truth
+- setup classification as established truth
+- outcome prediction
+- profitability ranking
+- signal scoring
+- live-trading logic changes
+- mechanical filter loosening
+- backtester logic
+- broad feature-family expansion without evidence
+
+### Inputs
+
+For a target UTC date `YYYY-MM-DD`, Phase 2.5 consumes:
+
+- raw archive for that date
+- raw feed for that date
+- `events_context` for that date
+- `close_outcomes` for that date, when present
+
+The close-outcome source remains an **external research-side join input**, not part of the Phase 2 `events_context` contract itself.
+
+### Outputs
+
+For each processed date, the builder should write a daily review package under a deterministic output path.
+
+Recommended output directory:
+
+- `data/archive/datasets/reviews/YYYY-MM-DD/`
+
+Required outputs:
+
+- `accepted_event_context_YYYY-MM-DD.csv`
+- `reject_event_context_YYYY-MM-DD.csv`
+- `interesting_rejects_YYYY-MM-DD.csv`
+- `reject_reason_summary_YYYY-MM-DD.csv`
+- `event_sequence_review_YYYY-MM-DD.csv`
+- `daily_review_summary_YYYY-MM-DD.md`
+
+CSV tables are the **primary outputs**.
+The Markdown file is a **derived human-readable summary** and must be generated from the tables rather than written manually.
+
+### Output contracts
+
+#### 1. accepted_event_context
+
+One row per accepted archive event (`PEAK_EMIT`).
+
+Purpose:
+
+- anchor accepted events in backward-looking context
+- connect accepted events to downstream close outcomes through external research joins
+- accumulate accepted reference cases
+
+Expected fields include:
+
+- accepted event identity fields
+- base archive fields already available for the row
+- current Phase 2 context block:
+  - `cum_delta_24h`
+  - `cum_delta_180m`
+  - `cum_delta_60m`
+  - `ret_15m`
+  - `ret_60m`
+  - `dist_vwap`
+  - `abs_dist_vwap`
+  - `price_vs_vwap_side`
+- close-outcome join fields when available:
+  - `join_status`
+  - `join_confidence`
+  - `close_ts`
+  - `close_reason`
+  - `entry`
+  - `side`
+
+#### 2. reject_event_context
+
+One row per reject event, including both:
+
+- `CANDIDATE_COMPARISON_REJECT`
+- `CANDIDATE_GATE_REJECT`
+
+Purpose:
+
+- preserve rejected candidates as research objects
+- support reject-funnel analysis
+- allow reject reasoning to be checked against real context
+
+Expected fields include:
+
+- reject timestamp
+- reject event type
+- candidate kind
+- reject reason
+- current Phase 2 context block
+- selected raw archive fields already present on the row
+
+#### 3. interesting_rejects
+
+A research triage subset of `reject_event_context`.
+
+Purpose:
+
+- identify rejects that do **not** look trivially weak
+- surface transition-like, continuation-like, or ambiguity-rich rejects for later review
+- create a repeatable watchlist for behavior-class discovery
+
+This output must remain deterministic and auditable.
+
+Initial helper fields may include:
+
+- `interesting_reject_flag`
+- `interesting_reject_bucket`
+- `interesting_reject_note`
+
+Initial buckets should be treated as **research buckets**, not established setup classes.
+Examples:
+
+- `possible_reversal_onset`
+- `possible_reversal_confirmation`
+- `possible_continuation_pressure`
+- `possible_exhaustion_probe`
+- `possible_trap_or_false_break`
+- `unclear_but_constructive`
+
+#### 4. reject_reason_summary
+
+Daily aggregate by reject reason.
+
+Purpose:
+
+- quantify how reasons distribute within the day
+- test whether dominant reasons align with real context rather than merely dominating by count
+- support later reason-quality review
+
+Expected fields may include:
+
+- `date`
+- `reject_reason`
+- `count`
+- `kind`
+- summary statistics for:
+  - `cum_delta_60m`
+  - `cum_delta_180m`
+  - `ret_15m`
+  - `dist_vwap`
+
+#### 5. event_sequence_review
+
+One row per archive event with sequence helper fields.
+
+Purpose:
+
+- begin structured sequence analysis without yet introducing a full market-state engine
+- surface transition behavior
+- detect local event chains such as terminal push, opposite response, continuation burst, or exhaustion-like response
+
+Expected helper fields may include:
+
+- `prev_event_ts`
+- `prev_event_type`
+- `prev_kind`
+- `prev_reject_reason`
+- `minutes_since_prev_event`
+- `minutes_since_prev_same_kind`
+- `minutes_since_prev_opposite_kind`
+- `prev_peak_emit_within_15m`
+- `prev_peak_emit_within_30m`
+- `opposite_reject_within_15m`
+- `same_kind_reject_within_15m`
+- `same_kind_extreme_count_30m`
+- `opposite_kind_extreme_count_30m`
+
+These are sequence-support fields only.
+They are **not** yet market-state labels.
+
+#### 6. daily_review_summary
+
+A deterministic Markdown summary built from the daily CSV outputs.
+
+Purpose:
+
+- provide a human-readable daily research snapshot
+- summarize event counts, reject distribution, accepted coverage, close-outcome linkage, and interesting rejects
+- help maintain a growing archive of reviewed research days
+
+It should include:
+
+- event counts by type
+- reject counts by reason
+- accepted count
+- accepted-to-close linkage count
+- interesting-reject count
+- short sequence notes derived from tables
+- short research implications
+
+### Design principles
+
+Phase 2.5 must follow these rules:
+
+- tables first, prose second
+- deterministic outputs only
+- no LLM-authored hidden logic inside the builder
+- no hindsight-labeled “winners”
+- no treating all rejects as missed trades
+- no broad setup claims from one day
+- no phase-scope leakage into live trading logic
+
+### Implementation shape
+
+Recommended new modules:
+
+- `modules/build_review_tables.py`
+- `modules/sequence_features.py`
+- `modules/review_triage.py`
+- `modules/review_outputs.py`
+
+Recommended responsibilities:
+
+#### build_review_tables.py
+- orchestrate daily review-package build
+- load `events_context`
+- load `close_outcomes`
+- build accepted and reject review tables
+- call sequence and triage helpers
+- save outputs
+
+#### sequence_features.py
+- build deterministic sequence helper fields
+- remain low-level and descriptive
+- avoid market-state claims
+
+#### review_triage.py
+- apply transparent triage rules
+- assign `interesting_reject_flag`
+- assign initial `interesting_reject_bucket`
+
+#### review_outputs.py
+- write CSV artifacts
+- build deterministic Markdown summary from output tables
+
+### CLI integration
+
+A new CLI mode should be added for review-package generation.
+
+Recommended pattern:
+
+- `python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root ... --output-root ...`
+
+This mode should:
+
+1. locate the required daily inputs
+2. fail clearly if required inputs are missing
+3. build the review package deterministically
+4. report created files and key counts
+
+### Runbook integration
+
+After the close-outcome rebuild runbook completes, the next automated server step should run the review builder.
+
+Expected order:
+
+1. rebuild Phase 1 derived datasets
+2. rebuild close outcomes
+3. build review package
+4. report created review artifacts
+
+This keeps the research workflow deterministic and repeatable.
+
+### Success criteria
+
+Phase 2.5 should be considered successful when:
+
+- daily review-package outputs are produced deterministically
+- accepted events are context-linked and externally joinable to close outcomes
+- rejects are preserved as research objects rather than discarded noise
+- interesting rejects can be surfaced reproducibly
+- reject reasons can be reviewed against real context
+- basic event-sequence helpers become available for later research phases
+
+### Strategic value
+
+Phase 2.5 does not claim to solve setup discovery directly.
+
+Its value is that it begins turning raw archived behavior into structured research evidence for later discovery of:
+
+- continuation pressure
+- failed continuation
+- reversal onset
+- reversal confirmation
+- exhaustion
+- trap / false break
+- other repeatable behavior classes that may later support profitable entries
+
+That is why this layer is justified now.
+It improves the research stack without pretending that setup classes are already known.
+
 ---
 
 ## Phase 3 — Sequence layer
 Goal:
 - represent each event as part of a sequence, not an isolated point.
+
+Status note:
+- Phase 3 remains a future layer.
+- It is not the immediate next step after Phase 2.
+- The immediate next step is the Phase 2.5 review loop built on top of validated `events_context`.
+- Phase 3 planning should begin only after enough evidence accumulates from repeated Phase 2.5 review outputs.
 
 Deliverables:
 - sequence features,
@@ -532,29 +893,23 @@ Success criteria:
 
 ## 12. Priority roadmap
 
-### Analyzer v1
+### Current status
+- Phase 1: closed
+- Phase 2: closed and validated
+- Immediate next step: Phase 2.5 review loop
+
+### Next
 Should focus on:
-- archive/feed ingestion,
-- event matching,
-- integrity checks,
-- cumulative delta horizons,
-- basic price context,
-- VWAP/EMA context,
-- initial reject and event summaries.
+- accepted-event to close-outcome research linkage
+- interesting reject triage
+- reject reason / context sanity review
+- repeated daily review outputs built on top of validated `events_context`
 
-### Analyzer v2
-Should add:
-- sequence features,
-- state labels,
-- early outcome layer,
-- subgroup comparisons.
-
-### Analyzer v3
-Should add:
-- setup taxonomy,
-- candidate family ranking,
-- richer reports,
-- path toward future PEAK-family formalization.
+### After Phase 2.5 evidence accumulates
+Should focus on:
+- evidence-based Phase 3 planning
+- evidence-based state-layer review
+- evidence-based outcome-layer expansion
 
 ---
 
