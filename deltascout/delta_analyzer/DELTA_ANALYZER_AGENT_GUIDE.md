@@ -61,9 +61,9 @@ Always include context:
 
 ## Current scope
 
-`delta_analyzer` currently has a Phase 1 foundation.
+`delta_analyzer` has completed Phase 1 and Phase 2, and Phase 2.5 is in production use.
 
-Phase 1 includes:
+### Phase 1 — complete
 
 - archive ingestion
 - feed ingestion
@@ -73,11 +73,27 @@ Phase 1 includes:
 - basic integrity / health checks
 - minimal CLI
 
-Phase 1 does not include:
+### Phase 2 — complete and validated
 
-- outcomes
-- EMA/trend regime logic
-- setup classification
+- `events_context` dataset: backward-looking cumulative-delta, price-return, and VWAP-relative fields attached to each archive event
+- validated against the current local research corpus
+- see `deltascout/delta_analyzer/Delta_Analyzer_Phase2_Validation.md` for the empirical validation verdict
+
+### Phase 2.5 — complete, in production use
+
+- `--build-review` CLI command produces a daily review package:
+  - `accepted_event_context_YYYY-MM-DD.csv`
+  - `reject_event_context_YYYY-MM-DD.csv`
+  - `daily_review_summary_YYYY-MM-DD.md`
+- review package is the primary daily research surface for the project lead
+- produced automatically by the post-close watcher cron job at 06:10 server time
+
+### Not yet built
+
+- outcomes or forward-return fields inside `events_context`
+- EMA / trend / regime classification
+- setup taxonomy
+- sequence modeling
 - ML
 - live signal generation
 
@@ -90,8 +106,10 @@ Do not silently expand scope unless explicitly asked.
 Read these documents before proposing analyzer design changes:
 
 - `deltascout/research_material/research_manifesto.md`
-- `deltascout/research_material/delta_analyzer_implementation_plan_v1_1.md`
+- `deltascout/delta_analyzer/delta_analyzer_implementation_plan_v1_1.md`
 - `deltascout/delta_analyzer/Delta_Analyzer_Phase1_Spec.md`
+- `deltascout/delta_analyzer/Delta_Analyzer_Phase2_Spec.md`
+- `deltascout/delta_analyzer/Delta_Analyzer_Phase2_Validation.md`
 - `deltascout/delta_analyzer/README.md`
 
 If your proposal conflicts with these documents, explain why explicitly.

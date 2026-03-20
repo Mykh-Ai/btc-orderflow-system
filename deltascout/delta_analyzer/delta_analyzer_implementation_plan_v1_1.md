@@ -421,7 +421,7 @@ These are research labels, not live signals.
 
 ## 11. Implementation phases
 
-## Phase 1 — Foundation
+## Phase 1 — Foundation ✓ COMPLETE
 Goal:
 - build normalized archive/feed ingestion,
 - create event-to-feed matching,
@@ -441,7 +441,7 @@ Success criteria:
 
 ---
 
-## Phase 2 — Feature layer v1
+## Phase 2 — Feature layer v1 ✓ COMPLETE AND VALIDATED
 Goal:
 - enrich events with immediate feed context.
 
@@ -455,7 +455,7 @@ Deliverables:
 Success criteria:
 - each event can be described not only by its own row but also by its 60m/180m/day context.
 
-## Phase 2.5 — Review Builder Layer
+## Phase 2.5 — Review Builder Layer ✓ COMPLETE, IN PRODUCTION
 
 ### Purpose
 
@@ -971,7 +971,7 @@ Success criteria:
 ### Current status
 - Phase 1: closed
 - Phase 2: closed and validated
-- Phase 2.5: implemented
+- Phase 2.5: complete, in production — daily cron watcher runs at 06:10 server time
 - accepted-event linkage: implemented
 - reject-event linkage: implemented
 - reject reason summary: implemented
@@ -979,15 +979,17 @@ Success criteria:
 
 ### Next
 Should focus on:
+- using Phase 2.5 review-package outputs as the primary daily research surface
 - `interesting_rejects` as the next review-layer extension
-- repeated daily review outputs built on top of validated `events_context`
 - continued accepted/reject review against accumulated evidence
+- reject reason / context sanity review
+- accumulating repeated daily review outputs before planning Phase 3
 
 ### After current review outputs accumulate more evidence
 Should focus on:
 - evidence-based review of whether sequence features are justified next
 - evidence-based Phase 3 planning
-- evidence-based state-layer review
+- evidence-based sequence-layer design
 - evidence-based outcome-layer expansion
 
 ---
