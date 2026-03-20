@@ -75,4 +75,4 @@ python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input
 
 The default globs already point to the local research-material folder copied for DeltaScout research.
 
-The review-builder mode is the Phase 2.5 skeleton only: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`.
+The review-builder mode is the Phase 2.5 skeleton only: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables, `reject_reason_summary_YYYY-MM-DD.csv`, and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`.
