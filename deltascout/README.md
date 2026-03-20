@@ -242,7 +242,7 @@ In routine operation this is handled by the post-close watcher / cron flow. For 
 ```bash
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
 Expected outputs:
@@ -281,21 +281,18 @@ Goal:
 - accumulate DeltaScout decision archive
 - build the base derived datasets used for reject and close-outcome research
 
-### Phase 2: Backward-looking event context
+### Phase 2: Backward-looking event context ✓ Complete
 
-Current focus:
+- `events_context` per-event context layer
+- cumulative delta and return context around archive events
+- deterministic research surface for later review and outcome joins
 
-- build `events_context` as the per-event context layer
-- reconstruct cumulative delta and return context around archive events
-- preserve a deterministic research surface for later review and outcome joins
+### Phase 2.5: Daily review package ✓ Complete, in production
 
-### Phase 2.5: Daily review package
-
-Current focus:
-
-- build accepted and reject review tables from `events_context`
-- summarize reject reasons for the day
-- produce a deterministic daily review summary for repeated research use
+- accepted and reject review tables built from `events_context`
+- reject reason summary for the day
+- deterministic daily review summary for repeated research use
+- automated daily via post-close watcher cron at 06:10 server time
 
 Later phases remain research-facing and should be defined from accumulated evidence rather than assumed in advance.
 
