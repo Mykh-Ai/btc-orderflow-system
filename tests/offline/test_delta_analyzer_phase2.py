@@ -30,19 +30,6 @@ def test_rolling_windows_use_continuous_history_across_feed_files():
     assert index.rolling_cum_delta(datetime(2026, 1, 2, 0, 15, tzinfo=timezone.utc), timedelta(minutes=60)) == 5.0
 
 
-def test_utc_day_boundary_uses_true_utc_midnight_not_local_midnight():
-    index = FeedContextIndex(
-        [
-            _feed_row(datetime(2026, 1, 1, 22, 30, tzinfo=timezone.utc), buy_qty=10.0, sell_qty=3.0, source_file='day1.csv'),
-            _feed_row(datetime(2026, 1, 2, 0, 30, tzinfo=timezone.utc), buy_qty=4.0, sell_qty=1.0, source_file='day2.csv'),
-        ]
-    )
-
-    event_ts = datetime(2026, 1, 2, 1, 0, tzinfo=timezone(timedelta(hours=2)))
-
-    assert event_ts.astimezone(timezone.utc) == datetime(2026, 1, 1, 23, 0, tzinfo=timezone.utc)
-    assert index.utc_day_cum_delta(event_ts) == 7.0
-
 
 def test_missing_flow_inside_window_returns_none_instead_of_zero_fill():
     index = FeedContextIndex(
@@ -58,5 +45,4 @@ def test_missing_flow_inside_window_returns_none_instead_of_zero_fill():
     assert index.rolling_cum_delta(event_ts, timedelta(hours=24)) is None
     assert index.rolling_cum_delta(event_ts, timedelta(minutes=180)) is None
     assert index.rolling_cum_delta(event_ts, timedelta(minutes=60)) is None
-    assert index.utc_day_cum_delta(event_ts) is None
     assert index.rolling_cum_delta(event_ts, timedelta(minutes=20)) == 3.0

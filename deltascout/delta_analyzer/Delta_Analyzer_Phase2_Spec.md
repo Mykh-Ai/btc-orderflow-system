@@ -41,7 +41,6 @@ Each `events_context` row contains all `events_base` fields plus:
 - `cum_delta_24h`
 - `cum_delta_180m`
 - `cum_delta_60m`
-- `cum_delta_utc_day`
 - `ret_15m`
 - `ret_60m`
 - `dist_vwap`
@@ -78,12 +77,6 @@ Fields:
 If full history is not available, compute with whatever feed rows exist in the window. Do not pad or extrapolate.
 
 If any feed row inside the requested rolling window has missing `BuyQty` or `SellQty`, cumulative delta for that window must be `null`. Unknown flow must not be silently coerced to `0.0`.
-
-### UTC day cumulative delta reference
-
-- `cum_delta_utc_day`: cumulative delta from the true `00:00 UTC` boundary on the event date through `event_ts`
-
-This field is a reference frame and must remain distinct from `cum_delta_24h`.
 
 ### Return fields
 
@@ -127,9 +120,8 @@ Phase 2 is acceptable if:
 
 1. `events_context` builds from local research materials
 2. required context fields are attached when underlying data exists
-3. `cum_delta_24h` is clearly distinct from `cum_delta_utc_day`
-4. `cum_delta_60m` and `cum_delta_180m` are rolling windows ending at the event timestamp
-5. VWAP distance fields are present
-6. backward-looking price context fields are present
-7. the CLI runs successfully and prints a concise summary
-8. no production DeltaScout logic is modified
+3. `cum_delta_60m` and `cum_delta_180m` are rolling windows ending at the event timestamp
+4. VWAP distance fields are present
+5. backward-looking price context fields are present
+6. the CLI runs successfully and prints a concise summary
+7. no production DeltaScout logic is modified

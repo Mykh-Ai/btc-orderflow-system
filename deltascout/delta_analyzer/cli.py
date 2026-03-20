@@ -18,7 +18,6 @@ CONTEXT_COVERAGE_FIELDS = (
     "cum_delta_24h",
     "cum_delta_180m",
     "cum_delta_60m",
-    "cum_delta_utc_day",
     "ret_15m",
     "ret_60m",
     "dist_vwap",

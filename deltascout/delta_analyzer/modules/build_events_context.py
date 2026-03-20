@@ -40,7 +40,6 @@ def build_events_context_dataset(
                 cum_delta_24h=context_index.rolling_cum_delta(row.ts, timedelta(hours=24)),
                 cum_delta_180m=context_index.rolling_cum_delta(row.ts, timedelta(minutes=180)),
                 cum_delta_60m=context_index.rolling_cum_delta(row.ts, timedelta(minutes=60)),
-                cum_delta_utc_day=context_index.utc_day_cum_delta(row.ts),
                 ret_15m=context_index.price_delta(row.ts, timedelta(minutes=15)),
                 ret_60m=context_index.price_delta(row.ts, timedelta(minutes=60)),
                 dist_vwap=dist_vwap,
