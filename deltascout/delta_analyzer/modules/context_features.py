@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from ..types import FeedRow
 
@@ -35,16 +35,6 @@ class FeedContextIndex:
             return None
         return self.prefix_delta[end_idx + 1] - self.prefix_delta[start_idx]
 
-    def utc_day_cum_delta(self, event_ts: datetime) -> float | None:
-        end_idx = self._index_at_or_before(event_ts)
-        if end_idx is None:
-            return None
-        day_start = self._utc_day_start(event_ts)
-        start_idx = bisect_right(self.feed_ts, day_start - timedelta(microseconds=1))
-        if self.prefix_unknown[end_idx + 1] - self.prefix_unknown[start_idx] > 0:
-            return None
-        return self.prefix_delta[end_idx + 1] - self.prefix_delta[start_idx]
-
     def price_delta(self, event_ts: datetime, lookback: timedelta) -> float | None:
         current_row = self.match_row(event_ts)
         if current_row is None or current_row.price is None:
@@ -72,12 +62,6 @@ class FeedContextIndex:
         if idx < 0:
             return None
         return idx
-
-    @staticmethod
-    def _utc_day_start(ts: datetime) -> datetime:
-        if ts.tzinfo is None:
-            return ts.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-        return ts.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     def _build_prefix_flow_state(self) -> tuple[list[float], list[int]]:
         prefix_delta = [0.0]

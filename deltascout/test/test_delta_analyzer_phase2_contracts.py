@@ -93,19 +93,6 @@ def test_rolling_cum_delta_windows_sum_buy_minus_sell_inside_lookback():
     assert index.rolling_cum_delta(event_ts, timedelta(hours=24)) == 9.0
 
 
-def test_utc_day_cum_delta_is_distinct_from_rolling_24h():
-    index = FeedContextIndex(
-        [
-            _feed("2026-01-01T23:50:00", price=100.0, buy=7.0, sell=1.0),   # +6, previous UTC day
-            _feed("2026-01-02T00:10:00", price=101.0, buy=2.0, sell=1.0),   # +1, current UTC day
-            _feed("2026-01-02T00:20:00", price=102.0, buy=4.0, sell=1.0),   # +3, current UTC day
-        ]
-    )
-    event_ts = _dt("2026-01-02T00:30:00")
-
-    assert index.utc_day_cum_delta(event_ts) == 4.0
-    assert index.rolling_cum_delta(event_ts, timedelta(hours=24)) == 10.0
-
 
 def test_price_delta_uses_backward_boundary_match_and_returns_absolute_difference():
     index = FeedContextIndex(
@@ -148,7 +135,6 @@ def test_build_events_context_dataset_attaches_expected_phase2_fields():
     assert len(rows) == 1
     row = rows[0]
     assert row.cum_delta_60m == 8.0
-    assert row.cum_delta_utc_day == 6.0
     assert row.ret_15m == 3.0
     assert row.ret_60m is None
     assert row.dist_vwap == 1.0

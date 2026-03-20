@@ -66,7 +66,6 @@ class EventsContextRow:
     cum_delta_24h: float | None
     cum_delta_180m: float | None
     cum_delta_60m: float | None
-    cum_delta_utc_day: float | None
     ret_15m: float | None
     ret_60m: float | None
     dist_vwap: float | None
