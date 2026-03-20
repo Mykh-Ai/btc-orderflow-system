@@ -59,6 +59,11 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
         writer.writerows(rows)
 
 
+def _write_parquet(path: Path, rows: list[dict[str, str]]) -> None:
+    pd = pytest.importorskip("pandas")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
 @pytest.fixture
 def dataset_root(tmp_path: Path) -> Path:
     _write_csv(
@@ -217,6 +222,73 @@ def test_accepted_table_joins_close_outcomes_on_peak_ts_and_peak_kind(dataset_ro
     assert row["side"] == "LONG"
     assert result.matched_close_count == 1
 
+
+
+
+def test_accepted_table_joins_close_outcomes_from_parquet_when_csv_absent(dataset_root: Path, tmp_path: Path):
+    _write_parquet(
+        dataset_root / "close_outcomes_2026-01-02.parquet",
+        [
+            {
+                "peak_ts": "2026-01-02T00:10:00Z",
+                "peak_kind": "long",
+                "join_status": "exact",
+                "join_confidence": "1.0",
+                "close_ts": "2026-01-02T01:00:00Z",
+                "close_reason": "TP1",
+                "entry": "101.25",
+                "side": "LONG",
+            }
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["join_status"] == "exact"
+    assert row["close_reason"] == "TP1"
+    assert result.matched_close_count == 1
+
+
+def test_accepted_table_joins_close_outcomes_when_event_ts_is_naive_and_outcome_ts_is_utc_aware(dataset_root: Path, tmp_path: Path):
+    _write_csv(
+        dataset_root / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            {
+                **{field: "" for field in EVENTS_CONTEXT_FIELDS},
+                "ts": "2026-01-02T00:10:00",
+                "day": "2026-01-02",
+                "event_type": "PEAK_EMIT",
+                "kind": "long",
+            }
+        ],
+    )
+    _write_csv(
+        dataset_root / "close_outcomes_2026-01-02.csv",
+        CLOSE_OUTCOME_FIELDS,
+        [
+            {
+                "peak_ts": "2026-01-02T00:10:00+00:00",
+                "peak_kind": "long",
+                "join_status": "exact",
+                "join_confidence": "1.0",
+                "close_ts": "2026-01-02T01:00:00Z",
+                "close_reason": "TP1",
+                "entry": "101.25",
+                "side": "LONG",
+            }
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["join_status"] == "exact"
+    assert row["close_ts"] == "2026-01-02T01:00:00Z"
+    assert result.matched_close_count == 1
 
 
 def test_build_succeeds_without_close_outcomes_and_leaves_join_fields_empty(dataset_root: Path, tmp_path: Path):

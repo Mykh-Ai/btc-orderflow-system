@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from importlib import import_module
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,7 @@ def build_daily_review_package(date: str, input_root: Path | str, output_root: P
     output_root = Path(output_root)
 
     events_context_rows = _load_required_csv(input_root / f"events_context_{date}.csv", required_name="events_context")
-    close_outcome_rows = _load_optional_csv(input_root / f"close_outcomes_{date}.csv")
+    close_outcome_rows = _load_optional_close_outcomes(input_root, date)
     close_outcomes_by_key = _index_close_outcomes(close_outcome_rows)
 
     accepted_rows = build_accepted_event_context_rows(events_context_rows, close_outcomes_by_key)
@@ -143,9 +144,29 @@ def _load_optional_csv(path: Path) -> list[dict[str, str]]:
     return _load_csv(path)
 
 
+def _load_optional_close_outcomes(input_root: Path, date: str) -> list[dict[str, str]]:
+    csv_path = input_root / f"close_outcomes_{date}.csv"
+    parquet_path = input_root / f"close_outcomes_{date}.parquet"
+    # Prefer CSV when both are present to match the review builder's existing file convention.
+    if csv_path.exists():
+        return _load_csv(csv_path)
+    if parquet_path.exists():
+        return _load_parquet(parquet_path)
+    return []
+
+
 def _load_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def _load_parquet(path: Path) -> list[dict[str, str]]:
+    try:
+        pd = import_module("pandas")
+    except ModuleNotFoundError as exc:
+        raise ReviewBuildError(f"parquet close_outcomes requires pandas: {path}") from exc
+    rows = pd.read_parquet(path).fillna("").to_dict(orient="records")
+    return [{str(key): "" if value is None else str(value) for key, value in row.items()} for row in rows]
 
 
 def _index_close_outcomes(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
@@ -169,7 +190,9 @@ def _normalize_ts_key(value: Any) -> str:
         ts = datetime.fromisoformat(normalized)
     except ValueError:
         return text
-    if ts.tzinfo is not None:
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    else:
         ts = ts.astimezone(timezone.utc)
     return ts.replace(microsecond=0).isoformat()
 
