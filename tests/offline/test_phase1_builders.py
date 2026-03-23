@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from scripts.offline.build_close_outcomes import (
     _filter_df_by_date as _filter_close_df_by_date,
@@ -12,6 +13,7 @@ from scripts.offline.build_close_outcomes import (
     derive_close_outcomes,
 )
 from scripts.offline.build_phase1_derived import _filter_df_by_date, derive_reject_dataset
+from scripts.offline.common import OfflineBuildError, load_feed
 
 
 def test_reject_classification_soft_and_multi():
@@ -83,6 +85,112 @@ def test_date_scoping_filters_daily_rows():
     assert len(feed_scoped) == 1
     assert evt_scoped.iloc[0]["event_ts"].strftime("%Y-%m-%d") == "2026-01-01"
     assert feed_scoped.iloc[0]["ts"].strftime("%Y-%m-%d") == "2026-01-01"
+
+
+def test_load_feed_accepts_canonical_enriched_schema_and_sorts_rows(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:01:00Z,100,101,8,3,12345,0.0001,7,8",
+                "2026-01-02T00:00:00Z,99,100,5,1,12344,0.0002,1,2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = load_feed(feed)
+
+    assert list(out["ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")) == ["2026-01-02T00:00:00Z", "2026-01-02T00:01:00Z"]
+    assert list(out["delta"]) == [4, 5]
+    assert list(out["price"]) == [100, 101]
+
+
+def test_load_feed_accepts_core_columns_only_and_closeprice_fallbacks_to_avgprice(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty",
+                "2026-01-02T00:00:00Z,100,,5,2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = load_feed(feed)
+
+    assert len(out) == 1
+    assert out.iloc[0]["delta"] == 3
+    assert out.iloc[0]["price"] == 100
+
+
+def test_load_feed_fails_loudly_on_invalid_timestamp(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "not-a-ts,100,101,5,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="invalid Timestamp"):
+        load_feed(feed)
+
+
+def test_load_feed_fails_loudly_on_invalid_required_numeric_fields(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:00:00Z,100,101,not-a-number,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="non-numeric BuyQty/SellQty/price values"):
+        load_feed(feed)
+
+
+def test_enriched_feed_normalization_preserves_late_peak_behavior(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:02:00Z,102,102,6,1,12347,0.0001,7,8",
+                "2026-01-02T00:00:00Z,100,100,5,1,12345,0.0001,7,8",
+                "2026-01-02T00:01:00Z,98,98,4,1,12346,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    df_feed = load_feed(feed)
+    peaks = pd.DataFrame(
+        [
+            {"event": "PEAK_EMIT", "event_ts": pd.Timestamp("2026-01-02T00:02:00Z"), "kind": "long", "price": 102.0, "seq": 1},
+        ]
+    )
+
+    from scripts.offline.build_phase1_derived import derive_late_peak
+
+    out = derive_late_peak(df_feed, peaks, "2026-01-02", lookback_rows=3)
+
+    assert len(out) == 1
+    assert out.iloc[0]["move_start_ts"] == pd.Timestamp("2026-01-02T00:01:00Z")
+    assert out.iloc[0]["latency_min"] == 1.0
+    assert out.iloc[0]["move_size"] == 4.0
 
 
 def test_close_dedup_state_and_log_duplicate():

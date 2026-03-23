@@ -140,7 +140,7 @@ Builders:
 
 | Dataset area | Source | Builder |
 |--------------|--------|---------|
-| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + feed archive | `scripts.offline.build_phase1_derived` |
+| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + canonical enriched feed archive (`/opt/aitrader/feed/YYYY-MM-DD.csv` by default) | `scripts.offline.build_phase1_derived` |
 | Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts.offline.build_close_outcomes` |
 | Event context + daily review artifacts | DeltaScout archive + feed archive; optional close outcomes join for accepted review rows | `deltascout.delta_analyzer` |
 
@@ -153,7 +153,7 @@ Builders:
 Path:
 
 ```text
-/data/archive/feed/YYYY-MM-DD.csv
+/opt/aitrader/feed/YYYY-MM-DD.csv
 ```
 
 Properties:
@@ -161,7 +161,7 @@ Properties:
 - append-only
 - one file per UTC day
 - deduplicated by `Timestamp`
-- same schema as `aggregated.csv`
+- same core schema as `aggregated.csv`, with optional enriched columns
 - chronologically ordered
 
 Rules:
@@ -244,6 +244,8 @@ PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
+
+`build_phase1_derived` now reads the canonical enriched daily feed from `/opt/aitrader/feed/YYYY-MM-DD.csv` by default; use `--feed-file` only when you need an explicit override.
 
 Expected outputs:
 

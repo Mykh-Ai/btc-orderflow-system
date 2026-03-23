@@ -179,7 +179,7 @@ def derive_late_peak(df_feed: pd.DataFrame, df_evt: pd.DataFrame, source_date: s
 def run(args: argparse.Namespace) -> None:
     input_root = Path(args.input_root)
     archive_file = input_root / "archive" / "deltascout" / f"{args.date}.jsonl"
-    feed_file = Path(args.feed_file) if args.feed_file else input_root / "feed" / "aggregated.csv"
+    feed_file = Path(args.feed_file) if args.feed_file else Path("/opt/aitrader/feed") / f"{args.date}.csv"
 
     df_evt = _read_archive(archive_file)
     df_feed = load_feed(feed_file)
@@ -213,7 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date", required=True, help="Date in YYYY-MM-DD")
     p.add_argument("--input-root", default="/data", help="Root with archive/ and feed/")
     p.add_argument("--output-root", default="/data/archive/datasets", help="Output dataset root")
-    p.add_argument("--feed-file", default=None, help="Optional explicit feed CSV path")
+    p.add_argument("--feed-file", default=None, help="Optional explicit feed CSV path; default is /opt/aitrader/feed/YYYY-MM-DD.csv")
     p.add_argument("--roll-window", type=int, default=180, help="Rolling ownership window")
     p.add_argument("--owner-quantile", type=float, default=0.75, help="Quantile for meaningful abs(delta) threshold")
     p.add_argument("--late-lookback-rows", type=int, default=30, help="Lookback rows for move-start proxy")

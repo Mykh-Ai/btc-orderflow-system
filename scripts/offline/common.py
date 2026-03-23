@@ -77,4 +77,4 @@ def load_feed(feed_path: Path) -> pd.DataFrame:
     df["price"] = pd.to_numeric(df["ClosePrice"], errors="coerce").fillna(pd.to_numeric(df["AvgPrice"], errors="coerce"))
     if df["delta"].isna().any() or df["price"].isna().any():
         raise OfflineBuildError("feed contains non-numeric BuyQty/SellQty/price values")
-    return df
+    return df.sort_values(["ts"], kind="mergesort").reset_index(drop=True)
