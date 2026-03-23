@@ -39,6 +39,10 @@ def build_events_base_dataset(events: list[NormalizedEvent], feed_rows: list[Fee
                 vwap=event.vwap,
                 poc=event.poc,
                 matched_feed_ts=matched_feed.ts if matched_feed else None,
+                matched_open_interest=matched_feed.open_interest if matched_feed else None,
+                matched_funding_rate=matched_feed.funding_rate if matched_feed else None,
+                matched_liq_buy_qty=matched_feed.liq_buy_qty if matched_feed else None,
+                matched_liq_sell_qty=matched_feed.liq_sell_qty if matched_feed else None,
                 source_file=event.source_file,
                 terminal_decision_present=terminal_present,
             )

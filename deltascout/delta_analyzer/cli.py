@@ -5,7 +5,7 @@ import glob
 from collections import Counter
 from pathlib import Path
 
-from .config import DEFAULT_ARCHIVE_GLOB, DEFAULT_FEED_GLOB
+from .config import DEFAULT_ARCHIVE_GLOB, DEFAULT_FEED_GLOB, LEGACY_DEFAULT_FEED_GLOB
 from .modules.archive_reader import read_archive_events
 from .modules.build_events_base import build_events_base_dataset
 from .modules.build_events_context import build_events_context_dataset
@@ -47,6 +47,13 @@ def _expand_glob(pattern: str) -> list[Path]:
     return [Path(path) for path in sorted(glob.glob(pattern))]
 
 
+def _resolve_feed_files(pattern: str) -> list[Path]:
+    files = _expand_glob(pattern)
+    if files or pattern != DEFAULT_FEED_GLOB:
+        return files
+    return _expand_glob(LEGACY_DEFAULT_FEED_GLOB)
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.build_review:
@@ -65,7 +72,7 @@ def main() -> None:
         return
 
     archive_files = _expand_glob(args.archive_glob)
-    feed_files = _expand_glob(args.feed_glob)
+    feed_files = _resolve_feed_files(args.feed_glob)
 
     events = read_archive_events(archive_files)
     feed_rows = read_feed_rows(feed_files)

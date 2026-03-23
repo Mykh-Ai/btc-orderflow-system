@@ -12,6 +12,10 @@ def _feed_row(ts: datetime, *, buy_qty: float | None, sell_qty: float | None, pr
         price=price,
         buy_qty=buy_qty,
         sell_qty=sell_qty,
+        open_interest=None,
+        funding_rate=None,
+        liq_buy_qty=None,
+        liq_sell_qty=None,
         row={},
         source_file=source_file,
     )
