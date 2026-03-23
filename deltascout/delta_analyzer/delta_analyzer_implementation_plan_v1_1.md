@@ -584,6 +584,11 @@ Expected fields include:
   - `dist_vwap`
   - `abs_dist_vwap`
   - `price_vs_vwap_side`
+- matched feed enrichment fields already attached to the event row:
+  - `matched_open_interest`
+  - `matched_funding_rate`
+  - `matched_liq_buy_qty`
+  - `matched_liq_sell_qty`
 - close-outcome join fields when available:
   - `join_status`
   - `join_confidence`
@@ -612,6 +617,7 @@ Expected fields include:
 - candidate kind
 - reject reason
 - current Phase 2 context block
+- matched feed enrichment fields already attached to the event row
 - selected raw archive fields already present on the row
 
 #### 3. interesting_rejects

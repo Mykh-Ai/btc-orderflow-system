@@ -24,6 +24,10 @@ def _feed(ts: str, *, price: float | None, buy: float | None, sell: float | None
         price=price,
         buy_qty=buy,
         sell_qty=sell,
+        open_interest=None,
+        funding_rate=None,
+        liq_buy_qty=None,
+        liq_sell_qty=None,
         row={},
         source_file="synthetic_feed.csv",
     )
@@ -59,6 +63,10 @@ def _base_row(ts: str) -> EventsBaseRow:
         vwap=100.0,
         poc=99.0,
         matched_feed_ts=_dt("2026-01-02T00:15:00"),
+        matched_open_interest=None,
+        matched_funding_rate=None,
+        matched_liq_buy_qty=None,
+        matched_liq_sell_qty=None,
         source_file="synthetic_event.jsonl",
         terminal_decision_present=True,
     )
