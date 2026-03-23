@@ -63,8 +63,24 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) ->
 
 def _write_parquet(path: Path, rows: list[dict[str, str]]) -> None:
     pd = pytest.importorskip("pandas")
+    pyarrow = pytest.importorskip("pyarrow")
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_parquet(path, index=False)
+    pd.DataFrame(rows).to_parquet(path, index=False, engine="pyarrow")
+
+
+def _make_events_context_row(**overrides: str) -> dict[str, str]:
+    row = {field: "" for field in EVENTS_CONTEXT_FIELDS}
+    row.update(
+        {
+            "ts": "2026-01-02T00:00:00Z",
+            "day": "2026-01-02",
+            "event_type": "CANDIDATE_GATE_REJECT",
+            "kind": "long",
+            "reject_reason": "direction_mismatch",
+        }
+    )
+    row.update(overrides)
+    return row
 
 
 @pytest.fixture
@@ -527,3 +543,105 @@ def test_reject_reason_summary_skips_missing_numeric_values_without_crashing(
     assert row["ret_60m_mean"] == "5"
     assert row["ret_60m_median"] == "5"
     assert row["abs_dist_vwap_mean"] == "7"
+
+
+def test_interesting_rejects_excludes_filtered_reasons_and_weak_context(tmp_path: Path):
+    _write_csv(
+        tmp_path / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            _make_events_context_row(ts="2026-01-02T00:01:00Z", reject_reason="no_prev_peak", cum_delta_60m="500", ret_15m="0.003", abs_dist_vwap="200"),
+            _make_events_context_row(ts="2026-01-02T00:02:00Z", reject_reason="imb_band", cum_delta_60m="500", ret_15m="0.003", abs_dist_vwap="200"),
+            _make_events_context_row(ts="2026-01-02T00:03:00Z", reject_reason="direction_mismatch", cum_delta_60m="149", ret_15m="0.0014", abs_dist_vwap="149"),
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+
+    with result.interesting_rejects_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows == []
+    assert result.interesting_reject_count == 0
+
+
+def test_interesting_rejects_builds_expected_bucket_rows(tmp_path: Path):
+    rows = [
+        _make_events_context_row(ts="2026-01-02T00:01:00Z", reject_reason="vwap_side", kind="long", cum_delta_60m="300", cum_delta_180m="500", ret_15m="0.003", ret_60m="-0.004", abs_dist_vwap="450"),
+        _make_events_context_row(ts="2026-01-02T00:02:00Z", reject_reason="direction_mismatch", kind="long", cum_delta_60m="250", cum_delta_180m="150", ret_15m="-0.0005", abs_dist_vwap="300"),
+        _make_events_context_row(ts="2026-01-02T00:03:00Z", reject_reason="direction_mismatch", kind="long", cum_delta_60m="450", cum_delta_180m="-250", ret_15m="-0.004", ret_60m="-0.0005", abs_dist_vwap="220"),
+        _make_events_context_row(ts="2026-01-02T00:04:00Z", reject_reason="3of3_fail", kind="long", cum_delta_60m="200", cum_delta_180m="-50", ret_15m="0.003", ret_60m="-0.004", abs_dist_vwap="500"),
+        _make_events_context_row(ts="2026-01-02T00:05:00Z", reject_reason="3of3_fail", kind="short", cum_delta_60m="-350", cum_delta_180m="100", ret_15m="0.001", ret_60m="-0.004", abs_dist_vwap="650"),
+        _make_events_context_row(ts="2026-01-02T00:06:00Z", reject_reason="vwap_side", kind="long", cum_delta_60m="260", cum_delta_180m="100", ret_15m="0.0025", ret_60m="", abs_dist_vwap="900"),
+    ]
+    _write_csv(tmp_path / "events_context_2026-01-02.csv", EVENTS_CONTEXT_FIELDS, rows)
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+
+    with result.interesting_rejects_path.open("r", encoding="utf-8", newline="") as handle:
+        interesting_rows = list(csv.DictReader(handle))
+
+    assert [(row["interesting_rule_id"], row["interesting_reject_bucket"]) for row in interesting_rows] == [
+        ("IR_B1", "possible_reversal_confirmation"),
+        ("IR_A1", "possible_reversal_onset"),
+        ("IR_D1", "possible_exhaustion_probe"),
+        ("IR_E2", "possible_trap_or_false_break"),
+        ("IR_C2", "possible_continuation_pressure"),
+        ("IR_F1", "unclear_but_constructive"),
+    ]
+    assert all(row["interesting_reject_flag"] == "1" for row in interesting_rows)
+
+
+def test_interesting_rejects_uses_first_match_wins_ordering(tmp_path: Path):
+    _write_csv(
+        tmp_path / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            _make_events_context_row(
+                ts="2026-01-02T00:01:00Z",
+                reject_reason="vwap_side",
+                kind="long",
+                cum_delta_60m="500",
+                cum_delta_180m="500",
+                ret_15m="0.004",
+                ret_60m="0.005",
+                abs_dist_vwap="300",
+            )
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+
+    with result.interesting_rejects_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["interesting_rule_id"] == "IR_B1"
+    assert row["interesting_reject_bucket"] == "possible_reversal_confirmation"
+
+
+
+def test_interesting_rejects_writes_empty_schema_when_no_rows_match(tmp_path: Path):
+    _write_csv(
+        tmp_path / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            _make_events_context_row(ts="2026-01-02T00:01:00Z", reject_reason="no_prev_peak", cum_delta_60m="200", ret_15m="0.003", abs_dist_vwap="200")
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+
+    with result.interesting_rejects_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+
+    assert rows == []
+    assert reader.fieldnames == EVENTS_CONTEXT_FIELDS + [
+        "interesting_reject_flag",
+        "interesting_reject_bucket",
+        "interesting_reject_note",
+        "interesting_rule_id",
+    ]
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "interesting_reject_row_count: 0" in summary
+    assert result.interesting_rejects_path.name in summary
