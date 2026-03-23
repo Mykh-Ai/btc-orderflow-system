@@ -463,8 +463,8 @@ Phase 2.5 introduces a deterministic research-review build layer on top of the a
 
 Status note:
 - Phase 2.5 is implemented.
-- Current implemented outputs are `accepted_event_context_YYYY-MM-DD.csv`, `reject_event_context_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and `daily_review_summary_YYYY-MM-DD.md`.
-- `interesting_rejects_YYYY-MM-DD.csv` and `event_sequence_review_YYYY-MM-DD.csv` remain future review-layer extensions beyond the current implemented baseline.
+- Current implemented outputs are `accepted_event_context_YYYY-MM-DD.csv`, `reject_event_context_YYYY-MM-DD.csv`, `interesting_rejects_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and `daily_review_summary_YYYY-MM-DD.md`.
+- `event_sequence_review_YYYY-MM-DD.csv` remains a future review-layer extension beyond the current implemented baseline.
 
 Its purpose is **not** to expand signal logic or redesign PEAK.
 Its purpose is to convert archived daily materials into a research-operable review package that helps accumulate evidence for:

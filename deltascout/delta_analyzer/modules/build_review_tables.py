@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
+from math import isnan
 from statistics import mean, median
 from typing import Any
 
@@ -79,6 +80,27 @@ UNKNOWN_REJECT_REASON = "UNKNOWN"
 UNKNOWN_KIND = "UNKNOWN"
 
 
+INTERESTING_REJECT_FIELDS = (
+    "interesting_reject_flag",
+    "interesting_reject_bucket",
+    "interesting_reject_note",
+    "interesting_rule_id",
+)
+INTERESTING_REJECT_EXCLUDED_REASONS = {"no_prev_peak", "imb_band"}
+INTERESTING_REJECT_REASON_SET = {"direction_mismatch", "vwap_side", "3of3_fail"}
+INTERESTING_REJECT_RULE_NOTES = {
+    "IR_B1": "supportive 60m/180m flow and 15m return context despite reject",
+    "IR_A1": "direction_mismatch with supportive 60m flow but weak/contrary 15m return",
+    "IR_A2": "vwap_side reject near VWAP with directional cumulative buildup",
+    "IR_D1": "strong cumulative flow with contrary price reaction; possible exhaustion probe",
+    "IR_E1": "local directional pressure but broader context does not confirm",
+    "IR_E2": "short-term continuation pressure against contrary medium-horizon context",
+    "IR_C1": "supportive flow and return context despite vwap-side rejection",
+    "IR_C2": "3of3 fail despite supportive medium-horizon pressure",
+    "IR_F1": "contextually non-trivial reject retained for review",
+}
+
+
 class ReviewBuildError(RuntimeError):
     """Raised when deterministic review-builder inputs are missing or invalid."""
 
@@ -88,10 +110,12 @@ class ReviewBuildResult:
     date: str
     accepted_count: int
     reject_count: int
+    interesting_reject_count: int
     matched_close_count: int
     output_dir: Path
     accepted_path: Path
     reject_path: Path
+    interesting_rejects_path: Path
     reject_reason_summary_path: Path
     summary_path: Path
 
@@ -112,12 +136,14 @@ def build_daily_review_package(
         events_context_rows, close_outcomes_by_key
     )
     reject_rows = build_reject_event_context_rows(events_context_rows)
+    interesting_reject_rows = build_interesting_reject_rows(reject_rows)
 
     review_dir = output_root / "reviews" / date
     review_dir.mkdir(parents=True, exist_ok=True)
 
     accepted_path = review_dir / f"accepted_event_context_{date}.csv"
     reject_path = review_dir / f"reject_event_context_{date}.csv"
+    interesting_rejects_path = review_dir / f"interesting_rejects_{date}.csv"
     reject_reason_summary_path = review_dir / f"reject_reason_summary_{date}.csv"
     summary_path = review_dir / f"daily_review_summary_{date}.md"
     reject_reason_summary_rows = build_reject_reason_summary_rows(date, reject_rows)
@@ -127,7 +153,13 @@ def build_daily_review_package(
         accepted_rows,
         BASE_FIELDS + CONTEXT_FIELDS + ACCEPTED_JOIN_FIELDS,
     )
-    _write_csv(reject_path, reject_rows, _ordered_reject_fields(reject_rows))
+    reject_fields = _ordered_reject_fields(reject_rows)
+    _write_csv(reject_path, reject_rows, reject_fields)
+    _write_csv(
+        interesting_rejects_path,
+        interesting_reject_rows,
+        _ordered_interesting_reject_fields(reject_fields, interesting_reject_rows),
+    )
     _write_csv(
         reject_reason_summary_path,
         reject_reason_summary_rows,
@@ -138,9 +170,11 @@ def build_daily_review_package(
             date,
             accepted_rows,
             reject_rows,
+            interesting_reject_rows,
             reject_reason_summary_rows,
             accepted_path,
             reject_path,
+            interesting_rejects_path,
             reject_reason_summary_path,
             summary_path,
         ),
@@ -151,10 +185,12 @@ def build_daily_review_package(
         date=date,
         accepted_count=len(accepted_rows),
         reject_count=len(reject_rows),
+        interesting_reject_count=len(interesting_reject_rows),
         matched_close_count=sum(1 for row in accepted_rows if row.get("join_status")),
         output_dir=review_dir,
         accepted_path=accepted_path,
         reject_path=reject_path,
+        interesting_rejects_path=interesting_rejects_path,
         reject_reason_summary_path=reject_reason_summary_path,
         summary_path=summary_path,
     )
@@ -190,6 +226,20 @@ def build_reject_event_context_rows(
     return rows
 
 
+def build_interesting_reject_rows(
+    reject_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in reject_rows:
+        classification = _classify_interesting_reject(row)
+        if classification is None:
+            continue
+        output_row = dict(row)
+        output_row.update(classification)
+        rows.append(output_row)
+    return rows
+
+
 def build_reject_reason_summary_rows(
     date: str,
     reject_rows: list[dict[str, str]],
@@ -222,6 +272,260 @@ def build_reject_reason_summary_rows(
         )
         summary_rows.append(summary_row)
     return summary_rows
+
+
+def _classify_interesting_reject(row: dict[str, str]) -> dict[str, str] | None:
+    reject_reason = (row.get("reject_reason") or "").strip()
+    if reject_reason in INTERESTING_REJECT_EXCLUDED_REASONS:
+        return None
+
+    cum_delta_60m = _parse_float(row.get("cum_delta_60m", ""))
+    ret_15m = _parse_float(row.get("ret_15m", ""))
+    abs_dist_vwap = _parse_float(row.get("abs_dist_vwap", ""))
+    if (
+        cum_delta_60m is not None
+        and ret_15m is not None
+        and abs_dist_vwap is not None
+        and abs(cum_delta_60m) < 150
+        and abs(ret_15m) < 0.0015
+        and abs(abs_dist_vwap) < 150
+    ):
+        return None
+
+    rules = (
+        _match_ir_b1,
+        _match_ir_a1,
+        _match_ir_a2,
+        _match_ir_d1,
+        _match_ir_e1,
+        _match_ir_e2,
+        _match_ir_c1,
+        _match_ir_c2,
+        _match_ir_f1,
+    )
+    for rule in rules:
+        match = rule(row)
+        if match is not None:
+            return {
+                "interesting_reject_flag": "1",
+                "interesting_reject_bucket": match["bucket"],
+                "interesting_reject_note": INTERESTING_REJECT_RULE_NOTES[match["rule_id"]],
+                "interesting_rule_id": match["rule_id"],
+            }
+    return None
+
+
+def _ordered_interesting_reject_fields(
+    reject_fields: tuple[str, ...], rows: list[dict[str, str]]
+) -> tuple[str, ...]:
+    fields = list(reject_fields)
+    for field in INTERESTING_REJECT_FIELDS:
+        if field not in fields:
+            fields.append(field)
+    for row in rows:
+        for key in row:
+            if key not in fields:
+                fields.append(key)
+    return tuple(fields)
+
+
+def _match_ir_b1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() not in {"vwap_side", "3of3_fail"}:
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not (
+        _supports_kind(kind, row.get("cum_delta_60m"))
+        and _supports_kind(kind, row.get("cum_delta_180m"))
+        and _supports_kind(kind, row.get("ret_15m"))
+        and _abs_at_most(row.get("abs_dist_vwap"), 500)
+    ):
+        return None
+    return {"bucket": "possible_reversal_confirmation", "rule_id": "IR_B1"}
+
+
+def _match_ir_a1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "direction_mismatch":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not _supports_kind(kind, row.get("cum_delta_60m")):
+        return None
+    if not (
+        _supports_kind(kind, row.get("cum_delta_180m"))
+        or _abs_below(row.get("cum_delta_180m"), 200)
+    ):
+        return None
+    if not (
+        _does_not_support_kind(kind, row.get("ret_15m"))
+        or _abs_below(row.get("ret_15m"), 0.001)
+    ):
+        return None
+    if not _abs_at_most(row.get("abs_dist_vwap"), 600):
+        return None
+    return {"bucket": "possible_reversal_onset", "rule_id": "IR_A1"}
+
+
+def _match_ir_a2(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "vwap_side":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not (
+        _supports_kind(kind, row.get("cum_delta_60m"))
+        and _opposes_kind(kind, row.get("ret_15m"))
+        and _abs_at_most(row.get("abs_dist_vwap"), 350)
+    ):
+        return None
+    return {"bucket": "possible_reversal_onset", "rule_id": "IR_A2"}
+
+
+def _match_ir_d1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "direction_mismatch":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not _supports_kind_with_threshold(kind, row.get("cum_delta_60m"), 400):
+        return None
+    if not _opposes_kind(kind, row.get("ret_15m")):
+        return None
+    if not (_opposes_kind(kind, row.get("ret_60m")) or _abs_below(row.get("ret_60m"), 0.001)):
+        return None
+    if not _abs_at_least(row.get("abs_dist_vwap"), 200):
+        return None
+    return {"bucket": "possible_exhaustion_probe", "rule_id": "IR_D1"}
+
+
+def _match_ir_e1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "vwap_side":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not _supports_kind(kind, row.get("cum_delta_60m")):
+        return None
+    if not (_opposes_kind(kind, row.get("ret_60m")) or _opposes_kind(kind, row.get("cum_delta_180m"))):
+        return None
+    if not _abs_at_least(row.get("abs_dist_vwap"), 200):
+        return None
+    return {"bucket": "possible_trap_or_false_break", "rule_id": "IR_E1"}
+
+
+def _match_ir_e2(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "3of3_fail":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not (
+        _supports_kind(kind, row.get("ret_15m"))
+        and _opposes_kind(kind, row.get("ret_60m"))
+        and _does_not_support_kind(kind, row.get("cum_delta_180m"))
+    ):
+        return None
+    return {"bucket": "possible_trap_or_false_break", "rule_id": "IR_E2"}
+
+
+def _match_ir_c1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "vwap_side":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not (
+        _supports_kind(kind, row.get("cum_delta_60m"))
+        and _supports_kind(kind, row.get("ret_15m"))
+        and _supports_kind(kind, row.get("ret_60m"))
+        and _abs_at_most(row.get("abs_dist_vwap"), 800)
+    ):
+        return None
+    return {"bucket": "possible_continuation_pressure", "rule_id": "IR_C1"}
+
+
+def _match_ir_c2(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() != "3of3_fail":
+        return None
+    kind = _normalize_kind_key(row.get("kind"))
+    if not kind:
+        return None
+    if not (
+        _supports_kind(kind, row.get("cum_delta_60m"))
+        and _supports_kind(kind, row.get("ret_60m"))
+        and _abs_at_most(row.get("abs_dist_vwap"), 700)
+    ):
+        return None
+    return {"bucket": "possible_continuation_pressure", "rule_id": "IR_C2"}
+
+
+def _match_ir_f1(row: dict[str, str]) -> dict[str, str] | None:
+    if (row.get("reject_reason") or "").strip() not in INTERESTING_REJECT_REASON_SET:
+        return None
+    conditions = sum(
+        (
+            _abs_at_least(row.get("cum_delta_60m"), 250),
+            _abs_at_least(row.get("cum_delta_180m"), 400),
+            _abs_at_least(row.get("ret_15m"), 0.002),
+            _abs_at_least(row.get("abs_dist_vwap"), 250),
+        )
+    )
+    if conditions < 2:
+        return None
+    return {"bucket": "unclear_but_constructive", "rule_id": "IR_F1"}
+
+
+def _supports_kind(kind: str, value: Any) -> bool:
+    parsed = _parse_float(value)
+    if parsed is None:
+        return False
+    if kind == "long":
+        return parsed > 0
+    if kind == "short":
+        return parsed < 0
+    return False
+
+
+def _supports_kind_with_threshold(kind: str, value: Any, threshold: float) -> bool:
+    parsed = _parse_float(value)
+    if parsed is None or abs(parsed) < threshold:
+        return False
+    return _supports_kind(kind, parsed)
+
+
+def _opposes_kind(kind: str, value: Any) -> bool:
+    parsed = _parse_float(value)
+    if parsed is None:
+        return False
+    if kind == "long":
+        return parsed < 0
+    if kind == "short":
+        return parsed > 0
+    return False
+
+
+def _does_not_support_kind(kind: str, value: Any) -> bool:
+    parsed = _parse_float(value)
+    if parsed is None:
+        return False
+    return not _supports_kind(kind, parsed)
+
+
+def _abs_below(value: Any, threshold: float) -> bool:
+    parsed = _parse_float(value)
+    return parsed is not None and abs(parsed) < threshold
+
+
+def _abs_at_most(value: Any, threshold: float) -> bool:
+    parsed = _parse_float(value)
+    return parsed is not None and abs(parsed) <= threshold
+
+
+def _abs_at_least(value: Any, threshold: float) -> bool:
+    parsed = _parse_float(value)
+    return parsed is not None and abs(parsed) >= threshold
 
 
 def _ordered_reject_fields(rows: list[dict[str, str]]) -> tuple[str, ...]:
@@ -329,9 +633,12 @@ def _parse_float(value: Any) -> float | None:
     if not text:
         return None
     try:
-        return float(text)
+        parsed = float(text)
     except ValueError:
         return None
+    if isnan(parsed):
+        return None
+    return parsed
 
 
 def _format_stat(values: list[float], aggregator: Any) -> str:
@@ -369,9 +676,11 @@ def _build_summary(
     date: str,
     accepted_rows: list[dict[str, str]],
     reject_rows: list[dict[str, str]],
+    interesting_reject_rows: list[dict[str, str]],
     reject_reason_summary_rows: list[dict[str, str]],
     accepted_path: Path,
     reject_path: Path,
+    interesting_rejects_path: Path,
     reject_reason_summary_path: Path,
     summary_path: Path,
 ) -> str:
@@ -389,6 +698,7 @@ def _build_summary(
         f"- processed_date: {date}",
         f"- accepted_row_count: {len(accepted_rows)}",
         f"- reject_row_count: {len(reject_rows)}",
+        f"- interesting_reject_row_count: {len(interesting_reject_rows)}",
         f"- accepted_with_close_outcomes: {matched_close_count}",
         f"- reject_reason_summary_created: {reject_reason_summary_path.name}",
         f"- reject_reason_summary_group_count: {len(reject_reason_summary_rows)}",
@@ -404,6 +714,7 @@ def _build_summary(
             "- files_created:",
             f"  - {accepted_path.name}",
             f"  - {reject_path.name}",
+            f"  - {interesting_rejects_path.name}",
             f"  - {reject_reason_summary_path.name}",
             f"  - {summary_path.name}",
             "",
