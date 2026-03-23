@@ -27,6 +27,10 @@ class FeedRow:
     price: float | None
     buy_qty: float | None
     sell_qty: float | None
+    open_interest: float | None
+    funding_rate: float | None
+    liq_buy_qty: float | None
+    liq_sell_qty: float | None
     row: dict[str, Any]
     source_file: str
 
@@ -44,6 +48,10 @@ class EventsBaseRow:
     vwap: float | None
     poc: float | None
     matched_feed_ts: datetime | None
+    matched_open_interest: float | None
+    matched_funding_rate: float | None
+    matched_liq_buy_qty: float | None
+    matched_liq_sell_qty: float | None
     source_file: str
     terminal_decision_present: bool
 
@@ -61,6 +69,10 @@ class EventsContextRow:
     vwap: float | None
     poc: float | None
     matched_feed_ts: datetime | None
+    matched_open_interest: float | None
+    matched_funding_rate: float | None
+    matched_liq_buy_qty: float | None
+    matched_liq_sell_qty: float | None
     source_file: str
     terminal_decision_present: bool
     cum_delta_24h: float | None

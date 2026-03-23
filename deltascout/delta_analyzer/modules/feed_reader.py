@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,9 +15,16 @@ def _parse_ts(value: str) -> datetime:
 
 
 def _to_float(value: Any) -> float | None:
-    if value is None or value == "":
+    if value is None:
         return None
-    return float(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    result = float(value)
+    if math.isnan(result):
+        return None
+    return result
 
 
 def read_feed_rows(paths: Iterable[Path]) -> list[FeedRow]:
@@ -35,6 +43,10 @@ def read_feed_rows(paths: Iterable[Path]) -> list[FeedRow]:
                         price=price,
                         buy_qty=_to_float(raw_row.get("BuyQty")),
                         sell_qty=_to_float(raw_row.get("SellQty")),
+                        open_interest=_to_float(raw_row.get("OpenInterest")),
+                        funding_rate=_to_float(raw_row.get("FundingRate")),
+                        liq_buy_qty=_to_float(raw_row.get("LiqBuyQty")),
+                        liq_sell_qty=_to_float(raw_row.get("LiqSellQty")),
                         row=raw_row,
                         source_file=path.name,
                     )
