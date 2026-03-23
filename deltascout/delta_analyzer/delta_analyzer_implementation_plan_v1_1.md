@@ -464,7 +464,8 @@ Phase 2.5 introduces a deterministic research-review build layer on top of the a
 Status note:
 - Phase 2.5 is implemented.
 - Current implemented outputs are `accepted_event_context_YYYY-MM-DD.csv`, `reject_event_context_YYYY-MM-DD.csv`, `interesting_rejects_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and `daily_review_summary_YYYY-MM-DD.md`.
-- `event_sequence_review_YYYY-MM-DD.csv` remains a future review-layer extension beyond the current implemented baseline.
+- `interesting_rejects_YYYY-MM-DD.csv` is the final planned Phase 2.5 review-layer extension and is now implemented.
+- `event_sequence_review_YYYY-MM-DD.csv` remains a future example of the Phase 3 boundary and is not a current implemented output.
 
 Its purpose is **not** to expand signal logic or redesign PEAK.
 Its purpose is to convert archived daily materials into a research-operable review package that helps accumulate evidence for:
@@ -548,12 +549,12 @@ Current implemented outputs:
 
 - `accepted_event_context_YYYY-MM-DD.csv`
 - `reject_event_context_YYYY-MM-DD.csv`
+- `interesting_rejects_YYYY-MM-DD.csv`
 - `reject_reason_summary_YYYY-MM-DD.csv`
 - `daily_review_summary_YYYY-MM-DD.md`
 
 Future review-layer extensions:
 
-- `interesting_rejects_YYYY-MM-DD.csv`
 - `event_sequence_review_YYYY-MM-DD.csv`
 
 CSV tables are the **primary outputs**.
@@ -616,7 +617,7 @@ Expected fields include:
 
 #### 3. interesting_rejects
 
-A research triage subset of `reject_event_context`.
+A research triage subset of `reject_event_context`. This is the final planned Phase 2.5 review-layer extension.
 
 Purpose:
 
@@ -624,7 +625,7 @@ Purpose:
 - surface transition-like, continuation-like, or ambiguity-rich rejects for later review
 - create a repeatable watchlist for behavior-class discovery
 
-This output must remain deterministic and auditable.
+This output must remain deterministic and auditable. It does not introduce sequence-aware or transition-aware analysis, and it is not a setup classifier or signal engine.
 
 Initial helper fields may include:
 
@@ -862,11 +863,11 @@ Phase 2.5 should be considered successful when:
 - rejects are preserved as research objects rather than discarded noise
 - interesting rejects can be surfaced reproducibly
 - reject reasons can be reviewed against real context
-- basic event-sequence helpers become available for later research phases
+- the review layer remains usable as a deterministic daily research surface without introducing sequence-aware or transition-aware analysis
 
 ### Strategic value
 
-Phase 2.5 does not claim to solve setup discovery directly.
+Phase 2.5 does not claim to solve setup discovery directly. True Phase 3 begins only when sequence-aware or transition-aware analysis is introduced.
 
 Its value is that it begins turning raw archived behavior into structured research evidence for later discovery of:
 
@@ -980,7 +981,7 @@ Success criteria:
 ### Next
 Should focus on:
 - using Phase 2.5 review-package outputs as the primary daily research surface
-- `interesting_rejects` as the next review-layer extension
+- `interesting_rejects` as the final planned Phase 2.5 review-layer extension, now implemented
 - continued accepted/reject review against accumulated evidence
 - reject reason / context sanity review
 - accumulating repeated daily review outputs before planning Phase 3

@@ -75,4 +75,4 @@ python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input
 
 The default globs already point to the local research-material folder copied for DeltaScout research.
 
-The review-builder mode is the Phase 2.5 review layer: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables, `interesting_rejects_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`.
+The review-builder mode is the Phase 2.5 review layer: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables, `interesting_rejects_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`. `interesting_rejects_YYYY-MM-DD.csv` is the final planned Phase 2.5 review-layer extension; it does not introduce sequence-aware or transition-aware analysis, and true Phase 3 begins only when that later analysis layer is introduced. `event_sequence_review_YYYY-MM-DD.csv` remains an example of that later boundary and is not currently implemented.
