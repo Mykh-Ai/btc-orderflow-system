@@ -106,26 +106,24 @@ def test_enriched_feed_fields_propagate_into_analyzer_output(tmp_path):
     assert context_rows[0].matched_liq_sell_qty == 8.0
 
 
-def test_resolve_feed_files_prefers_default_archive_source_and_falls_back(monkeypatch):
+def test_resolve_feed_files_uses_canonical_default_without_fallback(monkeypatch):
     monkeypatch.setattr(cli, "DEFAULT_FEED_GLOB", "/opt/aitrader/feed/*.csv")
-    monkeypatch.setattr(cli, "LEGACY_DEFAULT_FEED_GLOB", "legacy/*.csv")
+
+    calls: list[str] = []
 
     def fake_expand(pattern: str):
+        calls.append(pattern)
         if pattern == "/opt/aitrader/feed/*.csv":
-            return []
-        if pattern == "legacy/*.csv":
-            return ["legacy/day.csv"]
+            return ["/opt/aitrader/feed/2026-01-02.csv"]
         raise AssertionError(pattern)
 
     monkeypatch.setattr(cli, "_expand_glob", fake_expand)
 
-    assert cli._resolve_feed_files("/opt/aitrader/feed/*.csv") == ["legacy/day.csv"]
+    assert cli._resolve_feed_files("/opt/aitrader/feed/*.csv") == ["/opt/aitrader/feed/2026-01-02.csv"]
+    assert calls == ["/opt/aitrader/feed/*.csv"]
 
 
 def test_resolve_feed_files_preserves_explicit_override_without_fallback(monkeypatch):
-    monkeypatch.setattr(cli, "DEFAULT_FEED_GLOB", "/opt/aitrader/feed/*.csv")
-    monkeypatch.setattr(cli, "LEGACY_DEFAULT_FEED_GLOB", "legacy/*.csv")
-
     calls: list[str] = []
 
     def fake_expand(pattern: str):
@@ -136,3 +134,28 @@ def test_resolve_feed_files_preserves_explicit_override_without_fallback(monkeyp
 
     assert cli._resolve_feed_files("custom/*.csv") == []
     assert calls == ["custom/*.csv"]
+
+
+def test_main_fails_loudly_when_feed_glob_has_no_matches(monkeypatch):
+    monkeypatch.setattr(cli, "_expand_glob", lambda pattern: [])
+
+    class FakeParser:
+        def parse_args(self):
+            return cli.argparse.Namespace(
+                archive_glob=cli.DEFAULT_ARCHIVE_GLOB,
+                feed_glob=cli.DEFAULT_FEED_GLOB,
+                dataset="events_context",
+                build_review=False,
+                date=None,
+                input_root=cli.DEFAULT_DATASET_ROOT,
+                output_root=cli.DEFAULT_DATASET_ROOT,
+            )
+
+    monkeypatch.setattr(cli, "build_parser", lambda: FakeParser())
+
+    try:
+        cli.main()
+    except SystemExit as exc:
+        assert str(exc) == "no feed files matched: /opt/aitrader/feed/*.csv"
+    else:
+        raise AssertionError("expected SystemExit")

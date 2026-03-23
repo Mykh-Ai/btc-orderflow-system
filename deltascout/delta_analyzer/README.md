@@ -16,7 +16,7 @@ It exists to build a clean base layer for future analyzer work around:
 Phase 1 implements only the foundation layer:
 
 - read archive JSONL files
-- read archived feed CSV files, preferring `/opt/aitrader/feed/*.csv` by default while preserving CLI override support
+- read archived feed CSV files from the canonical `/opt/aitrader/feed/*.csv` default while preserving explicit CLI override support
 - normalize rows into simple internal types, including additive support for optional `OpenInterest`, `FundingRate`, `LiqBuyQty`, and `LiqSellQty` columns when present
 - match event timestamps to nearest feed row with `feed_ts <= event_ts`
 - build `events_base`
@@ -73,6 +73,6 @@ python -m deltascout.delta_analyzer.cli --dataset events_context
 python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
-The default archive glob still points to the local research-material archive sample. The default feed glob now prefers `/opt/aitrader/feed/*.csv`; if that default path has no matches, the analyzer falls back to the legacy local research-material feed glob. Any explicit `--feed-glob` override still wins.
+The default archive glob still points to the local research-material archive sample. The default feed glob is now the canonical enriched archive path `/opt/aitrader/feed/*.csv`, and the analyzer fails loudly when that glob matches no files. Any explicit `--feed-glob` override still wins.
 
 The review-builder mode is the Phase 2.5 review layer: it reads daily `events_context` plus optional `close_outcomes`, then writes accepted/reject review tables, `interesting_rejects_YYYY-MM-DD.csv`, `reject_reason_summary_YYYY-MM-DD.csv`, and a deterministic Markdown summary under `reviews/YYYY-MM-DD/`.

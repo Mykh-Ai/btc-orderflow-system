@@ -14,6 +14,12 @@ REJECT_EVENT_TYPES = (
     "CANDIDATE_COMPARISON_REJECT",
     "CANDIDATE_GATE_REJECT",
 )
+MATCHED_FEED_FIELDS = (
+    "matched_open_interest",
+    "matched_funding_rate",
+    "matched_liq_buy_qty",
+    "matched_liq_sell_qty",
+)
 BASE_FIELDS = (
     "ts",
     "day",
@@ -27,6 +33,8 @@ BASE_FIELDS = (
     "vwap",
     "poc",
     "matched_feed_ts",
+)
+REVIEW_SHARED_FIELDS = BASE_FIELDS + MATCHED_FEED_FIELDS + (
     "source_file",
     "terminal_decision_present",
 )
@@ -151,7 +159,7 @@ def build_daily_review_package(
     _write_csv(
         accepted_path,
         accepted_rows,
-        BASE_FIELDS + CONTEXT_FIELDS + ACCEPTED_JOIN_FIELDS,
+        REVIEW_SHARED_FIELDS + CONTEXT_FIELDS + ACCEPTED_JOIN_FIELDS,
     )
     reject_fields = _ordered_reject_fields(reject_rows)
     _write_csv(reject_path, reject_rows, reject_fields)
@@ -205,7 +213,7 @@ def build_accepted_event_context_rows(
         if row.get("event_type") != ACCEPTED_EVENT_TYPE:
             continue
         output_row = {
-            field: row.get(field, "") for field in BASE_FIELDS + CONTEXT_FIELDS
+            field: row.get(field, "") for field in REVIEW_SHARED_FIELDS + CONTEXT_FIELDS
         }
         close_row = close_outcomes_by_key.get(
             (_normalize_ts_key(row.get("ts")), _normalize_kind_key(row.get("kind")))
@@ -529,7 +537,7 @@ def _abs_at_least(value: Any, threshold: float) -> bool:
 
 
 def _ordered_reject_fields(rows: list[dict[str, str]]) -> tuple[str, ...]:
-    preferred = list(BASE_FIELDS + CONTEXT_FIELDS)
+    preferred = list(REVIEW_SHARED_FIELDS + CONTEXT_FIELDS)
     extras: list[str] = []
     for row in rows:
         for key in row:

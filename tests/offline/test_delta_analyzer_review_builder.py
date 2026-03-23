@@ -28,6 +28,10 @@ EVENTS_CONTEXT_FIELDS = [
     "vwap",
     "poc",
     "matched_feed_ts",
+    "matched_open_interest",
+    "matched_funding_rate",
+    "matched_liq_buy_qty",
+    "matched_liq_sell_qty",
     "source_file",
     "terminal_decision_present",
     "cum_delta_24h",
@@ -315,6 +319,54 @@ def test_accepted_table_joins_close_outcomes_when_event_ts_is_naive_and_outcome_
     assert row["join_status"] == "exact"
     assert row["close_ts"] == "2026-01-02T01:00:00Z"
     assert result.matched_close_count == 1
+
+
+def test_review_outputs_include_matched_enriched_feed_fields(dataset_root: Path, tmp_path: Path):
+    _write_csv(
+        dataset_root / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            {
+                **{field: "" for field in EVENTS_CONTEXT_FIELDS},
+                "ts": "2026-01-02T00:10:00Z",
+                "day": "2026-01-02",
+                "event_type": "PEAK_EMIT",
+                "kind": "long",
+                "matched_open_interest": "12345",
+                "matched_funding_rate": "0.0001",
+                "matched_liq_buy_qty": "7",
+                "matched_liq_sell_qty": "8",
+            },
+            {
+                **{field: "" for field in EVENTS_CONTEXT_FIELDS},
+                "ts": "2026-01-02T00:20:00Z",
+                "day": "2026-01-02",
+                "event_type": "CANDIDATE_GATE_REJECT",
+                "kind": "short",
+                "reject_reason": "weak_delta",
+                "matched_open_interest": "54321",
+                "matched_funding_rate": "-0.0002",
+                "matched_liq_buy_qty": "9",
+                "matched_liq_sell_qty": "10",
+            },
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        accepted_row = next(csv.DictReader(handle))
+    with result.reject_path.open("r", encoding="utf-8", newline="") as handle:
+        reject_row = next(csv.DictReader(handle))
+
+    assert accepted_row["matched_open_interest"] == "12345"
+    assert accepted_row["matched_funding_rate"] == "0.0001"
+    assert accepted_row["matched_liq_buy_qty"] == "7"
+    assert accepted_row["matched_liq_sell_qty"] == "8"
+    assert reject_row["matched_open_interest"] == "54321"
+    assert reject_row["matched_funding_rate"] == "-0.0002"
+    assert reject_row["matched_liq_buy_qty"] == "9"
+    assert reject_row["matched_liq_sell_qty"] == "10"
 
 
 def test_build_succeeds_without_close_outcomes_and_leaves_join_fields_empty(
