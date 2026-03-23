@@ -15,6 +15,7 @@ It does not use `executor.log`, `executor_state.json`, generated close outcome C
 - Processes only one latest close marker at a time, using `trade_key` when present and a timestamp/reason/side fallback when it is not.
 - Runs, in order, `build_phase1_derived`, `build_close_outcomes`, and `delta_analyzer --build-review` for the discovered UTC close date.
 - Updates `/root/volume-alert/data/state/post_close_watcher_state.json` only after all three steps succeed.
+- `build_phase1_derived` is replay-safe by default because it resolves feed input from its own `--input-root/feed/YYYY-MM-DD.csv` unless `--feed-root` or `--feed-file` is supplied explicitly.
 
 ## Intended usage
 
