@@ -59,13 +59,7 @@ def load_feed(feed_path: Path) -> pd.DataFrame:
     if not feed_path.exists():
         raise OfflineBuildError(f"missing feed file: {feed_path}")
     df = pd.read_csv(feed_path)
-    required = [
-        "Timestamp",
-        "BuyQty",
-        "SellQty",
-        "AvgPrice",
-        "ClosePrice",
-    ]
+    required = ["Timestamp", "BuyQty", "SellQty", "AvgPrice", "ClosePrice"]
     miss = [c for c in required if c not in df.columns]
     if miss:
         raise OfflineBuildError(f"feed missing columns {miss} in {feed_path}")
@@ -73,8 +67,16 @@ def load_feed(feed_path: Path) -> pd.DataFrame:
     df["ts"] = _parse_ts(df["Timestamp"])
     if df["ts"].isna().any():
         raise OfflineBuildError(f"feed contains invalid Timestamp rows in {feed_path}")
-    df["delta"] = pd.to_numeric(df["BuyQty"], errors="coerce") - pd.to_numeric(df["SellQty"], errors="coerce")
-    df["price"] = pd.to_numeric(df["ClosePrice"], errors="coerce").fillna(pd.to_numeric(df["AvgPrice"], errors="coerce"))
-    if df["delta"].isna().any() or df["price"].isna().any():
-        raise OfflineBuildError("feed contains non-numeric BuyQty/SellQty/price values")
+    buy_qty = pd.to_numeric(df["BuyQty"], errors="coerce")
+    sell_qty = pd.to_numeric(df["SellQty"], errors="coerce")
+    avg_price = pd.to_numeric(df["AvgPrice"], errors="coerce")
+    close_price = pd.to_numeric(df["ClosePrice"], errors="coerce")
+    if buy_qty.isna().any() or sell_qty.isna().any():
+        raise OfflineBuildError(f"feed contains invalid BuyQty/SellQty rows in {feed_path}")
+    if (avg_price.isna() & close_price.isna()).any():
+        raise OfflineBuildError(f"feed contains invalid ClosePrice/AvgPrice rows in {feed_path}")
+    df["delta"] = buy_qty - sell_qty
+    df["price"] = close_price.fillna(avg_price)
+    if df["price"].isna().any():
+        raise OfflineBuildError(f"feed contains invalid ClosePrice/AvgPrice rows in {feed_path}")
     return df.sort_values(["ts"], kind="mergesort").reset_index(drop=True)

@@ -12,8 +12,15 @@ from scripts.offline.build_close_outcomes import (
     _load_peak_events,
     derive_close_outcomes,
 )
-from scripts.offline.build_phase1_derived import _filter_df_by_date, derive_reject_dataset
+from scripts.offline.build_phase1_derived import _filter_df_by_date, derive_reject_dataset, resolve_feed_file, run
 from scripts.offline.common import OfflineBuildError, load_feed
+
+
+def _read_output_dataset(path_base):
+    parquet_path = path_base.with_suffix(".parquet")
+    if parquet_path.exists():
+        return pd.read_parquet(parquet_path)
+    return pd.read_csv(path_base.with_suffix(".csv"))
 
 
 def test_reject_classification_soft_and_multi():
@@ -158,8 +165,67 @@ def test_load_feed_fails_loudly_on_invalid_required_numeric_fields(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(OfflineBuildError, match="non-numeric BuyQty/SellQty/price values"):
+    with pytest.raises(OfflineBuildError, match="invalid BuyQty/SellQty"):
         load_feed(feed)
+
+
+def test_load_feed_fails_loudly_when_closeprice_and_avgprice_are_both_invalid(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:00:00Z,,,5,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="invalid ClosePrice/AvgPrice"):
+        load_feed(feed)
+
+
+def test_resolve_feed_file_priority_order(tmp_path):
+    input_root = tmp_path / "input"
+    explicit_file = tmp_path / "explicit.csv"
+    external_root = tmp_path / "external"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=str(external_root),
+        feed_file=str(explicit_file),
+    )
+
+    assert resolved == explicit_file
+
+
+def test_resolve_feed_file_uses_explicit_feed_root_when_feed_file_missing(tmp_path):
+    input_root = tmp_path / "input"
+    external_root = tmp_path / "external"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=str(external_root),
+        feed_file=None,
+    )
+
+    assert resolved == external_root / "2026-01-02.csv"
+
+
+def test_resolve_feed_file_defaults_to_self_contained_input_root(tmp_path):
+    input_root = tmp_path / "input"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=None,
+        feed_file=None,
+    )
+
+    assert resolved == input_root / "feed" / "2026-01-02.csv"
 
 
 def test_enriched_feed_normalization_preserves_late_peak_behavior(tmp_path):
@@ -191,6 +257,65 @@ def test_enriched_feed_normalization_preserves_late_peak_behavior(tmp_path):
     assert out.iloc[0]["move_start_ts"] == pd.Timestamp("2026-01-02T00:01:00Z")
     assert out.iloc[0]["latency_min"] == 1.0
     assert out.iloc[0]["move_size"] == 4.0
+
+
+def test_run_uses_self_contained_feed_by_default_and_preserves_output_parity(tmp_path):
+    input_root = tmp_path / "data"
+    archive_dir = input_root / "archive" / "deltascout"
+    feed_dir = input_root / "feed"
+    output_root = tmp_path / "out"
+    archive_dir.mkdir(parents=True)
+    feed_dir.mkdir(parents=True)
+
+    (archive_dir / "2026-01-02.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event":"DELTA_MAX","ts":"2026-01-02T00:02:00Z","seq":1,"delta":5,"price":102}',
+                '{"event":"PEAK_EMIT","ts":"2026-01-02T00:02:00Z","seq":2,"kind":"long","price":102}',
+                '{"event":"CANDIDATE_COMPARISON_REJECT","ts":"2026-01-02T00:03:00Z","seq":3,"kind":"long","reject_reason":"no_prev_peak"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (feed_dir / "2026-01-02.csv").write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty",
+                "2026-01-02T00:02:00Z,102,102,6,1",
+                "2026-01-02T00:00:00Z,100,100,5,1",
+                "2026-01-02T00:01:00Z,98,98,4,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run(
+        type(
+            "Args",
+            (),
+            {
+                "date": "2026-01-02",
+                "input_root": str(input_root),
+                "output_root": str(output_root),
+                "feed_root": None,
+                "feed_file": None,
+                "roll_window": 3,
+                "owner_quantile": 0.75,
+                "late_lookback_rows": 3,
+                "soft_vwap_margin": 50.0,
+                "soft_imb_margin": 0.01,
+            },
+        )()
+    )
+
+    baseline = _read_output_dataset(output_root / "baseline_init_2026-01-02")
+    late_peak = _read_output_dataset(output_root / "late_peak_2026-01-02")
+
+    assert baseline["reject_reason"].tolist() == ["no_prev_peak"]
+    assert late_peak.loc[0, "move_start_ts"] == "2026-01-02 00:01:00+00:00"
+    assert late_peak.loc[0, "latency_min"] == 1.0
 
 
 def test_close_dedup_state_and_log_duplicate():

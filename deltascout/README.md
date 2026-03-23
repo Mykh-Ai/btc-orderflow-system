@@ -140,7 +140,7 @@ Builders:
 
 | Dataset area | Source | Builder |
 |--------------|--------|---------|
-| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + canonical enriched feed archive (`/opt/aitrader/feed/YYYY-MM-DD.csv` by default) | `scripts.offline.build_phase1_derived` |
+| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + canonical enriched daily feed, resolved from `--feed-file`, `--feed-root/YYYY-MM-DD.csv`, or `--input-root/feed/YYYY-MM-DD.csv` | `scripts.offline.build_phase1_derived` |
 | Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts.offline.build_close_outcomes` |
 | Event context + daily review artifacts | DeltaScout archive + feed archive; optional close outcomes join for accepted review rows | `deltascout.delta_analyzer` |
 
@@ -150,10 +150,10 @@ Builders:
 
 ### Feed archive contract
 
-Path:
+Default self-contained path:
 
 ```text
-/opt/aitrader/feed/YYYY-MM-DD.csv
+INPUT_ROOT/feed/YYYY-MM-DD.csv
 ```
 
 Properties:
@@ -163,6 +163,7 @@ Properties:
 - deduplicated by `Timestamp`
 - same core schema as `aggregated.csv`, with optional enriched columns
 - chronologically ordered
+- builder normalization uses `Timestamp -> ts` (UTC), `BuyQty - SellQty -> delta`, and `ClosePrice` with row-level `AvgPrice` fallback -> `price`
 
 Rules:
 
@@ -245,7 +246,13 @@ PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
-`build_phase1_derived` now reads the canonical enriched daily feed from `/opt/aitrader/feed/YYYY-MM-DD.csv` by default; use `--feed-file` only when you need an explicit override.
+`build_phase1_derived` resolves feed input in this order:
+
+1. `--feed-file` explicit file override
+2. `--feed-root/YYYY-MM-DD.csv`
+3. self-contained `--input-root/feed/YYYY-MM-DD.csv`
+
+This keeps copied replay trees self-contained by default while still supporting production-style runs against an explicit external canonical feed root.
 
 Expected outputs:
 
