@@ -13,9 +13,14 @@ It does not use `executor.log`, `executor_state.json`, generated close outcome C
 - Skips malformed JSONL rows safely.
 - If `trade_outcomes.jsonl` is missing, empty, or has no new valid close row, the watcher exits cleanly without running the pipeline.
 - Processes only one latest close marker at a time, using `trade_key` when present and a timestamp/reason/side fallback when it is not.
-- Runs, in order, `build_phase1_derived`, `build_close_outcomes`, and `delta_analyzer --build-review` for the discovered UTC close date.
-- Updates `/root/volume-alert/data/state/post_close_watcher_state.json` only after all three steps succeed.
-- `build_phase1_derived` is replay-safe by default because it resolves feed input from its own `--input-root/feed/YYYY-MM-DD.csv` unless `--feed-root` or `--feed-file` is supplied explicitly.
+- Runs, in order, four pipeline steps for the discovered UTC close date:
+  1. `build_phase1_derived` — rejects, baseline, ownership misses, late peaks
+  2. `build_close_outcomes` — close outcome join from trade_outcomes journal
+  3. `delta_analyzer.cli` (main mode) — builds `events_context_YYYY-MM-DD.csv` from archive + enriched feed
+  4. `delta_analyzer.cli --build-review` — daily review package from prebuilt datasets
+- Updates `/root/volume-alert/data/state/post_close_watcher_state.json` only after all four steps succeed.
+- `build_phase1_derived` uses `--feed-root /opt/aitrader/feed` for canonical enriched feed. It falls back to `--input-root/feed/YYYY-MM-DD.csv` only when `--feed-root` is not supplied.
+- Step 3 automatically loads the previous day's feed file (when available) to compute `ret_15m`/`ret_60m` for early-day events.
 
 ## Intended usage
 

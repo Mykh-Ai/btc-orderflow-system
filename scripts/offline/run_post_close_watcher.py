@@ -167,10 +167,11 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     python_bin = args.python_bin
+    feed_root = args.feed_root
     steps = [
         (
             "build_phase1_derived",
-            [python_bin, "scripts/offline/build_phase1_derived.py", "--date", target_date, "--input-root", str(input_root), "--output-root", str(output_root)],
+            [python_bin, "scripts/offline/build_phase1_derived.py", "--date", target_date, "--input-root", str(input_root), "--output-root", str(output_root), "--feed-root", feed_root],
         ),
         (
             "build_close_outcomes",
@@ -185,6 +186,22 @@ def run(args: argparse.Namespace) -> int:
                 str(output_root),
                 "--trade-outcomes-file",
                 str(trade_outcomes_file),
+            ],
+        ),
+        (
+            "build_events_context",
+            [
+                python_bin,
+                "-m",
+                "deltascout.delta_analyzer.cli",
+                "--archive-glob",
+                str(input_root / "archive" / "deltascout" / f"{target_date}.jsonl"),
+                "--feed-glob",
+                str(Path(feed_root) / f"{target_date}.csv"),
+                "--date",
+                target_date,
+                "--output-root",
+                str(output_root),
             ],
         ),
         (
@@ -223,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", default="/root/volume-alert/data/archive/datasets", help="Dataset output root for offline builders and review build.")
     parser.add_argument("--trade-outcomes-file", default="/root/volume-alert/data/state/trade_outcomes.jsonl", help="Canonical append-only close/outcome journal.")
     parser.add_argument("--state-file", default="/root/volume-alert/data/state/post_close_watcher_state.json", help="Watcher state file updated only after full success.")
+    parser.add_argument("--feed-root", default="/opt/aitrader/feed", help="External feed root containing enriched YYYY-MM-DD.csv files.")
     parser.add_argument("--python-bin", default="/opt/aitrader/.venv/bin/python", help="Python interpreter used for subprocess pipeline steps.")
     return parser
 

@@ -25,12 +25,13 @@ CSV row -> Delta Detection -> Comparison (3/3 rule) -> Gate Logic -> PEAK Emit
 | What | Path | Description |
 |------|------|-------------|
 | Live feed | `/data/feed/aggregated.csv` | Rolling feed used by DeltaScout during runtime |
-| Feed archive | `/data/archive/feed/YYYY-MM-DD.csv` | Append-only historical minute archive used for research |
+| Enriched feed archive | `/opt/aitrader/feed/YYYY-MM-DD.csv` | Canonical enriched daily feed used by offline builders |
+| Legacy feed archive | `/data/archive/feed/YYYY-MM-DD.csv` | Legacy minute archive (no enriched columns) |
 
-CSV schema:
+Enriched CSV schema:
 
 ```text
-Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
+Timestamp,Open,High,Low,Close,Volume,AggTrades,BuyQty,SellQty,VWAP,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty,IsSynthetic
 ```
 
 ### Live signal output
@@ -140,9 +141,10 @@ Builders:
 
 | Dataset area | Source | Builder |
 |--------------|--------|---------|
-| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + canonical enriched daily feed, resolved from `--feed-file`, `--feed-root/YYYY-MM-DD.csv`, or `--input-root/feed/YYYY-MM-DD.csv` | `scripts.offline.build_phase1_derived` |
-| Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts.offline.build_close_outcomes` |
-| Event context + daily review artifacts | DeltaScout archive + feed archive; optional close outcomes join for accepted review rows | `deltascout.delta_analyzer` |
+| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + enriched feed | `scripts/offline/build_phase1_derived.py` |
+| Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts/offline/build_close_outcomes.py` |
+| Events context CSV | DeltaScout archive + enriched feed | `deltascout.delta_analyzer.cli` (main mode with `--date`) |
+| Daily review package | Prebuilt `events_context`, `close_outcomes`, Phase 1 CSVs | `deltascout.delta_analyzer.cli --build-review` |
 
 ---
 
@@ -229,30 +231,58 @@ Gate parameters include `CHOP30_MAX`, `COH10_MIN`, `IMB_MIN`, `IMB_MAX`, and `VW
 The system automatically accumulates:
 
 ```text
-/data/archive/feed/YYYY-MM-DD.csv
-/data/archive/deltascout/YYYY-MM-DD.jsonl
-/data/state/trade_outcomes.jsonl
+/opt/aitrader/feed/YYYY-MM-DD.csv        # enriched feed (canonical)
+/data/archive/deltascout/YYYY-MM-DD.jsonl # DeltaScout decision archive
+/data/state/trade_outcomes.jsonl          # closed trade outcomes
 ```
 
 No manual action is required during collection.
 
 ### 2. Rebuild datasets after a trade close
 
-In routine operation this is handled by the post-close watcher / cron flow. For a manual rebuild of the UTC close date, run:
+In routine operation this is handled by the post-close watcher / cron flow. For a manual rebuild of the UTC close date, run the four steps in order:
 
 ```bash
-PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
+# Step 1 — Phase 1 derived datasets (rejects, baseline, ownership misses, late peaks)
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  scripts/offline/build_phase1_derived.py \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data \
+  --output-root /root/volume-alert/data/archive/datasets \
+  --feed-root /opt/aitrader/feed
+
+# Step 2 — Close outcomes join
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  scripts/offline/build_close_outcomes.py \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data \
+  --output-root /root/volume-alert/data/archive/datasets \
+  --trade-outcomes-file /root/volume-alert/data/state/trade_outcomes.jsonl
+
+# Step 3 — Build events_context CSV from archive + enriched feed
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  -m deltascout.delta_analyzer.cli \
+  --archive-glob "/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl" \
+  --feed-glob "/opt/aitrader/feed/YYYY-MM-DD.csv" \
+  --date YYYY-MM-DD \
+  --output-root /root/volume-alert/data/archive/datasets
+
+# Step 4 — Daily review package from prebuilt datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  -m deltascout.delta_analyzer.cli \
+  --build-review \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data/archive/datasets \
+  --output-root /root/volume-alert/data/archive/datasets
 ```
 
-`build_phase1_derived` resolves feed input in this order:
+**Feed resolution.** `build_phase1_derived` resolves feed input in this order:
 
-1. `--feed-file` explicit file override
-2. `--feed-root/YYYY-MM-DD.csv`
-3. self-contained `--input-root/feed/YYYY-MM-DD.csv`
+1. `--feed-file` explicit file override (highest priority)
+2. `--feed-root/YYYY-MM-DD.csv` — canonical enriched feed at `/opt/aitrader/feed/`
+3. self-contained `--input-root/feed/YYYY-MM-DD.csv` (fallback)
 
-This keeps copied replay trees self-contained by default while still supporting production-style runs against an explicit external canonical feed root.
+Production uses `--feed-root /opt/aitrader/feed` to read enriched columns (`OpenInterest`, `FundingRate`, `LiqBuyQty`, `LiqSellQty`). Step 3 reads the same enriched feed via `--feed-glob`.
 
 Expected outputs:
 

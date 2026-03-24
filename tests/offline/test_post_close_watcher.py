@@ -23,6 +23,7 @@ def _args(tmp_path: Path, trade_file: Path, state_file: Path) -> Namespace:
         trade_outcomes_file=str(trade_file),
         state_file=str(state_file),
         python_bin="/usr/bin/python3",
+        feed_root="/opt/aitrader/feed",
     )
 
 
@@ -81,7 +82,7 @@ def test_malformed_rows_before_valid_row_still_processed(tmp_path, monkeypatch):
     rc = run(_args(tmp_path, trade_file, state_file))
 
     assert rc == 0
-    assert len(calls) == 3
+    assert len(calls) == 4
     state = json.loads(state_file.read_text(encoding="utf-8"))
     assert state["last_processed_marker"] == "trade_key:TK-1"
 
@@ -120,17 +121,19 @@ def test_new_valid_row_runs_pipeline_in_order(tmp_path, monkeypatch):
     rc = run(_args(tmp_path, trade_file, state_file))
 
     assert rc == 0
+    ds = str(tmp_path / "data" / "archive" / "datasets")
     assert calls == [
-        ["/usr/bin/python3", "scripts/offline/build_phase1_derived.py", "--date", "2026-01-02", "--input-root", str(tmp_path / "data"), "--output-root", str(tmp_path / "data" / "archive" / "datasets")],
-        ["/usr/bin/python3", "scripts/offline/build_close_outcomes.py", "--date", "2026-01-02", "--input-root", str(tmp_path / "data"), "--output-root", str(tmp_path / "data" / "archive" / "datasets"), "--trade-outcomes-file", str(trade_file)],
-        ["/usr/bin/python3", "-m", "deltascout.delta_analyzer.cli", "--build-review", "--date", "2026-01-02", "--input-root", str(tmp_path / "data" / "archive" / "datasets"), "--output-root", str(tmp_path / "data" / "archive" / "datasets")],
+        ["/usr/bin/python3", "scripts/offline/build_phase1_derived.py", "--date", "2026-01-02", "--input-root", str(tmp_path / "data"), "--output-root", ds, "--feed-root", "/opt/aitrader/feed"],
+        ["/usr/bin/python3", "scripts/offline/build_close_outcomes.py", "--date", "2026-01-02", "--input-root", str(tmp_path / "data"), "--output-root", ds, "--trade-outcomes-file", str(trade_file)],
+        ["/usr/bin/python3", "-m", "deltascout.delta_analyzer.cli", "--archive-glob", str(tmp_path / "data" / "archive" / "deltascout" / "2026-01-02.jsonl"), "--feed-glob", str(Path("/opt/aitrader/feed") / "2026-01-02.csv"), "--date", "2026-01-02", "--output-root", ds],
+        ["/usr/bin/python3", "-m", "deltascout.delta_analyzer.cli", "--build-review", "--date", "2026-01-02", "--input-root", ds, "--output-root", ds],
     ]
     state = json.loads(state_file.read_text(encoding="utf-8"))
     assert state["last_processed_marker"] == "trade_key:TK-3"
     assert state["last_processed_date"] == "2026-01-02"
 
 
-@pytest.mark.parametrize("failing_step", [0, 1, 2])
+@pytest.mark.parametrize("failing_step", [0, 1, 2, 3])
 def test_pipeline_failure_does_not_update_state(tmp_path, monkeypatch, failing_step):
     trade_file = tmp_path / "trade_outcomes.jsonl"
     _write_lines(trade_file, [json.dumps(_valid_row(trade_key="TK-4"))])

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 from collections import Counter
+from dataclasses import fields as dataclass_fields
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import DEFAULT_ARCHIVE_GLOB, DEFAULT_FEED_GLOB
@@ -12,6 +15,7 @@ from .modules.build_events_context import build_events_context_dataset
 from .modules.build_review_tables import ReviewBuildError, build_daily_review_package
 from .modules.feed_reader import read_feed_rows
 from .modules.integrity_checks import run_integrity_checks
+from .types import EventsContextRow
 
 
 DATASET_CHOICES = ("events_base", "events_context")
@@ -51,6 +55,39 @@ def _resolve_feed_files(pattern: str) -> list[Path]:
     return _expand_glob(pattern)
 
 
+def _resolve_prev_day_feed(feed_files: list[Path], date_str: str) -> Path | None:
+    """Return the previous UTC day's feed file if it exists in the same directory."""
+    if not feed_files or not date_str:
+        return None
+    prev_date = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    feed_dir = feed_files[0].parent
+    for suffix in (".csv",):
+        candidate = feed_dir / f"{prev_date}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _write_events_context_csv(
+    rows: list[EventsContextRow], out_path: Path
+) -> Path:
+    """Write events_context rows to CSV with the ``day`` column expected by --build-review."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    field_names = [f.name for f in dataclass_fields(EventsContextRow)]
+    # insert 'day' after 'ts' to match the review-builder contract
+    header = [field_names[0], "day"] + field_names[1:]
+    with out_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(header)
+        for row in rows:
+            ts_val = row.ts
+            day_val = ts_val.strftime("%Y-%m-%d") if ts_val else ""
+            vals = [getattr(row, f) for f in field_names]
+            vals.insert(1, day_val)
+            writer.writerow(["" if v is None else v for v in vals])
+    return out_path
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.build_review:
@@ -75,11 +112,27 @@ def main() -> None:
 
     events = read_archive_events(archive_files)
     feed_rows = read_feed_rows(feed_files)
+    # Include previous-day feed rows for return context near day boundaries
+    context_feed_rows = feed_rows
+    if args.date:
+        prev_feed = _resolve_prev_day_feed(feed_files, args.date)
+        if prev_feed:
+            prev_rows = read_feed_rows([prev_feed])
+            context_feed_rows = sorted(prev_rows + feed_rows, key=lambda r: r.ts)
     events_base = build_events_base_dataset(events, feed_rows)
-    events_context = []
+    events_context: list[EventsContextRow] = []
     if args.dataset == "events_context":
-        events_context = build_events_context_dataset(events_base, feed_rows)
+        events_context = build_events_context_dataset(events_base, context_feed_rows)
     checks = run_integrity_checks(events_base)
+
+    # Save events_context CSV when --date and --output-root are provided
+    if events_context and args.date:
+        output_root = Path(args.output_root)
+        out_path = output_root / f"events_context_{args.date}.csv"
+        # Filter to requested date only
+        dated = [r for r in events_context if r.ts.strftime("%Y-%m-%d") == args.date]
+        written = _write_events_context_csv(dated, out_path)
+        print(f"events_context_csv={written} rows={len(dated)}")
 
     event_counts = Counter(row.event_type for row in events_base)
 

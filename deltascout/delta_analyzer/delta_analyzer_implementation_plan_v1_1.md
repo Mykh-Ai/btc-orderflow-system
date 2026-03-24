@@ -888,6 +888,17 @@ That is why this layer is justified now.
 It improves the research stack without pretending that setup classes are already known.
 
 ---
+Transitional note (Phase 2.5 → Phase 3):
+
+Before introducing sequence-level analysis, an intermediate review-layer extension is expected:
+`interesting_rejects_YYYY-MM-DD.csv`.
+
+This dataset is still part of the Phase 2.5 review layer. It is derived from `reject_event_context` and `reject_reason_summary`, and is intended to highlight reject rows that appear structurally non-trivial or potentially informative for future setup discovery.
+
+This step does not introduce sequence features, state modeling, or setup taxonomy. Its role is to narrow the reject space into a smaller set of candidates that justify deeper investigation.
+
+True Phase 3 begins only when sequence-aware or transition-aware analysis is introduced (e.g. `event_sequence_review`).
+
 
 ## Phase 3 — Sequence layer
 Goal:

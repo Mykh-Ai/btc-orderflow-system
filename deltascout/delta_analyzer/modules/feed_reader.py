@@ -34,7 +34,9 @@ def read_feed_rows(paths: Iterable[Path]) -> list[FeedRow]:
             reader = csv.DictReader(handle)
             for raw_row in reader:
                 ts = _parse_ts(str(raw_row["Timestamp"]))
-                price = _to_float(raw_row.get("ClosePrice"))
+                price = _to_float(raw_row.get("Close"))
+                if price is None:
+                    price = _to_float(raw_row.get("ClosePrice"))
                 if price is None:
                     price = _to_float(raw_row.get("AvgPrice"))
                 rows.append(

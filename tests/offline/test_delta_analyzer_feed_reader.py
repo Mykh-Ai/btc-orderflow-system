@@ -29,6 +29,54 @@ def test_read_feed_rows_supports_enriched_columns(tmp_path):
     assert row.liq_sell_qty == 8.0
 
 
+def test_read_feed_rows_enriched_close_column_is_preferred(tmp_path):
+    """Enriched feed uses 'Close' instead of 'ClosePrice'."""
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "Timestamp,Open,High,Low,Close,Volume,AggTrades,BuyQty,SellQty,VWAP,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty,IsSynthetic\n"
+        "2026-01-02T00:00:00Z,99,102,98,101,50,10,5,2,100.5,12345,0.0001,7,8,False\n",
+        encoding="utf-8",
+    )
+
+    rows = read_feed_rows([feed])
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.price == 101.0
+    assert row.open_interest == 12345.0
+    assert row.funding_rate == 0.0001
+    assert row.liq_buy_qty == 7.0
+    assert row.liq_sell_qty == 8.0
+
+
+def test_read_feed_rows_close_takes_priority_over_closeprice(tmp_path):
+    """If both Close and ClosePrice exist, Close wins."""
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "Timestamp,Close,ClosePrice,BuyQty,SellQty\n"
+        "2026-01-02T00:00:00Z,200,150,5,2\n",
+        encoding="utf-8",
+    )
+
+    rows = read_feed_rows([feed])
+
+    assert rows[0].price == 200.0
+
+
+def test_read_feed_rows_falls_back_to_closeprice_then_avgprice(tmp_path):
+    """Without Close, fallback chain: ClosePrice -> AvgPrice."""
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "Timestamp,AvgPrice,BuyQty,SellQty\n"
+        "2026-01-02T00:00:00Z,95,5,2\n",
+        encoding="utf-8",
+    )
+
+    rows = read_feed_rows([feed])
+
+    assert rows[0].price == 95.0
+
+
 def test_read_feed_rows_supports_legacy_schema_without_optional_columns(tmp_path):
     feed = tmp_path / "2026-01-02.csv"
     feed.write_text(

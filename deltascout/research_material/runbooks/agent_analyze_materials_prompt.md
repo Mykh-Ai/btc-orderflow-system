@@ -6,7 +6,7 @@ After the daily post-close watcher has already run on the server, copy the lates
 Important:
 - Do NOT rebuild anything
 - Do NOT rerun the watcher
-- Do NOT modify code
+- Do NOT modify code, tests, docs, or pipeline files
 - Do NOT modify local research files except by copying the synced artifacts into the correct local folders
 - This is a sync + pre-summary task only
 
@@ -43,17 +43,20 @@ Use:
 B. Verify required server artifacts for that date
 Using `YYYY-MM-DD = last_processed_date`, verify these files exist on the server:
 
-1. Review outputs
-- `/root/volume-alert/data/archive/datasets/reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
-- `/root/volume-alert/data/archive/datasets/reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
-- `/root/volume-alert/data/archive/datasets/reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
+1. Analyzer outputs (all under `/root/volume-alert/data/archive/datasets/`)
+- `reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/interesting_rejects_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_reason_summary_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
+- `close_outcomes_YYYY-MM-DD.csv` (if CSV does not exist, check `.parquet`)
+- `baseline_init_YYYY-MM-DD.csv`
+- `late_peak_YYYY-MM-DD.csv`
+- `reject_dataset_YYYY-MM-DD.csv`
+- `window_owner_miss_YYYY-MM-DD.csv`
+- `events_context_YYYY-MM-DD.csv`
 
-2. Close outcomes
-- `/root/volume-alert/data/archive/datasets/close_outcomes_YYYY-MM-DD.csv`
-- if CSV does not exist, check:
-  - `/root/volume-alert/data/archive/datasets/close_outcomes_YYYY-MM-DD.parquet`
-
-3. Raw archive/feed inputs for the same date
+2. Raw archive/feed inputs for the same date
 - `/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl`
 - `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv`
 
@@ -62,35 +65,43 @@ If any required file is missing, stop and report exactly which file is missing.
 Also report line counts where applicable:
 - accepted_event_context csv
 - reject_event_context csv
+- interesting_rejects csv
+- reject_reason_summary csv
 - close_outcomes csv if present
+- baseline_init csv
+- late_peak csv
+- reject_dataset csv
+- window_owner_miss csv
+- events_context csv
 - raw archive jsonl
 - raw feed csv
 
 C. Copy the artifacts into the local repo
 Copy these artifacts from server to local repo:
 
-1. Review outputs into:
-- `D:\Project_V\btc-orderflow-system\deltascout\research_material\phase25_outputs\reviews\YYYY-MM-DD\`
+1. All analyzer outputs into one folder per date:
+- `D:\Project_V\btc-orderflow-system\deltascout\research_material\reviews\YYYY-MM-DD\`
 
 Files:
 - `accepted_event_context_YYYY-MM-DD.csv`
 - `reject_event_context_YYYY-MM-DD.csv`
+- `interesting_rejects_YYYY-MM-DD.csv`
+- `reject_reason_summary_YYYY-MM-DD.csv`
 - `daily_review_summary_YYYY-MM-DD.md`
+- `close_outcomes_YYYY-MM-DD.csv` (or parquet if that is the only server artifact present)
+- `baseline_init_YYYY-MM-DD.csv`
+- `late_peak_YYYY-MM-DD.csv`
+- `reject_dataset_YYYY-MM-DD.csv`
+- `window_owner_miss_YYYY-MM-DD.csv`
+- `events_context_YYYY-MM-DD.csv`
 
-2. Close outcomes into:
-- `D:\Project_V\btc-orderflow-system\deltascout\research_material\close_outcomes\`
-
-File:
-- `close_outcomes_YYYY-MM-DD.csv`
-- or parquet if that is the only server artifact present
-
-3. Raw archive into:
+2. Raw archive into:
 - `D:\Project_V\btc-orderflow-system\deltascout\research_material\raw_archive\`
 
 File:
 - `YYYY-MM-DD.jsonl`
 
-4. Raw feed into:
+3. Raw feed into:
 - `D:\Project_V\btc-orderflow-system\deltascout\research_material\raw_feed\`
 
 File:
@@ -113,7 +124,11 @@ After sync, do a brief inspection only:
 3. `reject_event_context_YYYY-MM-DD.csv`
 - show first 10 lines
 
-4. `close_outcomes_YYYY-MM-DD.csv` if present
+4. `interesting_rejects_YYYY-MM-DD.csv`
+- show first 10 lines
+- report interesting_reject_bucket and interesting_rule_id distribution
+
+6. `close_outcomes_YYYY-MM-DD.csv` if present
 - show first 5 lines
 - explicitly extract:
   - `join_status`
@@ -122,7 +137,7 @@ After sync, do a brief inspection only:
   - `entry`
   when present
 
-5. `raw_archive/YYYY-MM-DD.jsonl`
+7. `raw_archive/YYYY-MM-DD.jsonl`
 - show first 5 lines
 
 Do not perform deep analysis yet.
@@ -149,6 +164,7 @@ D. Pre-summary for project lead
 In 5–10 bullets maximum, summarize only:
 - accepted row count
 - reject row count
+- interesting reject row count and dominant buckets/rule_ids
 - whether accepted-to-close join appears present
 - dominant reject reasons if visible from summary
 - whether raw archive/feed for the same date are now synced locally

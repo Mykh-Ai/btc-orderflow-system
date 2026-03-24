@@ -112,6 +112,14 @@ Read these documents before proposing analyzer design, research priorities, or P
 - `deltascout/research_material/delta_analyzer_implementation_plan_v1_1.md`
 - `deltascout/research_material/2026-03-16_to_2026-03-20_initial_findings.md`
 
+## Operational Runbooks
+
+Agent-executable prompts for routine server operations:
+
+- `deltascout/research_material/runbooks/agent_analyze_materials_prompt.md` — sync latest post-close artifacts from server to local and produce a pre-summary
+- `deltascout/research_material/runbooks/agent_rebuild_date_range_prompt.md` — rebuild the full 4-step pipeline for a specified date range and sync results to local
+- `deltascout/research_material/runbooks/post_close_watcher.md` — operational reference for the automatic post-close watcher cron
+
 ## Server Workflow
 
 Server:
