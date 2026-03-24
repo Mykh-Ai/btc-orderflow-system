@@ -1,0 +1,8 @@
+date,reject_reason,kind,count,cum_delta_60m_mean,cum_delta_60m_median,cum_delta_180m_mean,cum_delta_180m_median,ret_15m_mean,ret_15m_median,ret_60m_mean,ret_60m_median,dist_vwap_mean,dist_vwap_median,abs_dist_vwap_mean,abs_dist_vwap_median,price_vs_vwap_side_mode,price_vs_vwap_side_mode_count
+2026-03-21,3of3_fail,long,1,-855.562,-855.562,324.85,324.85,-127.4,-127.4,-500.4,-500.4,684.872,684.872,684.872,684.872,above,1
+2026-03-21,chop_coh,long,1,-126.438,-126.438,-2.58,-2.58,-22.9,-22.9,14.9,14.9,,,,,at_or_unknown,1
+2026-03-21,direction_mismatch,long,7,-313.175,-24.166,-392.906,-58.357,-84.1571,-6.3,-174.057,-113.7,170.688,238.814,318.921,313.068,above,4
+2026-03-21,direction_mismatch,short,6,-241.212,-212.328,-112.733,62.468,31.7833,33.6,16.9333,-1.55,133.32,235.781,285.953,255.066,above,4
+2026-03-21,imb_band,long,1,-213.645,-213.645,695.206,695.206,37.8,37.8,-431.5,-431.5,,,,,at_or_unknown,1
+2026-03-21,vwap_side,long,1,17.585,17.585,266.851,266.851,-8.9,-8.9,-120.1,-120.1,-137.373,-137.373,137.373,137.373,below,1
+2026-03-21,vwap_side,short,3,-216.096,-121.466,-364.568,-134.378,66.8333,45,112.167,32.1,260.268,281.138,260.268,281.138,above,3

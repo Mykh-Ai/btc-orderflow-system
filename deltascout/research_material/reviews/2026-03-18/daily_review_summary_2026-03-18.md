@@ -1,0 +1,21 @@
+# Daily Review Summary 2026-03-18
+
+- processed_date: 2026-03-18
+- accepted_row_count: 0
+- reject_row_count: 16
+- interesting_reject_row_count: 13
+- accepted_with_close_outcomes: 0
+- reject_reason_summary_created: reject_reason_summary_2026-03-18.csv
+- reject_reason_summary_group_count: 6
+- reject_counts_by_reason:
+  - 3of3_fail: 1
+  - direction_mismatch: 9
+  - imb_band: 1
+  - no_prev_peak: 1
+  - vwap_side: 4
+- files_created:
+  - accepted_event_context_2026-03-18.csv
+  - reject_event_context_2026-03-18.csv
+  - interesting_rejects_2026-03-18.csv
+  - reject_reason_summary_2026-03-18.csv
+  - daily_review_summary_2026-03-18.md
