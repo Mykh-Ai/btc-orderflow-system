@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /d/Project_V/btc-orderflow-system -not -path */.git/* -not -path */__pycache__/* -not -path */.pytest_cache/* -type d)",
+      "Bash(python -m pytest test_research_archive.py -v)",
+      "Bash(python -m pytest test_deltascout_vwap_cap.py -v)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(ssh root@95.216.139.172 \"ls -la /data/archive/deltascout/ 2>/dev/null || ls -la /root/volume-alert/data/archive/deltascout/ 2>/dev/null || echo ''NO ARCHIVE DIR FOUND''\")"
+    ]
+  }
+}

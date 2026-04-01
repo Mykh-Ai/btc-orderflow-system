@@ -1,18 +1,9 @@
 Task: create final DeltaScout research review package for the requested date window using the latest rebuilt artifacts
 
-Parameters:
-- `DATE_FROM` - first UTC date, inclusive, `YYYY-MM-DD`
-- `DATE_TO` - last UTC date, inclusive, `YYYY-MM-DD`
-
 Input location:
 `deltascout/research_material/reviews`
 
-Use only the synced local review artifacts for `DATE_FROM` through `DATE_TO`.
-
-If this prompt is invoked from `agent_full_research_handoff_prompt.md`, use the exact same `DATE_FROM` and `DATE_TO` passed into that run.
-
-If `DATE_FROM` / `DATE_TO` are not provided, stop and ask for them.
-Do NOT infer the date window from older review folders, previous summaries, or any hard-coded historical window.
+Use only the synced local review artifacts for the target dates.
 
 Important:
 Use only the latest rebuilt artifacts generated after:
@@ -41,7 +32,7 @@ The document must stay evidence-first and must treat current accepted PEAK event
 
 ---
 
-## Part 1 - Compact batch summary
+## Part 1 — Compact batch summary
 
 ### 1) Daily snapshot
 For each date:
@@ -95,11 +86,11 @@ End the compact section with:
 - dominant reject patterns in the window
 - whether enriched fields changed interpretation materially
 - whether `vwap_side` appears to block otherwise strong cases
-- 2-3 concrete next research questions
+- 2–3 concrete next research questions
 
 ---
 
-## Part 2 - Analytical memo
+## Part 2 — Analytical memo
 
 This second section is mandatory.
 Do not just repeat the compact section.
@@ -112,7 +103,7 @@ Give a hard research verdict for the full window:
 - whether the strongest material is in accepted cases or in rejects
 
 ### B. Strongest evidence clusters
-Identify 3-5 strongest evidence clusters across the batch.
+Identify 3–5 strongest evidence clusters across the batch.
 For each cluster, state:
 - why it matters
 - what repeats
@@ -146,7 +137,7 @@ Instead, state explicitly:
 - which parts remain opaque
 
 ### D. Expanded key case notes
-Pick 3-5 key cases across the batch and write mini-case notes.
+Pick 3–5 key cases across the batch and write mini-case notes.
 For each case include:
 - timestamp
 - event type / reject reason / bucket
@@ -174,7 +165,7 @@ Using only evidence visible from the review package, state briefly:
 
 ### D2. Case-comparison discipline
 When a rejected case is compared directly against an accepted reference case, include:
-- 2-5 metric-level contrasts
+- 2–5 metric-level contrasts
 - one sentence on structural alignment
 - one sentence on visible blocker status
 - one sentence on what remains unknown
@@ -205,7 +196,7 @@ Be specific:
 - anything else supported by the window
 
 ### G. Next best research direction
-Give 2-4 concrete next research directions.
+Give 2–4 concrete next research directions.
 These must be narrow and evidence-driven.
 Do not recommend mechanical filter loosening.
 
@@ -220,6 +211,42 @@ Good next steps are those that clarify:
 - whether a visible blocker is truly the main blocker
 - whether unresolved rejects are cluster-like or isolated
 - whether accepted flow is selecting better structure or only narrower structure
+
+### H. Missing-evidence escalation
+If the current review package is not sufficient for a strong conclusion, do not compensate with speculation.
+
+Instead, explicitly do all of the following:
+1. state that the evidence is insufficient
+2. name the exact missing artifact or data slice that would help
+3. explain why that artifact is needed
+4. state which hypothesis, comparison, or ambiguity it would resolve
+5. prefer narrow, existing, operationally realistic requests over broad generic requests
+
+Good requests are specific, for example:
+- selected same-session event sequence around one key case
+- compact raw-feed extract for ±30m or ±60m around a timestamp
+- accepted vs rejected comparison slice for one session
+- blocker decomposition for a `3of3_fail` or `vwap_side` case if available
+- same-side later-event relation within the session
+
+Bad requests are vague, for example:
+- more data
+- all raw files
+- full history without a stated reason
+
+When asking for more material, keep the request minimal and evidence-driven.
+The goal is not to expand the bundle mechanically, but to remove the single most important ambiguity.
+
+### I. Minimal additional data request
+If stronger analysis would require additional material, end with this subsection:
+
+**Minimal additional data request**
+
+List up to 3 concrete additional artifacts.
+For each one, state:
+- exact artifact wanted
+- why it matters
+- what it would help confirm or reject
 
 ---
 
@@ -250,8 +277,8 @@ Do not hide uncertainty when the files do not support a stronger conclusion.
 
 Create one markdown file only.
 
-Preferred filename:
-`reviews_DATE_FROM_to_DATE_TO_final_research_review.md`
+Preferred filename pattern:
+`reviews_YYYY-MM-DD_to_YYYY-MM-DD_final_research_review.md`
 
 ---
 
@@ -265,3 +292,4 @@ Before writing the final document, check:
 - Did accepted-vs-rejected comparisons name explicit metric contrasts?
 - Did the memo avoid turning bucket labels into validated setup classes?
 - Did the memo avoid implying profitability from sparse accepted/outcome evidence?
+- If evidence was insufficient, did the memo request narrow additional artifacts instead of speculating?
