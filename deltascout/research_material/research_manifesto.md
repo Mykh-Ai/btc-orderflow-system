@@ -193,6 +193,34 @@ Always separate:
 
 ---
 
+## Current operating research state
+
+DeltaScout research has moved beyond broad reject-funnel counting alone.
+
+Current short-side reject work is now being treated through a family-level decomposition:
+
+- **Family A** = short-side rejects above VWAP; earlier transition / placement-conflict lane
+- **Family B** = short-side rejects below VWAP that still fail deeper in the funnel; later aligned-failure lane
+
+This should be treated as the current working research split, not as a finalized setup taxonomy.
+
+Current operating read:
+
+- Family A is the stronger current transition-timing lead
+- Family B is the broader current setup-discovery lane
+- later focused work shows Family B has internal subtype structure and should not be treated as internally uniform
+
+---
+
+## Current context documents
+
+Current research context should be carried forward with these documents:
+
+- `2026-03-16_to_2026-03-20_initial_findings.md`
+- `2026-03-23_to_2026-04-01_family_findings.md`
+- `focused_family_b_deep_dive.md`
+
+---
 ## Guiding principle
 
 Every future model, analyzer, and research agent in DeltaScout should follow this principle:
