@@ -39,6 +39,23 @@ The analytical memo should restore research depth and make the strongest evidenc
 
 The document must stay evidence-first and must treat current accepted PEAK events as a reference class, not as the boundary of thinking.
 
+## Regime-first reading rule
+
+Future analysis must read event context in this order:
+- regime = `cum_delta_24h`
+- transition = `cum_delta_180m`
+- setup pressure = `cum_delta_60m`
+- entry timing = `ret_15m` / `ret_60m`
+
+When event metrics are listed in batch memos, focused family memos, focused comparison memos, or accepted-flow / postmortem style memos, keep this exact field order:
+- `cum_delta_24h`
+- `cum_delta_180m`
+- `cum_delta_60m`
+- `ret_15m`
+- `ret_60m`
+
+Do not treat `cum_delta_24h` as optional or implicit. If `cum_delta_24h` is missing for any case, say so explicitly and state that regime framing is incomplete for that case.
+
 ---
 
 ## Part 1 - Compact batch summary
@@ -57,8 +74,9 @@ List all accepted events across the window with:
 - date/time
 - kind
 - price
-- cum_delta_60m
+- cum_delta_24h
 - cum_delta_180m
+- cum_delta_60m
 - ret_15m
 - ret_60m
 - price_vs_vwap_side
@@ -85,8 +103,9 @@ Keep the list selective, but include enough detail for real comparison.
 ### 4) Focused comparison
 If the window contains an accepted event and nearby same-side rejects, include one compact comparison block using only evidence from the files:
 - structural alignment
-- ret_15m / ret_60m
-- cumulative delta context
+- whether the local short/long setup sits with or against the visible 24h cumulative-delta regime
+- cumulative delta context in this order: `cum_delta_24h`, `cum_delta_180m`, `cum_delta_60m`
+- `ret_15m` / `ret_60m`
 - matched OI/funding/liquidation fields
 - no unsupported claims
 
@@ -110,12 +129,14 @@ Give a hard research verdict for the full window:
 - where the main research center of gravity is
 - whether the batch is accepted-heavy, reject-heavy, structurally thin, or evidence-rich
 - whether the strongest material is in accepted cases or in rejects
+- whether the main lanes sit with or against the visible 24h cumulative-delta regime
 
 ### B. Strongest evidence clusters
 Identify 3-5 strongest evidence clusters across the batch.
 For each cluster, state:
 - why it matters
 - what repeats
+- whether the repeated local setup sits with or against the visible 24h cumulative-delta regime
 - whether it looks more like reversal onset, reversal confirmation, continuation pressure, trap / false break, exhaustion, or unresolved structure
 - whether it is stronger as research material than the accepted reference case
 
@@ -131,6 +152,7 @@ Explicitly surface the strongest tensions such as:
 For each paradox or tension, state it in forensic form:
 - what exactly is being compared
 - which metrics make the tension visible
+- whether the local setup is compatible with or against the visible 24h cumulative-delta regime
 - what remains ambiguous from the files
 
 Do not rely only on descriptive language such as:
@@ -151,6 +173,7 @@ For each case include:
 - timestamp
 - event type / reject reason / bucket
 - why this case is analytically important
+- whether the case sits with or against the visible 24h cumulative-delta regime
 - what is structurally strong about it
 - what blocked it or limited confidence
 - whether it should be watched as possible future setup-class research material
@@ -175,6 +198,7 @@ Using only evidence visible from the review package, state briefly:
 ### D2. Case-comparison discipline
 When a rejected case is compared directly against an accepted reference case, include:
 - 2-5 metric-level contrasts
+- explicit comparison of `cum_delta_24h`, even if the conclusion is that regime separation remains ambiguous
 - one sentence on structural alignment
 - one sentence on visible blocker status
 - one sentence on what remains unknown
@@ -187,6 +211,8 @@ State clearly:
 - what they do **not** prove
 - whether any rejects appear structurally stronger than the accepted reference class
 - whether current accepted flow looks like a strong edge source or only a narrow survival path through the funnel
+
+Accepted-flow and PEAK-side diagnostics must include `cum_delta_24h` in any comparison table or case note. Use it as regime context only, not as a standalone signal.
 
 Do not call a rejected case stronger than the accepted reference class unless you state explicitly:
 - on which metrics it looks stronger
@@ -202,6 +228,7 @@ Be specific:
 - sparse outcomes
 - no clear enriched-field separation
 - unresolved sequence/transition ambiguity
+- regime framing incomplete because `cum_delta_24h` is missing for some cases, if applicable
 - anything else supported by the window
 
 ### G. Next best research direction
@@ -231,6 +258,7 @@ Good next steps are those that clarify:
 - Do not imply profitability from one accepted case.
 - Do not collapse everything into PEAK-centric thinking.
 - Rejects are research material, not automatically weak cases.
+- Treat `cum_delta_24h` as regime context, not as a standalone signal.
 - When evidence supports it, say explicitly if a rejected case appears structurally stronger than the accepted reference case.
 
 ### Claim discipline
@@ -263,5 +291,8 @@ Before writing the final document, check:
 - Did each expanded key case include blocker status?
 - Did each expanded key case include a sequence note?
 - Did accepted-vs-rejected comparisons name explicit metric contrasts?
+- Did accepted-flow diagnostics include `cum_delta_24h` explicitly?
+- Did the memo state whether key lanes or cases sit with or against the visible 24h cumulative-delta regime?
+- If `cum_delta_24h` was missing for any case, did the memo say so explicitly?
 - Did the memo avoid turning bucket labels into validated setup classes?
 - Did the memo avoid implying profitability from sparse accepted/outcome evidence?

@@ -2,7 +2,7 @@
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from .models import ScopeInfo
@@ -22,6 +22,7 @@ SEQUENCE_FIELDNAMES = [
     "rule_id",
     "price",
     "price_vs_vwap_side",
+    "cum_delta_24h",
     "cum_delta_60m",
     "cum_delta_180m",
     "ret_15m",
@@ -78,7 +79,14 @@ def _load_review_rows(review_dir: Path) -> list[dict[str, str]]:
         joined["interesting_reject_bucket"] = extra.get("interesting_reject_bucket", "") if extra else ""
         joined["rule_id"] = extra.get("interesting_rule_id", "") if extra else ""
         merged.append(joined)
-    return sorted(merged, key=lambda row: (_parse_ts(row.get("ts", "1970-01-01 00:00:00")), row.get("event_type", ""), row.get("kind", "")))
+    return sorted(
+        merged,
+        key=lambda row: (
+            _parse_ts(row.get("ts", "1970-01-01 00:00:00")),
+            row.get("event_type", ""),
+            row.get("kind", ""),
+        ),
+    )
 
 
 def _stronger_reject_exists(target: dict[str, str], rows: list[dict[str, str]]) -> str:
@@ -118,7 +126,8 @@ def build_sequence_context(scope: ScopeInfo, selected_cases: list[SelectedCase])
         day_rows = review_rows_cache[case.session_date]
         target_dt = _parse_ts(case.target_ts)
         target_matches = [
-            row for row in day_rows
+            row
+            for row in day_rows
             if row.get("ts", "") == case.target_ts
             and row.get("kind", "") == case.kind
             and row.get("event_type", "") == case.event_type
@@ -137,10 +146,16 @@ def build_sequence_context(scope: ScopeInfo, selected_cases: list[SelectedCase])
             continue
 
         later_same_side_event = any(delta > 0 and row.get("kind", "") == case.kind for delta, row in window_rows)
-        later_same_side_accepted = any(delta > 0 and row.get("kind", "") == case.kind and row.get("event_type", "") == "PEAK_EMIT" for delta, row in window_rows)
+        later_same_side_accepted = any(
+            delta > 0 and row.get("kind", "") == case.kind and row.get("event_type", "") == "PEAK_EMIT"
+            for delta, row in window_rows
+        )
         stronger_reject = _stronger_reject_exists(target_row, [row for _, row in window_rows])
 
-        for delta_minutes, row in sorted(window_rows, key=lambda item: (item[0], item[1].get("event_type", ""), item[1].get("kind", ""))):
+        for delta_minutes, row in sorted(
+            window_rows,
+            key=lambda item: (item[0], item[1].get("event_type", ""), item[1].get("kind", "")),
+        ):
             rows_out.append(
                 {
                     "target_ts": case.target_ts,
@@ -155,6 +170,7 @@ def build_sequence_context(scope: ScopeInfo, selected_cases: list[SelectedCase])
                     "rule_id": row.get("rule_id", ""),
                     "price": row.get("price", ""),
                     "price_vs_vwap_side": row.get("price_vs_vwap_side", ""),
+                    "cum_delta_24h": row.get("cum_delta_24h", ""),
                     "cum_delta_60m": row.get("cum_delta_60m", ""),
                     "cum_delta_180m": row.get("cum_delta_180m", ""),
                     "ret_15m": row.get("ret_15m", ""),
