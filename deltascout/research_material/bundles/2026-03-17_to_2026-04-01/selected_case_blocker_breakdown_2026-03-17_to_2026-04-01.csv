@@ -1,0 +1,13 @@
+ts,kind,reject_reason,price,vol,vwap,prev_price,prev_vol,prev_vwap,price_check_pass,vol_check_pass,vwap_check_pass,three_of_three_pass_count,decomposition_status,decomposition_basis,notes_short
+2026-03-20 00:40:00,short,,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-03-29 19:23:00,short,,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-03-31 01:46:00,short,3of3_fail,66753.855597,31.12,67145.0,66470.18393,29.06471,67060.0,no,yes,no,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-17 05:45:00,short,3of3_fail,74098.393117,149.48,74186,74232.08397,132.78445,74170.0,yes,yes,no,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-26 04:45:00,short,3of3_fail,70860.747461,79.54,71202.0,71248.705407,48.498650000000005,71154.0,yes,yes,no,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-29 12:12:00,short,3of3_fail,66512.471784,20.72,66719.0,66695.907621,62.29586,66670.0,yes,no,no,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-18 12:30:00,short,3of3_fail,73627.795297,117.51,74137.0,74061.940786,151.57600000000002,74153.0,yes,no,yes,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-22 18:45:00,short,3of3_fail,68676.897882,25.18,69208.0,68727.026117,25.70889,69215.0,yes,no,yes,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-23 03:36:00,short,3of3_fail,68242.56697,49.14,68519,67513.763983,54.2487,68692.0,no,no,yes,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-24 14:09:00,short,3of3_fail,70816.640317,60.99,70822,70894.667935,46.90717,70788.0,yes,yes,no,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-24 14:45:00,short,3of3_fail,70305.690792,153.09,70836,70816.640317,60.98832,70822.0,yes,yes,no,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-03-27 03:35:00,short,3of3_fail,69021.242714,72.15,69423.0,69010.084016,71.67699,69429.0,no,yes,yes,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
