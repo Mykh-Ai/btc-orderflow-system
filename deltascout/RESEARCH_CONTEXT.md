@@ -64,6 +64,27 @@ Primary research framing should remain:
 
 Accepted-event review should be treated as one input into broader market-behavior research, not as the sole priority. It does not replace reject-funnel analysis, and it does not justify collapsing the research program into PEAK-only thinking.
 
+## Current operating research blueprint
+
+The canonical operating blueprint now lives in `deltascout/research_material/research_blueprint_v2.md`.
+
+Current research is explicitly shifting away from PEAK/reject-centered reading toward:
+
+- market state
+- transition
+- process phase
+- entry timing
+
+Current PEAK remains a diagnostics/reference surface, not the dominant center of setup discovery.
+
+Future analysis should explicitly separate:
+
+- phase marker
+- entry candidate
+- late-risk / no-edge state
+
+Process-phase hypotheses must remain invalidatable, and move-potential testing remains mandatory.
+
 When Phase 2.5 review-package outputs are available, the recommended working order is:
 
 1. `daily_review_summary_YYYY-MM-DD.md` — start here for the day's picture
@@ -227,3 +248,5 @@ Not yet justified based on current data:
 - profitability conclusions from sparse accepted-flow samples
 - live logic changes
 - PEAK-centric research framing that treats accepted-event review as the sole or primary research objective
+
+

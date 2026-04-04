@@ -221,9 +221,22 @@ Current research context should be carried forward with these documents:
 - `focused_family_b_deep_dive.md`
 
 ---
+## Current operating blueprint reference
+
+The full operating blueprint now lives in `deltascout/research_material/research_blueprint_v2.md`.
+
+It formalizes the current shift from row-level reject / PEAK-centered reading toward market-state / process-phase setup search.
+
+PEAK remains useful as a reference/diagnostics surface, but the blueprint should be treated as the current doctrine for setup-search framing.
+
+This manifesto remains the higher-level research-orientation document, while the blueprint contains the fuller operating model.
+
+---
 ## Guiding principle
 
 Every future model, analyzer, and research agent in DeltaScout should follow this principle:
 
 > DeltaScout Research is not here to worship the current PEAK logic.  
 > It is here to map market behavior, discover new repeatable formations, and turn them into future trading setup classes with real profit potential.
+
+

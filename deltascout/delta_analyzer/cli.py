@@ -12,13 +12,16 @@ from .config import DEFAULT_ARCHIVE_GLOB, DEFAULT_FEED_GLOB
 from .modules.archive_reader import read_archive_events
 from .modules.build_events_base import build_events_base_dataset
 from .modules.build_events_context import build_events_context_dataset
+from .modules.build_minute_events_base import build_minute_events_base_dataset
+from .modules.build_minute_events_mechanics import build_minute_events_mechanics_dataset
+from .modules.build_minute_events_outcomes import build_minute_events_outcomes_dataset
 from .modules.build_review_tables import ReviewBuildError, build_daily_review_package
 from .modules.feed_reader import read_feed_rows
 from .modules.integrity_checks import run_integrity_checks
-from .types import EventsContextRow
+from .types import EventsContextRow, MinuteEventMechanicsRow, MinuteEventOutcomesRow, MinuteEventRow
 
 
-DATASET_CHOICES = ("events_base", "events_context")
+DATASET_CHOICES = ("events_base", "events_context", "minute_events_base", "minute_events_mechanics", "minute_events_outcomes")
 DEFAULT_DATASET_ROOT = "/data/archive/datasets"
 CONTEXT_COVERAGE_FIELDS = (
     "cum_delta_24h",
@@ -27,6 +30,22 @@ CONTEXT_COVERAGE_FIELDS = (
     "ret_15m",
     "ret_60m",
     "dist_vwap",
+)
+MECHANICS_COVERAGE_FIELDS = (
+    "delta_pct_60m",
+    "delta_pct_180m",
+    "vol_pct_60m",
+    "vol_pct_180m",
+    "body_to_range_ratio",
+    "dist_from_vwap",
+)
+OUTCOMES_COVERAGE_FIELDS = (
+    "ret_fwd_15m",
+    "upside_max_15m",
+    "downside_max_15m",
+    "favorable_max_15m",
+    "up_hit_10bp_15m_flag",
+    "both_hit_10bp_15m_flag",
 )
 
 
@@ -56,7 +75,6 @@ def _resolve_feed_files(pattern: str) -> list[Path]:
 
 
 def _resolve_prev_day_feed(feed_files: list[Path], date_str: str) -> Path | None:
-    """Return the previous UTC day's feed file if it exists in the same directory."""
     if not feed_files or not date_str:
         return None
     prev_date = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -68,13 +86,23 @@ def _resolve_prev_day_feed(feed_files: list[Path], date_str: str) -> Path | None
     return None
 
 
-def _write_events_context_csv(
-    rows: list[EventsContextRow], out_path: Path
-) -> Path:
-    """Write events_context rows to CSV with the ``day`` column expected by --build-review."""
+def _write_dataclass_csv(rows: list[object], out_path: Path) -> Path:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        return out_path
+    field_names = [f.name for f in dataclass_fields(type(rows[0]))]
+    with out_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(field_names)
+        for row in rows:
+            vals = [getattr(row, f) for f in field_names]
+            writer.writerow(["" if v is None else v for v in vals])
+    return out_path
+
+
+def _write_events_context_csv(rows: list[EventsContextRow], out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     field_names = [f.name for f in dataclass_fields(EventsContextRow)]
-    # insert 'day' after 'ts' to match the review-builder contract
     header = [field_names[0], "day"] + field_names[1:]
     with out_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -86,6 +114,18 @@ def _write_events_context_csv(
             vals.insert(1, day_val)
             writer.writerow(["" if v is None else v for v in vals])
     return out_path
+
+
+def _write_minute_events_base_csv(rows: list[MinuteEventRow], out_path: Path) -> Path:
+    return _write_dataclass_csv(rows, out_path)
+
+
+def _write_minute_events_mechanics_csv(rows: list[MinuteEventMechanicsRow], out_path: Path) -> Path:
+    return _write_dataclass_csv(rows, out_path)
+
+
+def _write_minute_events_outcomes_csv(rows: list[MinuteEventOutcomesRow], out_path: Path) -> Path:
+    return _write_dataclass_csv(rows, out_path)
 
 
 def main() -> None:
@@ -105,14 +145,69 @@ def main() -> None:
         print(f"output_dir={result.output_dir}")
         return
 
-    archive_files = _expand_glob(args.archive_glob)
     feed_files = _resolve_feed_files(args.feed_glob)
     if not feed_files:
         raise SystemExit(f"no feed files matched: {args.feed_glob}")
 
-    events = read_archive_events(archive_files)
     feed_rows = read_feed_rows(feed_files)
-    # Include previous-day feed rows for return context near day boundaries
+    minute_events_base: list[MinuteEventRow] = []
+    if args.dataset in {"minute_events_base", "minute_events_mechanics", "minute_events_outcomes"}:
+        minute_events_base = build_minute_events_base_dataset(feed_rows)
+
+    if args.dataset == "minute_events_base":
+        if args.date:
+            dated = [r for r in minute_events_base if r.day == args.date]
+            out_path = Path(args.output_root) / f"minute_events_base_{args.date}.csv"
+            written = _write_minute_events_base_csv(dated, out_path)
+            print(f"minute_events_base_csv={written} rows={len(dated)}")
+        print(f"Delta Analyzer Summary ({args.dataset})")
+        print(f"feed_files={len(feed_files)}")
+        print(f"minute_events_base_rows={len(minute_events_base)}")
+        return
+
+    minute_events_mechanics: list[MinuteEventMechanicsRow] = []
+    if args.dataset in {"minute_events_mechanics", "minute_events_outcomes"}:
+        minute_events_mechanics = build_minute_events_mechanics_dataset(minute_events_base)
+
+    if args.dataset == "minute_events_mechanics":
+        if args.date:
+            dated = [r for r in minute_events_mechanics if r.day == args.date]
+            out_path = Path(args.output_root) / f"minute_events_mechanics_{args.date}.csv"
+            written = _write_minute_events_mechanics_csv(dated, out_path)
+            print(f"minute_events_mechanics_csv={written} rows={len(dated)}")
+        print(f"Delta Analyzer Summary ({args.dataset})")
+        print(f"feed_files={len(feed_files)}")
+        print(f"minute_events_base_rows={len(minute_events_base)}")
+        print(f"minute_events_mechanics_rows={len(minute_events_mechanics)}")
+        print("mechanics_non_null_coverage=")
+        total_rows = len(minute_events_mechanics)
+        for field in MECHANICS_COVERAGE_FIELDS:
+            non_null = sum(1 for row in minute_events_mechanics if getattr(row, field) is not None)
+            print(f"  {field}={non_null}/{total_rows}")
+        return
+
+    minute_events_outcomes: list[MinuteEventOutcomesRow] = []
+    if args.dataset == "minute_events_outcomes":
+        minute_events_outcomes = build_minute_events_outcomes_dataset(minute_events_mechanics)
+        if args.date:
+            dated = [r for r in minute_events_outcomes if r.day == args.date]
+            out_path = Path(args.output_root) / f"minute_events_outcomes_{args.date}.csv"
+            written = _write_minute_events_outcomes_csv(dated, out_path)
+            print(f"minute_events_outcomes_csv={written} rows={len(dated)}")
+        print(f"Delta Analyzer Summary ({args.dataset})")
+        print(f"feed_files={len(feed_files)}")
+        print(f"minute_events_base_rows={len(minute_events_base)}")
+        print(f"minute_events_mechanics_rows={len(minute_events_mechanics)}")
+        print(f"minute_events_outcomes_rows={len(minute_events_outcomes)}")
+        print("outcomes_non_null_coverage=")
+        total_rows = len(minute_events_outcomes)
+        for field in OUTCOMES_COVERAGE_FIELDS:
+            non_null = sum(1 for row in minute_events_outcomes if getattr(row, field) is not None)
+            print(f"  {field}={non_null}/{total_rows}")
+        return
+
+    archive_files = _expand_glob(args.archive_glob)
+    events = read_archive_events(archive_files)
     context_feed_rows = feed_rows
     if args.date:
         prev_feed = _resolve_prev_day_feed(feed_files, args.date)
@@ -125,11 +220,9 @@ def main() -> None:
         events_context = build_events_context_dataset(events_base, context_feed_rows)
     checks = run_integrity_checks(events_base)
 
-    # Save events_context CSV when --date and --output-root are provided
     if events_context and args.date:
         output_root = Path(args.output_root)
         out_path = output_root / f"events_context_{args.date}.csv"
-        # Filter to requested date only
         dated = [r for r in events_context if r.ts.strftime("%Y-%m-%d") == args.date]
         written = _write_events_context_csv(dated, out_path)
         print(f"events_context_csv={written} rows={len(dated)}")
