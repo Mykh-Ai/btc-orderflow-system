@@ -1,4 +1,4 @@
-# DeltaScout Minute Events M2.5 Planning Memo
+﻿# DeltaScout Minute Events M2.5 Planning Memo
 
 ## Purpose
 
@@ -11,6 +11,11 @@ This is a planning memo only.
 It does not implement M2.5.
 
 ## Current Starting Point
+
+Source-consistency note:
+- `data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base for DeltaScout event-linked research.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` is a secondary enrichment layer for additional minute context and must not replace the archive feed as the primary source-of-truth for `PEAK_EMIT`-linked analysis.
+- If both sources are used, event-source fields and enrichment-derived fields must remain explicitly separated.
 
 Current minute-event foundation layers already available or defined:
 
@@ -348,3 +353,5 @@ The safest next M2.5 seam is:
 - adding deterministic threshold and ordering fields before any typed event logic
 
 This is the correct bridge between mechanics and later taxonomy work because it lets future M3 claims be tested against explicit forward evidence rather than promoted from mechanics alone.
+
+

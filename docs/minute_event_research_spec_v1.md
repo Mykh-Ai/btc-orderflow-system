@@ -1,4 +1,4 @@
-# DeltaScout Minute Event Research Spec v1
+ï»¿# DeltaScout Minute Event Research Spec v1
 
 ## Purpose
 
@@ -37,6 +37,11 @@ Working relationship:
 - `minute_event_research_spec_v1.md` = foundation and near-term implementation continuation
 
 This document does not invalidate the existing `PEAK` / reject research layer.
+
+Source-consistency note:
+- For DeltaScout event-linked research, `data/archive/feed/YYYY-MM-DD.csv` remains the canonical event-source minute base.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` may be used as a secondary enrichment layer for additional minute context, but it must not replace the archive feed as the primary source-of-truth for `PEAK_EMIT`-linked analysis.
+- If both sources are used, event-source fields and enrichment-derived fields must remain explicitly separated.
 
 Instead, it fixes the next expansion:
 
@@ -170,7 +175,7 @@ This is the implementation consequence of the broader research shift already fix
 
 ## Implementation phases
 
-## Phase M0 — Code Audit
+## Phase M0 â€” Code Audit
 
 ### Goal
 
@@ -213,7 +218,7 @@ Phase M0 must **not**:
 
 ---
 
-## Phase M1 — `minute_events_base`
+## Phase M1 â€” `minute_events_base`
 
 ### Goal
 
@@ -297,7 +302,7 @@ Phase M1 must **not** yet include:
 
 ---
 
-## Phase M2 — `minute_events_mechanics`
+## Phase M2 â€” `minute_events_mechanics`
 
 ### Goal
 
@@ -451,7 +456,7 @@ Phase M2 must **not** yet include:
 
 ---
 
-## Phase M2.5 — `minute_events_outcomes`
+## Phase M2.5 â€” `minute_events_outcomes`
 
 ### Goal
 
@@ -531,7 +536,7 @@ What is valid here:
 
 ---
 
-## Phase M3 — `minute_events_typed` (later phase)
+## Phase M3 â€” `minute_events_typed` (later phase)
 
 ### Goal
 
@@ -571,7 +576,7 @@ These are future research classes, not current implementation requirements.
 
 ---
 
-## Phase M4 — Sequence / Process Extensions (later phase)
+## Phase M4 â€” Sequence / Process Extensions (later phase)
 
 ### Goal
 
@@ -720,6 +725,8 @@ but:
 - **a real minute-event foundation and evidence bridge**
 
 This is the required bridge between the current research blueprint and the next credible analyzer architecture.
+
+
 
 
 

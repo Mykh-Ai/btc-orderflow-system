@@ -1,4 +1,4 @@
-# DeltaScout Minute Event M0.1 Outcome Seam Audit
+﻿# DeltaScout Minute Event M0.1 Outcome Seam Audit
 
 ## Purpose
 
@@ -285,6 +285,11 @@ Reuse assessment:
 
 ## Current Contracts Relevant to Future Minute Outcomes
 
+Source-consistency note:
+- `data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base for DeltaScout event-linked research.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` may provide secondary enrichment context only and must not replace the archive feed as the primary source-of-truth for `PEAK_EMIT`-linked analysis.
+- If both sources are used, event-source fields and enrichment-derived fields must remain explicitly separated.
+
 ### Existing dataset contracts found
 
 #### `close_outcomes_YYYY-MM-DD`
@@ -508,3 +513,5 @@ Final verdict:
 
 - reusable outcome infrastructure exists only partially
 - the safest future M2.5 seam is a fresh additive `minute_events_outcomes` builder that adapts utility patterns from existing offline and bundle code, rather than trying to repurpose trade-close builders directly
+
+

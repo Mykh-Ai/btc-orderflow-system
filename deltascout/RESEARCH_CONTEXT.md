@@ -1,4 +1,4 @@
-# DeltaScout Research Context
+﻿# DeltaScout Research Context
 
 ## Current Working Context
 
@@ -38,6 +38,12 @@ Primary research archive path in the server project layout:
 Matching feed archive path:
 
 - `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv`
+
+This archive feed is the canonical event-source minute base for DeltaScout event-linked research because it is produced by the same raw writer chain as runtime `aggregated.csv` and underlies actual `PEAK_EMIT` generation.
+
+`/opt/aitrader/feed/YYYY-MM-DD.csv` may still be used as a secondary enrichment layer for additional minute context, but it must not replace the archive feed as the primary minute source-of-truth for `PEAK_EMIT`-linked analysis.
+
+If both sources are used together, event-source fields and enrichment-derived fields must remain explicitly separated.
 
 Derived dataset output path:
 
@@ -87,10 +93,10 @@ Process-phase hypotheses must remain invalidatable, and move-potential testing r
 
 When Phase 2.5 review-package outputs are available, the recommended working order is:
 
-1. `daily_review_summary_YYYY-MM-DD.md` — start here for the day's picture
-2. `accepted_event_context_YYYY-MM-DD.csv` — accepted-event rows with Phase 2 context attached
-3. `reject_event_context_YYYY-MM-DD.csv` — reject rows with context for funnel analysis
-4. `raw_archive/` and `raw_feed/` — secondary sources for drill-down, anomaly checks, or deeper sequence/transition analysis
+1. `daily_review_summary_YYYY-MM-DD.md` вЂ” start here for the day's picture
+2. `accepted_event_context_YYYY-MM-DD.csv` вЂ” accepted-event rows with Phase 2 context attached
+3. `reject_event_context_YYYY-MM-DD.csv` вЂ” reject rows with context for funnel analysis
+4. `raw_archive/` and `raw_feed/` вЂ” secondary sources for drill-down, anomaly checks, or deeper sequence/transition analysis
 
 Raw archive and feed files are not obsolete. They remain the authoritative sources for any interpretation that requires full event sequences or transition-level context that derived outputs do not expose.
 
@@ -111,15 +117,15 @@ The first copied working material is stored here:
 
 Current contents:
 
-- `raw_archive/` — copied DeltaScout archive JSONL files
-- `raw_feed/` — copied feed CSV files for the same dates
+- `raw_archive/` вЂ” copied DeltaScout archive JSONL files
+- `raw_feed/` вЂ” copied feed CSV files for the same dates
 - `2026-03-16_to_2026-03-20_initial_findings.md`
 
 Phase 2.5 review-package outputs (derived analyzer artifacts, present when Phase 2.5 has been run for a date):
 
-- `accepted_event_context_YYYY-MM-DD.csv` — accepted events with backward-looking Phase 2 context attached
-- `reject_event_context_YYYY-MM-DD.csv` — reject events with backward-looking Phase 2 context attached
-- `daily_review_summary_YYYY-MM-DD.md` — human-readable daily review summary
+- `accepted_event_context_YYYY-MM-DD.csv` вЂ” accepted events with backward-looking Phase 2 context attached
+- `reject_event_context_YYYY-MM-DD.csv` вЂ” reject events with backward-looking Phase 2 context attached
+- `daily_review_summary_YYYY-MM-DD.md` вЂ” human-readable daily review summary
 
 When Phase 2.5 outputs exist for a date, treat them as the primary daily research artifacts. Use raw archive and raw feed for drill-down, anomaly checks, or deeper sequence/transition analysis that derived outputs do not expose.
 
@@ -137,9 +143,9 @@ Read these documents before proposing analyzer design, research priorities, or P
 
 Agent-executable prompts for routine server operations:
 
-- `deltascout/research_material/runbooks/agent_analyze_materials_prompt.md` — sync latest post-close artifacts from server to local and produce a pre-summary
-- `deltascout/research_material/runbooks/agent_rebuild_date_range_prompt.md` — rebuild the full 4-step pipeline for a specified date range and sync results to local
-- `deltascout/research_material/runbooks/post_close_watcher.md` — operational reference for the automatic post-close watcher cron
+- `deltascout/research_material/runbooks/agent_analyze_materials_prompt.md` вЂ” sync latest post-close artifacts from server to local and produce a pre-summary
+- `deltascout/research_material/runbooks/agent_rebuild_date_range_prompt.md` вЂ” rebuild the full 4-step pipeline for a specified date range and sync results to local
+- `deltascout/research_material/runbooks/post_close_watcher.md` вЂ” operational reference for the automatic post-close watcher cron
 
 ## Server Workflow
 
@@ -229,7 +235,7 @@ ls -lh /root/volume-alert/data/archive/datasets | tail -n 20
 - If the next step is analytics, start from the reject funnel and event coverage before inventing strategy changes
 - When useful, copy raw server material into `deltascout/research_material/` before designing analysis code
 - When Phase 2.5 review-package outputs exist, start daily analysis from `daily_review_summary` before opening raw archive files
-- Accepted-event review is a legitimate input when accepted rows exist; it is not the primary directive and does not override reject-funnel analysis or the core market-state → transition → setup-class framing
+- Accepted-event review is a legitimate input when accepted rows exist; it is not the primary directive and does not override reject-funnel analysis or the core market-state в†’ transition в†’ setup-class framing
 
 ## Recommended Next Work
 
@@ -248,5 +254,6 @@ Not yet justified based on current data:
 - profitability conclusions from sparse accepted-flow samples
 - live logic changes
 - PEAK-centric research framing that treats accepted-event review as the sole or primary research objective
+
 
 

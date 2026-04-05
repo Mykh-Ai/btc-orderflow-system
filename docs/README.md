@@ -1,4 +1,4 @@
-## Execution-First Order-Flow Analytics Stack for Binance Spot
+﻿## Execution-First Order-Flow Analytics Stack for Binance Spot
 
 (VPS, Docker, n8n, Telegram, Binance Spot)
 
@@ -32,6 +32,8 @@ End-to-end market data -> analytics -> alerts -> execution stack deployed on a V
 | Feed archive | `/data/archive/feed/YYYY-MM-DD.csv` | `data/archive/feed/YYYY-MM-DD.csv` | CSV, 10 columns | Append-only, one file per day, dedup by `Timestamp` |
 
 Every minute the Aggregator writes one row to the live feed and appends the same row to the daily feed archive.
+
+For DeltaScout event-linked research, `data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base because it is produced by the same raw writer chain that feeds `aggregated.csv` at runtime and underlies actual `PEAK_EMIT` generation. Any enriched minute feed must be treated as a secondary enrichment layer rather than as a replacement primary source-of-truth.
 
 ### DeltaScout writes
 
@@ -132,3 +134,4 @@ This 10-column schema is the canonical feed contract for Aggregator and DeltaSco
 This repository is a portfolio and technical showcase demonstrating system design and engineering approach.
 
 For the full research specification, see [DeltaScout_Research_Phase1_Spec.md](DeltaScout_Research_Phase1_Spec.md).
+
