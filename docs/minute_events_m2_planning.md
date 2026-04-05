@@ -12,7 +12,14 @@ It does not implement M2.
 
 ## Current Starting Point
 
-M1 now provides a canonical minute dataset with one row per normalized feed minute.
+M1 now provides a minute dataset with one row per normalized feed minute.
+
+Current feed-source state remains split:
+
+- `/data/archive/feed/YYYY-MM-DD.csv` is the local Aggregator archive contour
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` is the separate external research contour used by current analyzer workflows
+
+The current project state keeps those contours separate rather than treating them as one implied source.
 
 Current `minute_events_base` fields:
 
@@ -290,7 +297,7 @@ Recommended policy:
 
 - windows are backward-looking and inclusive of the current row
 - windows are based on actual timestamps, not row counts
-- use globally merged, timestamp-sorted minute rows across all discovered feed files
+- use globally merged, timestamp-sorted minute rows across discovered feed files from the same declared contour
 - do not reset at day boundaries
 - do not forward-fill missing values
 - if the target metric is unknown on the current row, output `null`

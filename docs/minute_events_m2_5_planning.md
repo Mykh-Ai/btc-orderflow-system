@@ -19,6 +19,12 @@ Current minute-event foundation layers already available or defined:
 
 Current state of the research stack:
 
+Feed-source state note:
+
+- `/data/archive/feed/YYYY-MM-DD.csv` and `/opt/aitrader/feed/YYYY-MM-DD.csv` are different market-data contours in current project documentation and workflow
+- current evidence handling depends on declared contour provenance rather than treating the path as an incidental detail
+
+
 - `minute_events_base` establishes one normalized observation row per minute
 - `minute_events_mechanics` adds descriptive mechanics without event classes or setup claims
 - the M0.1 outcome seam audit confirmed that the repository has only **partial** reusable outcome infrastructure
@@ -195,7 +201,7 @@ Why percentage thresholds are the safest first layer:
 - deterministic and easy to audit
 - do not require external volatility models
 - avoid introducing ATR-like or regime-normalized assumptions too early
-- work directly from the canonical `close` basis already present in the minute contract
+- work directly from the `close` basis already present in the minute contract
 
 ### 4. Path-quality ordering metrics
 
@@ -235,7 +241,7 @@ Recommended policy:
 - windows are **forward-looking** and **exclude** the current row from future-path calculations
 - current row provides the anchor price only
 - future rows must satisfy `current_ts < future_ts <= current_ts + horizon`
-- use globally merged, timestamp-sorted minute rows across discovered feed files
+- use globally merged, timestamp-sorted minute rows across discovered feed files from one declared contour at a time
 - do not reset at day boundaries
 
 ### Threshold Style

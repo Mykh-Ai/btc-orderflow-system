@@ -16,10 +16,12 @@ It does not use `executor.log`, `executor_state.json`, generated close outcome C
 - Runs, in order, four pipeline steps for the discovered UTC close date:
   1. `build_phase1_derived` — rejects, baseline, ownership misses, late peaks
   2. `build_close_outcomes` — close outcome join from trade_outcomes journal
-  3. `delta_analyzer.cli` (main mode) — builds `events_context_YYYY-MM-DD.csv` from archive + enriched feed
+  3. `delta_analyzer.cli` (main mode) — builds `events_context_YYYY-MM-DD.csv` from archive + external research contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`
   4. `delta_analyzer.cli --build-review` — daily review package from prebuilt datasets
 - Updates `/root/volume-alert/data/state/post_close_watcher_state.json` only after all four steps succeed.
-- `build_phase1_derived` uses `--feed-root /opt/aitrader/feed` for canonical enriched feed. It falls back to `--input-root/feed/YYYY-MM-DD.csv` only when `--feed-root` is not supplied.
+- `build_phase1_derived` currently uses `--feed-root /opt/aitrader/feed` in the server workflow. This is a separate external research contour, not the same storage object as `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv`.
+- If `--feed-root` is not supplied, the builder falls back to `--input-root/feed/YYYY-MM-DD.csv`, which may represent a self-contained copy of the local Aggregator archive contour instead.
+- Current watcher/analyzer workflow therefore uses two different daily contours in the same overall research flow: local Aggregator archive contour and external research contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`.
 - Step 3 automatically loads the previous day's feed file (when available) to compute `ret_15m`/`ret_60m` for early-day events.
 
 ## Intended usage

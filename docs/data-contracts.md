@@ -8,6 +8,17 @@ The system is built around two primary artifacts:
 
 These contracts allow Buyer and Executor to remain decoupled from the raw Binance API.
 
+## Market-data contours
+
+The current project state includes three related but distinct market-data surfaces:
+
+- `/data/feed/aggregated.csv` - live rolling runtime feed read by DeltaScout, Buyer, and Executor through their `AGG_CSV` / `FILE_PATH` defaults
+- `/data/archive/feed/YYYY-MM-DD.csv` - local daily archive contour written by `aggregator/binance_run_aggregator.py`
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` - separate external research contour read by current offline/analyzer workflows, but not written by code in this repository
+
+These are documented as separate storage paths. For market-state research, contour provenance matters and joins or conclusions need the feed path to stay explicit.
+
+
 ---
 
 ## 1) Aggregator Output: `aggregated.csv`
@@ -100,3 +111,8 @@ Executor:
 runs paper execution in DRY mode
 
 live execution is planned (Binance integration)
+
+
+## Consumer scope note
+
+Buyer and Executor consume the live PEAK stream from `deltascout.log` and the live rolling feed path under `/data/feed` when feed context is needed. They do not read either daily archive contour directly.

@@ -59,7 +59,9 @@ This confirms the main spec claim: minute-level rows are collected and reused, b
 
 ## Current Feed Contract in Code
 
-The real feed contract is defined by `feed_reader.py` plus the archived CSV headers.
+The analyzer-side feed contract currently reflected in code is defined by `feed_reader.py` plus the CSV files actually read by `delta_analyzer`.
+
+This is not the same thing as saying the whole project has one daily feed contour. Current repository state includes both `/data/archive/feed/YYYY-MM-DD.csv` and `/opt/aitrader/feed/YYYY-MM-DD.csv`, and the analyzer path described below is much closer to the external enriched contour than to the local Aggregator archive contour.
 
 ### Loaded feed columns today
 
@@ -311,14 +313,14 @@ Why this is the safest seam:
 - it is additive
 - it does not require changing archive ingestion
 - it does not require changing `events_base` / `events_context`
-- it reuses the already canonical feed ingestion path
+- it reuses the already existing feed ingestion path
 - it keeps minute-event foundation below the current event-centric layer instead of entangling them
 
 ### 7. Which current documents and code paths are inconsistent today?
 
 Confirmed inconsistencies:
 
-- [data-contracts.md](D:\Project_V\btc-orderflow-system\docs\data-contracts.md) describes an older aggregator schema centered on `Trades`, `TotalQty`, `AvgSize`, `AvgPrice`, `ClosePrice`, `HiPrice`, `LowPrice`
+- [data-contracts.md](D:\Project_V\btc-orderflow-system\docs\data-contracts.md) describes the Aggregator-side runtime feed contract centered on `Trades`, `TotalQty`, `AvgSize`, `AvgPrice`, `ClosePrice`, `HiPrice`, `LowPrice`
 - the actual research feed used by the analyzer currently has enriched columns:
   - `Open`
   - `High`
@@ -332,8 +334,9 @@ Confirmed inconsistencies:
   - `LiqSellQty`
   - `IsSynthetic`
 
-Additional mismatch:
+Additional mismatches:
 
+- project documentation has described the two daily feed paths too loosely, even though they are different contours
 - the spec language says minute feed is underused as a research surface
 - the repository already has `build_raw_micro.py`, so the better phrasing is:
   minute feed is partially exploited in bundle workflows but not yet promoted into a reusable analyzer foundation layer

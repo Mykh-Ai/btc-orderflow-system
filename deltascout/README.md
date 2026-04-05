@@ -25,10 +25,21 @@ CSV row -> Delta Detection -> Comparison (3/3 rule) -> Gate Logic -> PEAK Emit
 | What | Path | Description |
 |------|------|-------------|
 | Live feed | `/data/feed/aggregated.csv` | Rolling feed used by DeltaScout during runtime |
-| Enriched feed archive | `/opt/aitrader/feed/YYYY-MM-DD.csv` | Canonical enriched daily feed used by offline builders |
-| Legacy feed archive | `/data/archive/feed/YYYY-MM-DD.csv` | Legacy minute archive (no enriched columns) |
+| External research feed contour | `/opt/aitrader/feed/YYYY-MM-DD.csv` | Separate external research contour used by current offline/analyzer workflows |
+| Local Aggregator archive contour | `/data/archive/feed/YYYY-MM-DD.csv` | Local Aggregator archive contour written by this repository |
 
-Enriched CSV schema:
+The two daily archive paths above are not one feed with two aliases. They are two different market-data contours used by different parts of the current system documentation and workflow.
+
+Observed current-state split:
+
+- `/data/archive/feed/YYYY-MM-DD.csv` is written by this repository's Aggregator and follows the 10-column Aggregator contract.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` is not written by code in this repository, but current offline research flows explicitly read it.
+- `DeltaScout` runtime itself reads the live rolling file `FILE_PATH` (default `/data/feed/aggregated.csv`), not either daily archive path directly.
+- `Buyer` and `Executor` also stay on the live path (`AGG_CSV` default under `/data/feed`) and on the PEAK bus; they do not consume either daily archive contour directly.
+
+The research workflow therefore has a real path/source split. This documentation keeps that split explicit for market-state research.
+
+Enriched CSV schema documented for the external `/opt/aitrader/feed` contour:
 
 ```text
 Timestamp,Open,High,Low,Close,Volume,AggTrades,BuyQty,SellQty,VWAP,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty,IsSynthetic
@@ -158,14 +169,16 @@ Default self-contained path:
 INPUT_ROOT/feed/YYYY-MM-DD.csv
 ```
 
-Properties:
+Properties of the self-contained/default offline feed contract (`INPUT_ROOT/feed/YYYY-MM-DD.csv` or `/data/archive/feed/YYYY-MM-DD.csv` when copied there):
 
 - append-only
 - one file per UTC day
 - deduplicated by `Timestamp`
-- same core schema as `aggregated.csv`, with optional enriched columns
+- same 10-column schema as `aggregated.csv` when sourced from the local Aggregator archive contour
 - chronologically ordered
 - builder normalization uses `Timestamp -> ts` (UTC), `BuyQty - SellQty -> delta`, and `ClosePrice` with row-level `AvgPrice` fallback -> `price`
+
+Current research workflow also uses a separate external contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`. In current docs and commands this contour may include columns that do not exist in the local 10-column archive.
 
 Rules:
 
@@ -279,10 +292,10 @@ PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
 **Feed resolution.** `build_phase1_derived` resolves feed input in this order:
 
 1. `--feed-file` explicit file override (highest priority)
-2. `--feed-root/YYYY-MM-DD.csv` — canonical enriched feed at `/opt/aitrader/feed/`
+2. `--feed-root/YYYY-MM-DD.csv` — external research feed root, often `/opt/aitrader/feed/` in current server workflow
 3. self-contained `--input-root/feed/YYYY-MM-DD.csv` (fallback)
 
-Production uses `--feed-root /opt/aitrader/feed` to read enriched columns (`OpenInterest`, `FundingRate`, `LiqBuyQty`, `LiqSellQty`). Step 3 reads the same enriched feed via `--feed-glob`.
+In current server research workflow, `--feed-root /opt/aitrader/feed` is used intentionally as a different market-data contour from `/data/archive/feed`. Current docs assume it may expose enriched columns such as `OpenInterest`, `FundingRate`, `LiqBuyQty`, and `LiqSellQty`. Step 3 reads that same external contour via `--feed-glob`. This is a real current-state divergence, not just an alternate spelling for the local Aggregator archive.
 
 Expected outputs:
 

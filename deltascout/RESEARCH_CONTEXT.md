@@ -35,9 +35,13 @@ Primary research archive path in the server project layout:
 
 - `/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl`
 
-Matching feed archive path:
+Runtime archive contour copied from the local Aggregator path:
 
 - `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv`
+
+Separate external research contour used by current offline workflows:
+
+- `/opt/aitrader/feed/YYYY-MM-DD.csv`
 
 Derived dataset output path:
 
@@ -92,7 +96,7 @@ When Phase 2.5 review-package outputs are available, the recommended working ord
 3. `reject_event_context_YYYY-MM-DD.csv` — reject rows with context for funnel analysis
 4. `raw_archive/` and `raw_feed/` — secondary sources for drill-down, anomaly checks, or deeper sequence/transition analysis
 
-Raw archive and feed files are not obsolete. They remain the authoritative sources for any interpretation that requires full event sequences or transition-level context that derived outputs do not expose.
+Raw archive and feed files are not obsolete. They remain the direct sources for any interpretation that requires full event sequences or transition-level context that derived outputs do not expose. For feed analysis, `/data/archive/feed` and `/opt/aitrader/feed` are separate evidence sources, not one implied market-data history.
 
 The first analysis modules should focus on:
 
@@ -188,10 +192,16 @@ List DeltaScout archive files:
 ls -1 /root/volume-alert/data/archive/deltascout
 ```
 
-List feed archive files:
+List local Aggregator archive files:
 
 ```bash
 ls -1 /root/volume-alert/data/archive/feed
+```
+
+List external research-feed files:
+
+```bash
+ls -1 /opt/aitrader/feed
 ```
 
 Inspect one research archive file:
@@ -204,7 +214,7 @@ tail -n 20 /root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl
 Rebuild offline datasets after a close date:
 
 ```bash
-PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets --feed-root /opt/aitrader/feed
 PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets
 ```
 

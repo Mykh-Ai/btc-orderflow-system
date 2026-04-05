@@ -31,6 +31,14 @@ It is **not**:
 
 This document defines the **next implementation path** for the analyzer.
 
+Current market-data state note:
+
+- the project has a local Aggregator archive contour at `/data/archive/feed/YYYY-MM-DD.csv`
+- the current analyzer/offline workflow also reads a separate external contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`
+- runtime `PEAK` generation still comes from live `aggregated.csv`, not from either daily archive path directly
+
+This spec treats that split as part of the current real system state. It describes the two feed contours as separate sources in current workflow.
+
 Working relationship:
 
 - `research_blueprint_v2.md` = strategic research frame
@@ -80,11 +88,11 @@ What remains underdeveloped:
   - funding context
   - liquidation context
 
-This means the project already collects rich minute-level data, but the analyzer still underuses that data as a research surface.
+This means the project already collects and references rich minute-level data across more than one feed contour, but the analyzer still underuses that data as a research surface.
 
-The immediate problem is **not** data collection.
+The immediate problem is **not** only data collection.
 
-The immediate problem is **underexploitation of already collected minute-level feed data**.
+The immediate problem is **underexploitation of already collected minute-level feed data**, together with insufficiently explicit contour separation between the local Aggregator archive and the external research feed used by analyzer workflows.
 
 The repository already contains partial minute-level usage in bundle workflows, but that usage is not yet promoted into a reusable analyzer foundation layer.
 

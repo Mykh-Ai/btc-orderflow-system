@@ -33,6 +33,19 @@ End-to-end market data -> analytics -> alerts -> execution stack deployed on a V
 
 Every minute the Aggregator writes one row to the live feed and appends the same row to the daily feed archive.
 
+### Market-data contours used today
+
+The project currently operates with two different daily market-data contours for research:
+
+| Contour | Main path | Who writes it | Who reads it | Status in this repo |
+|------|------|------|------|------|
+| Runtime archive contour | `/data/archive/feed/YYYY-MM-DD.csv` | `aggregator/binance_run_aggregator.py` via `FEED_ARCHIVE_DIR` (default `/data/archive/feed`) | Local/manual research copies; self-contained fallback for `scripts/offline/build_phase1_derived.py` when `--feed-root` is not passed | Implemented writer in this repo |
+| External enriched contour | `/opt/aitrader/feed/YYYY-MM-DD.csv` | Not written by code in this repo | DeltaScout research/offline flows documented in `deltascout/README.md`; `scripts/offline/build_phase1_derived.py` via `--feed-root`; `deltascout.delta_analyzer.cli` via `--feed-glob` default | External reader target, not a local writer |
+
+These are different market-data contours. The documentation describes them as separate contours, not one conceptual feed.
+The runtime trading path uses `/data/feed/aggregated.csv`; Buyer and Executor do not read either daily archive contour directly.
+For research of market state, interpretations need the contour path to stay explicit rather than being silently carried over from one contour to the other.
+
 ### DeltaScout writes
 
 | What | Path (container) | Path (host) | Format | Behavior |
@@ -123,7 +136,18 @@ The research archive captures every decision point in the DeltaScout pipeline. I
 Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
 ```
 
-This 10-column schema is the canonical feed contract for Aggregator and DeltaScout. `HiPrice` and `LowPrice` were added after the earlier 8-column format. The live feed and feed archive use the same schema.
+This 10-column schema is the contract actually written by the Aggregator to `/data/feed/aggregated.csv` and `/data/archive/feed/YYYY-MM-DD.csv`.
+DeltaScout runtime validation in `deltascout/delta_scout.py` is aligned to this 10-column layout for its live input file.
+
+This repository also documents a separate enriched research contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`.
+That contour is read by offline research tooling, but it is not written by the Aggregator code in this repo and it must not be described as the same storage object as `/data/archive/feed/YYYY-MM-DD.csv`.
+
+Known current-state divergence:
+
+- `/data/archive/feed/YYYY-MM-DD.csv` is the archive written by this repo's Aggregator from the same rows it writes into live `aggregated.csv`.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` is treated by research tooling as a separate external feed root.
+- Documentation under `deltascout/` already assumes that `/opt/aitrader/feed` may contain enriched columns beyond the 10-column Aggregator archive.
+- Therefore research outputs built from `/opt/aitrader/feed` are not strictly the same evidence source as outputs built from `data/archive/feed`.
 
 ---
 

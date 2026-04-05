@@ -7,6 +7,12 @@ This memo closes the gap left after M0 by auditing whether the repository alread
 This is an audit only.
 It does not implement M2.5.
 
+Feed-source note:
+
+- the repository currently exposes a local Aggregator archive contour at `/data/archive/feed/YYYY-MM-DD.csv`
+- the current offline/analyzer workflow also uses a separate external contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`
+- this memo documents reusable seams without treating those contours as one identical source
+
 ## Files Reviewed
 
 Primary outcome-adjacent code reviewed:
@@ -120,7 +126,8 @@ What it computes:
 
 Outcome/path relevance:
 
-- `load_feed()` creates a sorted minute feed with canonical `ts`, `price`, and `delta`
+- `load_feed()` creates a sorted minute feed with normalized `ts`, `price`, and `delta`
+- it is generic over the input file path, so contour provenance has to be preserved by the caller and by surrounding documentation
 
 Granularity:
 
@@ -443,6 +450,15 @@ The current task references files under `deltascout/research_material/` for minu
 Blocker implication:
 
 - future M2.5 work should keep runbook/spec/audit location consistent to avoid split contracts
+
+### 6. Feed-contour drift exists
+
+The project currently has two distinct daily feed contours in active documentation and workflows: local `/data/archive/feed` and external `/opt/aitrader/feed`.
+
+Blocker implication:
+
+- minute-event outcome work must record which contour its input rows came from
+- evidence from one contour should not be silently generalized as if it came from the other
 
 ## Recommended M2.5 Seam
 
