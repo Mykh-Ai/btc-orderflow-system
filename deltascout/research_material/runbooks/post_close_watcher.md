@@ -14,10 +14,10 @@ It does not use `executor.log`, `executor_state.json`, generated close outcome C
 - If `trade_outcomes.jsonl` is missing, empty, or has no new valid close row, the watcher exits cleanly without running the pipeline.
 - Processes only one latest close marker at a time, using `trade_key` when present and a timestamp/reason/side fallback when it is not.
 - Runs, in order, four pipeline steps for the discovered UTC close date:
-  1. `build_phase1_derived` — rejects, baseline, ownership misses, late peaks
-  2. `build_close_outcomes` — close outcome join from trade_outcomes journal
-  3. `delta_analyzer.cli` (main mode) — builds `events_context_YYYY-MM-DD.csv` from archive + canonical event-source minute feed, with optional enrichment joined separately
-  4. `delta_analyzer.cli --build-review` — daily review package from prebuilt datasets
+  1. `build_phase1_derived` вЂ” rejects, baseline, ownership misses, late peaks
+  2. `build_close_outcomes` вЂ” close outcome join from trade_outcomes journal
+  3. `delta_analyzer.cli` (main mode) вЂ” builds `events_context_YYYY-MM-DD.csv` from archive + enriched feed
+  4. `delta_analyzer.cli --build-review` вЂ” daily review package from prebuilt datasets
 - Updates `/root/volume-alert/data/state/post_close_watcher_state.json` only after all four steps succeed.
 - For DeltaScout event-linked research, `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base because it is produced by the same raw writer chain as runtime `aggregated.csv` and underlies actual `PEAK_EMIT` generation.
 - `build_phase1_derived` may use `--feed-root /opt/aitrader/feed` as a secondary enrichment layer for additional minute context. It falls back to `--input-root/feed/YYYY-MM-DD.csv` only when `--feed-root` is not supplied, and any enrichment-derived fields must remain explicitly separated from canonical event-source feed fields.
@@ -40,4 +40,5 @@ Recommended cron pattern with log redirection under the current project layout:
 ```cron
 10 6 * * * cd /root/volume-alert && PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python scripts/offline/run_post_close_watcher.py >> /root/volume-alert/data/logs/post_close_watcher.log 2>&1
 ```
+
 
