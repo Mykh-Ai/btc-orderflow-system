@@ -26,6 +26,7 @@ REQUIRED_INDEX_COLUMNS = [
     "has_close_outcome",
     "accepted_case_ts",
     "accepted_case_kind",
+    "accepted_case_outcome_surface",
     "accepted_case_close_reason",
     "dominant_side_reject_bias",
     "contains_vwap_side_rejects",

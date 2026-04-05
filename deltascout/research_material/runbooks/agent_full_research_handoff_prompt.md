@@ -1,4 +1,4 @@
-Task: orchestrate the full DeltaScout research handoff workflow for a specified UTC date range.
+﻿Task: orchestrate the full DeltaScout research handoff workflow for a specified UTC date range.
 
 Goal:
 Run the correct sequence of DeltaScout research steps so the local repo ends with:
@@ -16,6 +16,8 @@ This runbook is the master workflow above:
 5. `agent_step4_hend.md`
 
 Use this runbook when the user wants an end-to-end research package ready for analyst review or handoff to a stronger LLM.
+
+Before running this workflow, read repo-level AGENTS.md and follow its SSH / ops hygiene rules for the full session.
 
 Important:
 - Do NOT change code, tests, docs, or pipeline files
@@ -60,6 +62,15 @@ Mode semantics:
 If the user does not provide:
 - a date range: ask before proceeding
 - a mode: default to `full_rebuild` only if the user explicitly asked for a rebuild; otherwise default to `sync_only`
+
+Special watcher-driven range rule:
+- If the user refers to "after watcher", "from the last processed/generated artifact", or asks to continue from the latest locally available research package without giving explicit dates, first discover the latest locally available daily review artifact date under `deltascout/research_material/reviews`.
+- In that watcher-driven case, treat `DATE_FROM` as the next UTC date after the latest locally available daily review artifact date.
+- In that watcher-driven case, treat `DATE_TO` as the last fully completed UTC day, not the current in-progress UTC day.
+- Never include the current UTC day in an inferred watcher-driven range unless the user explicitly names that date and confirms it is complete.
+- If the inferred watcher-driven range is empty, stop and report that there is no completed UTC day beyond the latest local artifact.
+- If the inferred watcher-driven range has missing server review artifacts for one or more dates, do not stay in `sync_only`; switch to `full_rebuild` for the inferred range because watcher is latest-marker based and may miss historical gaps.
+- When this automatic switch happens, state it explicitly in the return under blockers/anomalies and continue with Stage 1 for the inferred range.
 
 Server access:
 - `ssh -F NUL root@95.216.139.172`

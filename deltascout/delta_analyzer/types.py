@@ -103,6 +103,17 @@ class MinuteEventMechanicsRow:
     price_vs_vwap_side: str
     high_above_vwap_flag: bool | None
     low_below_vwap_flag: bool | None
+    oi_change_1m: float | None
+    abs_oi_change_1m: float | None
+    oi_change_pct_60m: float | None
+    oi_change_pct_180m: float | None
+    delta_oi_alignment_flag: str
+    price_oi_alignment_flag: str
+    liq_total_1m: float | None
+    liq_imbalance_1m: float | None
+    liq_dominant_side: str
+    liq_burst_flag: bool | None
+    delta_vs_liq_relation_flag: str
 
 
 @dataclass(frozen=True)

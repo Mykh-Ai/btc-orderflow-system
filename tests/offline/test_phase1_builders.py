@@ -488,3 +488,78 @@ def test_trade_outcomes_dedupe_prefers_trade_key_identity():
     }
     deduped = _dedupe_close_events([e1, e2])
     assert len(deduped) == 1
+
+
+def test_close_outcomes_derives_tp1_then_sl_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "long", "price": 100.0, "delta": 1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-01T00:30:00Z",
+            "side": "LONG",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 100.5,
+            "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long"},
+            "lc_tp1_done": True,
+            "lc_tp2_done": False,
+            "lc_sl_done": True,
+            "lc_trail_active": False,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-01", window_min=4320)
+    assert out.iloc[0]["trade_lifecycle_state"] == "tp1_then_sl"
+
+
+def test_close_outcomes_derives_tp1_tp2_then_trailing_stop_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "long", "price": 100.0, "delta": 1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-02T00:30:00Z",
+            "side": "LONG",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 100.5,
+            "lc_opened_at": "2026-01-01T00:05:00Z",
+            "lc_tp1_done": True,
+            "lc_tp2_done": True,
+            "lc_sl_done": True,
+            "lc_trail_active": True,
+            "lc_trail_sl_price": 105.0,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-02", window_min=4320)
+    assert out.iloc[0]["join_status"] == "window_match"
+    assert out.iloc[0]["peak_ts"] == pd.Timestamp("2026-01-01T00:10:00Z")
+    assert out.iloc[0]["trade_lifecycle_state"] == "tp1_tp2_then_trailing_stop"
+
+
+def test_close_outcomes_derives_plain_sl_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "short", "price": 100.0, "delta": -1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-01T00:30:00Z",
+            "side": "SHORT",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 99.5,
+            "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "short"},
+            "lc_tp1_done": False,
+            "lc_tp2_done": False,
+            "lc_sl_done": True,
+            "lc_trail_active": False,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-01", window_min=4320)
+    assert out.iloc[0]["trade_lifecycle_state"] == "plain_sl"

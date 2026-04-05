@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
 from math import isnan
@@ -55,7 +55,20 @@ ACCEPTED_JOIN_FIELDS = (
     "close_reason",
     "entry",
     "side",
+    "final_close_ts",
+    "final_close_reason",
+    "lifecycle_tp1_done",
+    "lifecycle_tp2_done",
+    "lifecycle_sl_done",
+    "lifecycle_trail_active",
+    "lifecycle_trail_sl_price",
+    "lifecycle_prices_entry",
+    "lifecycle_prices_sl",
+    "lifecycle_prices_tp1",
+    "lifecycle_prices_tp2",
+    "trade_lifecycle_state",
 )
+ACCEPTED_CLOSE_LOOKAHEAD_DAYS = 3
 REJECT_REASON_SUMMARY_FIELDS = (
     "date",
     "reject_reason",
@@ -137,11 +150,12 @@ def build_daily_review_package(
     events_context_rows = _load_required_csv(
         input_root / f"events_context_{date}.csv", required_name="events_context"
     )
-    close_outcome_rows = _load_optional_close_outcomes(input_root, date)
-    close_outcomes_by_key = _index_close_outcomes(close_outcome_rows)
+    close_outcome_rows_by_date = _load_forward_close_outcomes(
+        input_root, date, ACCEPTED_CLOSE_LOOKAHEAD_DAYS
+    )
 
     accepted_rows = build_accepted_event_context_rows(
-        events_context_rows, close_outcomes_by_key
+        events_context_rows, close_outcome_rows_by_date
     )
     reject_rows = build_reject_event_context_rows(events_context_rows)
     interesting_reject_rows = build_interesting_reject_rows(reject_rows)
@@ -194,7 +208,7 @@ def build_daily_review_package(
         accepted_count=len(accepted_rows),
         reject_count=len(reject_rows),
         interesting_reject_count=len(interesting_reject_rows),
-        matched_close_count=sum(1 for row in accepted_rows if row.get("join_status")),
+        matched_close_count=sum(1 for row in accepted_rows if row.get("join_status") == "joined"),
         output_dir=review_dir,
         accepted_path=accepted_path,
         reject_path=reject_path,
@@ -206,7 +220,7 @@ def build_daily_review_package(
 
 def build_accepted_event_context_rows(
     events_context_rows: list[dict[str, str]],
-    close_outcomes_by_key: dict[tuple[str, str], dict[str, str]],
+    close_outcome_rows_by_date: dict[str, list[dict[str, str]]],
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for row in events_context_rows:
@@ -215,8 +229,8 @@ def build_accepted_event_context_rows(
         output_row = {
             field: row.get(field, "") for field in REVIEW_SHARED_FIELDS + CONTEXT_FIELDS
         }
-        close_row = close_outcomes_by_key.get(
-            (_normalize_ts_key(row.get("ts")), _normalize_kind_key(row.get("kind")))
+        close_row = _match_close_outcome_for_accepted_peak(
+            row, close_outcome_rows_by_date
         )
         for field in ACCEPTED_JOIN_FIELDS:
             output_row[field] = close_row.get(field, "") if close_row else ""
@@ -569,6 +583,43 @@ def _load_optional_close_outcomes(input_root: Path, date: str) -> list[dict[str,
     return []
 
 
+def _load_forward_close_outcomes(
+    input_root: Path, date: str, lookahead_days: int
+) -> dict[str, list[dict[str, str]]]:
+    rows_by_date: dict[str, list[dict[str, str]]] = {}
+    start = datetime.strptime(date, "%Y-%m-%d")
+    for offset in range(lookahead_days + 1):
+        lookup_date = (start + timedelta(days=offset)).strftime("%Y-%m-%d")
+        rows_by_date[lookup_date] = _load_optional_close_outcomes_for_date(input_root, lookup_date)
+    return rows_by_date
+
+
+def _load_optional_close_outcomes_for_date(
+    input_root: Path, date: str
+) -> list[dict[str, str]]:
+    for candidate_root in _candidate_close_lookup_roots(input_root, date):
+        rows = _load_optional_close_outcomes(candidate_root, date)
+        if rows:
+            return rows
+    return []
+
+
+def _candidate_close_lookup_roots(input_root: Path, date: str) -> list[Path]:
+    roots: list[Path] = [input_root]
+    if input_root.name.count("-") == 2:
+        roots.append(input_root.parent / date)
+    else:
+        roots.append(input_root / date)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        deduped.append(root)
+    return deduped
+
+
 def _load_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
@@ -590,8 +641,8 @@ def _load_parquet(path: Path) -> list[dict[str, str]]:
 
 def _index_close_outcomes(
     rows: list[dict[str, str]],
-) -> dict[tuple[str, str], dict[str, str]]:
-    indexed: dict[tuple[str, str], dict[str, str]] = {}
+) -> dict[tuple[str, str], list[dict[str, str]]]:
+    indexed: dict[tuple[str, str], list[dict[str, str]]] = {}
     for row in rows:
         key = (
             _normalize_ts_key(row.get("peak_ts")),
@@ -599,10 +650,62 @@ def _index_close_outcomes(
         )
         if not key[0]:
             continue
-        indexed.setdefault(
-            key, {field: row.get(field, "") for field in ACCEPTED_JOIN_FIELDS}
-        )
+        indexed.setdefault(key, []).append(row)
     return indexed
+
+
+def _match_close_outcome_for_accepted_peak(
+    accepted_row: dict[str, str],
+    close_outcome_rows_by_date: dict[str, list[dict[str, str]]],
+) -> dict[str, str]:
+    peak_key = (
+        _normalize_ts_key(accepted_row.get("ts")),
+        _normalize_kind_key(accepted_row.get("kind")),
+    )
+    exact_matches: list[dict[str, str]] = []
+    for rows in close_outcome_rows_by_date.values():
+        indexed = _index_close_outcomes(rows)
+        exact_matches.extend(indexed.get(peak_key, []))
+
+    if len(exact_matches) == 1:
+        return _build_accepted_join_row(exact_matches[0], "joined", "1.0")
+    if len(exact_matches) > 1:
+        return _build_unresolved_accepted_join_row("ambiguous")
+    return _build_unresolved_accepted_join_row("missing")
+
+
+def _build_accepted_join_row(
+    close_row: dict[str, str], linkage_status: str, linkage_confidence: str
+) -> dict[str, str]:
+    final_close_ts = close_row.get("close_ts", "")
+    final_close_reason = close_row.get("close_reason", "")
+    return {
+        "join_status": linkage_status,
+        "join_confidence": linkage_confidence,
+        "close_ts": final_close_ts,
+        "close_reason": final_close_reason,
+        "entry": close_row.get("entry", ""),
+        "side": close_row.get("side", ""),
+        "final_close_ts": final_close_ts,
+        "final_close_reason": final_close_reason,
+        "lifecycle_tp1_done": close_row.get("lifecycle_tp1_done", ""),
+        "lifecycle_tp2_done": close_row.get("lifecycle_tp2_done", ""),
+        "lifecycle_sl_done": close_row.get("lifecycle_sl_done", ""),
+        "lifecycle_trail_active": close_row.get("lifecycle_trail_active", ""),
+        "lifecycle_trail_sl_price": close_row.get("lifecycle_trail_sl_price", ""),
+        "lifecycle_prices_entry": close_row.get("lifecycle_prices_entry", ""),
+        "lifecycle_prices_sl": close_row.get("lifecycle_prices_sl", ""),
+        "lifecycle_prices_tp1": close_row.get("lifecycle_prices_tp1", ""),
+        "lifecycle_prices_tp2": close_row.get("lifecycle_prices_tp2", ""),
+        "trade_lifecycle_state": close_row.get("trade_lifecycle_state", ""),
+    }
+
+
+def _build_unresolved_accepted_join_row(linkage_status: str) -> dict[str, str]:
+    row = {field: "" for field in ACCEPTED_JOIN_FIELDS}
+    row["join_status"] = linkage_status
+    row["join_confidence"] = "0.0"
+    return row
 
 
 def _normalize_ts_key(value: Any) -> str:
@@ -692,7 +795,7 @@ def _build_summary(
     reject_reason_summary_path: Path,
     summary_path: Path,
 ) -> str:
-    matched_close_count = sum(1 for row in accepted_rows if row.get("join_status"))
+    matched_close_count = sum(1 for row in accepted_rows if row.get("join_status") == "joined")
     reason_counts: dict[str, int] = {}
     for row in reject_reason_summary_rows:
         reason = row.get("reject_reason", "")

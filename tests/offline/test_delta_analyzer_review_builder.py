@@ -54,6 +54,18 @@ CLOSE_OUTCOME_FIELDS = [
     "close_reason",
     "entry",
     "side",
+    "final_close_ts",
+    "final_close_reason",
+    "lifecycle_tp1_done",
+    "lifecycle_tp2_done",
+    "lifecycle_sl_done",
+    "lifecycle_trail_active",
+    "lifecycle_trail_sl_price",
+    "lifecycle_prices_entry",
+    "lifecycle_prices_sl",
+    "lifecycle_prices_tp1",
+    "lifecycle_prices_tp2",
+    "trade_lifecycle_state",
 ]
 
 
@@ -243,9 +255,10 @@ def test_accepted_table_joins_close_outcomes_on_peak_ts_and_peak_kind(
     with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
         row = next(csv.DictReader(handle))
 
-    assert row["join_status"] == "exact"
+    assert row["join_status"] == "joined"
     assert row["join_confidence"] == "1.0"
     assert row["close_reason"] == "TP1"
+    assert row["final_close_reason"] == "TP1"
     assert row["entry"] == "101.25"
     assert row["side"] == "LONG"
     assert result.matched_close_count == 1
@@ -274,7 +287,7 @@ def test_accepted_table_joins_close_outcomes_from_parquet_when_csv_absent(
     with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
         row = next(csv.DictReader(handle))
 
-    assert row["join_status"] == "exact"
+    assert row["join_status"] == "joined"
     assert row["close_reason"] == "TP1"
     assert result.matched_close_count == 1
 
@@ -316,7 +329,7 @@ def test_accepted_table_joins_close_outcomes_when_event_ts_is_naive_and_outcome_
     with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
         row = next(csv.DictReader(handle))
 
-    assert row["join_status"] == "exact"
+    assert row["join_status"] == "joined"
     assert row["close_ts"] == "2026-01-02T01:00:00Z"
     assert result.matched_close_count == 1
 
@@ -377,7 +390,7 @@ def test_build_succeeds_without_close_outcomes_and_leaves_join_fields_empty(
     with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
         row = next(csv.DictReader(handle))
 
-    assert row["join_status"] == ""
+    assert row["join_status"] == "missing"
     assert row["close_ts"] == ""
     assert row["close_reason"] == ""
     assert result.matched_close_count == 0
@@ -697,3 +710,148 @@ def test_interesting_rejects_writes_empty_schema_when_no_rows_match(tmp_path: Pa
     summary = result.summary_path.read_text(encoding="utf-8")
     assert "interesting_reject_row_count: 0" in summary
     assert result.interesting_rejects_path.name in summary
+
+
+def test_accepted_table_joins_close_outcomes_from_next_day_when_peak_closes_after_midnight(
+    dataset_root: Path, tmp_path: Path
+):
+    _write_csv(
+        dataset_root / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            {
+                **{field: "" for field in EVENTS_CONTEXT_FIELDS},
+                "ts": "2026-01-02T23:56:00Z",
+                "day": "2026-01-02",
+                "event_type": "PEAK_EMIT",
+                "kind": "long",
+                "price": "67451.71266",
+            }
+        ],
+    )
+    _write_csv(
+        dataset_root / "close_outcomes_2026-01-03.csv",
+        CLOSE_OUTCOME_FIELDS,
+        [
+            {
+                "peak_ts": "2026-01-02T23:56:00Z",
+                "peak_kind": "long",
+                "join_status": "window_match",
+                "join_confidence": "0.6",
+                "close_ts": "2026-01-03T01:00:00Z",
+                "close_reason": "SL",
+                "entry": "67451.49",
+                "side": "LONG",
+                "final_close_ts": "2026-01-03T01:00:00Z",
+                "final_close_reason": "SL",
+                "trade_lifecycle_state": "plain_sl",
+            }
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["join_status"] == "joined"
+    assert row["close_reason"] == "SL"
+    assert row["close_ts"] == "2026-01-03T01:00:00Z"
+    assert row["trade_lifecycle_state"] == "plain_sl"
+    assert result.matched_close_count == 1
+
+
+def test_accepted_table_keeps_cross_day_case_unresolved_when_multiple_candidates_exist(
+    dataset_root: Path, tmp_path: Path
+):
+    _write_csv(
+        dataset_root / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            {
+                **{field: "" for field in EVENTS_CONTEXT_FIELDS},
+                "ts": "2026-01-02T16:20:00Z",
+                "day": "2026-01-02",
+                "event_type": "PEAK_EMIT",
+                "kind": "long",
+            }
+        ],
+    )
+    _write_csv(
+        dataset_root / "close_outcomes_2026-01-03.csv",
+        CLOSE_OUTCOME_FIELDS + ["lc_opened_at", "lc_side"],
+        [
+            {
+                "peak_ts": "",
+                "peak_kind": "",
+                "join_status": "missing",
+                "join_confidence": "0.0",
+                "close_ts": "2026-01-03T20:10:32Z",
+                "close_reason": "SL",
+                "entry": "66798.52",
+                "side": "LONG",
+                "lc_opened_at": "2026-01-02T14:20:05+00:00",
+                "lc_side": "LONG",
+            },
+            {
+                "peak_ts": "",
+                "peak_kind": "",
+                "join_status": "missing",
+                "join_confidence": "0.0",
+                "close_ts": "2026-01-03T21:10:32Z",
+                "close_reason": "TP1",
+                "entry": "66800.00",
+                "side": "LONG",
+                "lc_opened_at": "2026-01-02T15:20:05+00:00",
+                "lc_side": "LONG",
+            },
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["join_status"] == "missing"
+    assert row["close_reason"] == ""
+    assert row["close_ts"] == ""
+    assert result.matched_close_count == 0
+
+
+def test_accepted_table_marks_ambiguous_when_multiple_exact_close_rows_match(
+    dataset_root: Path, tmp_path: Path
+):
+    _write_csv(
+        dataset_root / "close_outcomes_2026-01-02.csv",
+        CLOSE_OUTCOME_FIELDS,
+        [
+            {
+                "peak_ts": "2026-01-02T00:10:00Z",
+                "peak_kind": "long",
+                "join_status": "window_match",
+                "join_confidence": "0.6",
+                "close_ts": "2026-01-02T01:00:00Z",
+                "close_reason": "TP1",
+                "entry": "101.25",
+                "side": "LONG",
+            },
+            {
+                "peak_ts": "2026-01-02T00:10:00Z",
+                "peak_kind": "long",
+                "join_status": "window_match",
+                "join_confidence": "0.6",
+                "close_ts": "2026-01-02T01:10:00Z",
+                "close_reason": "SL",
+                "entry": "100.90",
+                "side": "LONG",
+            },
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", dataset_root, tmp_path)
+    with result.accepted_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["join_status"] == "ambiguous"
+    assert row["join_confidence"] == "0.0"
+    assert row["close_reason"] == ""
+    assert result.matched_close_count == 0

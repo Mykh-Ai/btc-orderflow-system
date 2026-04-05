@@ -1,0 +1,3 @@
+ts,date,side,close_reason,join_status,entry,price_vs_vwap_side,cum_delta_24h,cum_delta_180m,cum_delta_60m,ret_15m,ret_60m,matched_open_interest,matched_funding_rate,matched_liq_buy_qty,matched_liq_sell_qty,source_artifact
+2026-03-20 00:40:00,2026-03-20,SHORT,SL,window_match,69828.18,below,-8341.59299999997,-243.92799999999534,526.4170000000013,240.60000000000582,509.6000000000058,86751.63,1.094e-05,1.13,0.0,deltascout\research_material\reviews\2026-03-20\accepted_event_context_2026-03-20.csv
+2026-03-29 19:23:00,2026-03-29,SHORT,SL,window_match,66187.66,below,-2424.075999999996,-802.8819999999996,68.98500000000004,8.599999999991269,52.80000000000291,95888.14,4.451e-05,0.0,0.0,deltascout\research_material\reviews\2026-03-29\accepted_event_context_2026-03-29.csv

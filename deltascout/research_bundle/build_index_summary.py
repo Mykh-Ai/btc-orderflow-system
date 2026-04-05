@@ -93,6 +93,7 @@ def build_index_summary(scope: ScopeInfo) -> Path:
             "has_close_outcome": _yes_no(bool(close_rows)),
             "accepted_case_ts": accepted_case.get("ts", ""),
             "accepted_case_kind": accepted_case.get("kind", ""),
+            "accepted_case_outcome_surface": accepted_case.get("trade_lifecycle_state", "") or accepted_case.get("close_reason", ""),
             "accepted_case_close_reason": accepted_case.get("close_reason", ""),
             "dominant_side_reject_bias": reject_kind_counter.most_common(1)[0][0] if reject_kind_counter else "",
             "contains_vwap_side_rejects": _yes_no("vwap_side" in reason_counter),

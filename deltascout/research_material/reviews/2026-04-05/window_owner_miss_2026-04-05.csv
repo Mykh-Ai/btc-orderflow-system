@@ -1,0 +1,3 @@
+source_date,ts,delta,abs_delta,price,rolling_max,rolling_min,threshold_abs_delta,is_owner_max,is_owner_min,Timestamp,Open,High,Low,Close,Volume,AggTrades,BuyQty,SellQty,VWAP,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty,IsSynthetic
+2026-04-05,2026-04-05 06:06:00+00:00,-66.053,66.053,66844.0,77.635,-216.657,63.082499999999996,False,False,2026-04-05 06:06:00,66910.7,66910.8,66844.0,66844.0,127.833,1049,30.89,96.943,66871.68,91152.61,5.314e-05,0.0,0.479,0
+2026-04-05,2026-04-05 06:08:00+00:00,-203.243,203.243,66785.3,77.635,-216.657,63.082499999999996,False,False,2026-04-05 06:08:00,66826.2,66828.0,66753.0,66785.3,548.473,2660,172.615,375.858,66784.65,90891.09,5.31e-05,0.0,1.757,0

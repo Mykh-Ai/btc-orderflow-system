@@ -15,6 +15,10 @@ OPPOSED = "opposed"
 ABOVE = "above"
 BELOW = "below"
 AT_OR_UNKNOWN = "at_or_unknown"
+BUY = "buy"
+SELL = "sell"
+BALANCED_OR_UNKNOWN = "balanced_or_unknown"
+LIQ_BURST_THRESHOLD = 0.95
 
 
 def _signed_value(value: float | None) -> int | None:
@@ -91,8 +95,79 @@ def _percentile_rank(
     return le_count / len(values)
 
 
+def _percentile_rank_values(
+    rows: list[MinuteEventRow],
+    values_by_idx: list[float | None],
+    current_idx: int,
+    lookback: timedelta,
+) -> float | None:
+    current_value = values_by_idx[current_idx]
+    if current_value is None:
+        return None
+    current_ts = rows[current_idx].ts
+    boundary = current_ts - lookback
+    values: list[float] = []
+    idx = current_idx
+    while idx >= 0 and rows[idx].ts >= boundary:
+        value = values_by_idx[idx]
+        if value is not None:
+            values.append(value)
+        idx -= 1
+    if len(values) < MIN_HISTORY_ROWS:
+        return None
+    le_count = sum(1 for value in values if value <= current_value)
+    return le_count / len(values)
+
+
+def _oi_change(current: MinuteEventRow, previous: MinuteEventRow | None) -> float | None:
+    if previous is None:
+        return None
+    if current.open_interest is None or previous.open_interest is None:
+        return None
+    return current.open_interest - previous.open_interest
+
+
+def _liq_total(row: MinuteEventRow) -> float | None:
+    if row.liq_buy_qty is not None and row.liq_sell_qty is not None:
+        return row.liq_buy_qty + row.liq_sell_qty
+    if row.liq_buy_qty is not None:
+        return row.liq_buy_qty
+    if row.liq_sell_qty is not None:
+        return row.liq_sell_qty
+    return None
+
+
+def _liq_imbalance(row: MinuteEventRow) -> float | None:
+    if row.liq_buy_qty is None or row.liq_sell_qty is None:
+        return None
+    return row.liq_buy_qty - row.liq_sell_qty
+
+
+def _liq_dominant_side(liq_imbalance_1m: float | None) -> str:
+    signed = _signed_value(liq_imbalance_1m)
+    if signed == 1:
+        return BUY
+    if signed == -1:
+        return SELL
+    return BALANCED_OR_UNKNOWN
+
+
 def build_minute_events_mechanics_dataset(rows: list[MinuteEventRow]) -> list[MinuteEventMechanicsRow]:
     minute_rows = sorted(rows, key=lambda item: item.ts)
+    oi_changes: list[float | None] = []
+    abs_oi_changes: list[float | None] = []
+    liq_totals: list[float | None] = []
+    liq_imbalances: list[float | None] = []
+
+    previous_row: MinuteEventRow | None = None
+    for row in minute_rows:
+        oi_change_1m = _oi_change(row, previous_row)
+        oi_changes.append(oi_change_1m)
+        abs_oi_changes.append(_abs(oi_change_1m))
+        liq_totals.append(_liq_total(row))
+        liq_imbalances.append(_liq_imbalance(row))
+        previous_row = row
+
     dataset: list[MinuteEventMechanicsRow] = []
     for idx, row in enumerate(minute_rows):
         abs_delta_1m = _abs(row.delta_1m)
@@ -116,6 +191,11 @@ def build_minute_events_mechanics_dataset(rows: list[MinuteEventRow]) -> list[Mi
             price_vs_vwap_side = AT_OR_UNKNOWN
         high_above_vwap_flag = None if row.high is None or row.vwap is None else row.high > row.vwap
         low_below_vwap_flag = None if row.low is None or row.vwap is None else row.low < row.vwap
+        oi_change_1m = oi_changes[idx]
+        abs_oi_change_1m = abs_oi_changes[idx]
+        liq_total_1m = liq_totals[idx]
+        liq_imbalance_1m = liq_imbalances[idx]
+        liq_total_pct_60m = _percentile_rank_values(minute_rows, liq_totals, idx, timedelta(minutes=60))
         dataset.append(
             MinuteEventMechanicsRow(
                 ts=row.ts,
@@ -155,6 +235,17 @@ def build_minute_events_mechanics_dataset(rows: list[MinuteEventRow]) -> list[Mi
                 price_vs_vwap_side=price_vs_vwap_side,
                 high_above_vwap_flag=high_above_vwap_flag,
                 low_below_vwap_flag=low_below_vwap_flag,
+                oi_change_1m=oi_change_1m,
+                abs_oi_change_1m=abs_oi_change_1m,
+                oi_change_pct_60m=_percentile_rank_values(minute_rows, abs_oi_changes, idx, timedelta(minutes=60)),
+                oi_change_pct_180m=_percentile_rank_values(minute_rows, abs_oi_changes, idx, timedelta(minutes=180)),
+                delta_oi_alignment_flag=_alignment(row.delta_1m, oi_change_1m),
+                price_oi_alignment_flag=_alignment(close_minus_open, oi_change_1m),
+                liq_total_1m=liq_total_1m,
+                liq_imbalance_1m=liq_imbalance_1m,
+                liq_dominant_side=_liq_dominant_side(liq_imbalance_1m),
+                liq_burst_flag=None if liq_total_pct_60m is None else liq_total_pct_60m >= LIQ_BURST_THRESHOLD,
+                delta_vs_liq_relation_flag=_alignment(row.delta_1m, liq_imbalance_1m),
             )
         )
     return dataset

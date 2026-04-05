@@ -70,6 +70,17 @@ def _minute(
         price_vs_vwap_side=price_vs_vwap_side,
         high_above_vwap_flag=None,
         low_below_vwap_flag=None,
+        oi_change_1m=None,
+        abs_oi_change_1m=None,
+        oi_change_pct_60m=None,
+        oi_change_pct_180m=None,
+        delta_oi_alignment_flag="flat_or_unknown",
+        price_oi_alignment_flag="flat_or_unknown",
+        liq_total_1m=None,
+        liq_imbalance_1m=None,
+        liq_dominant_side="balanced_or_unknown",
+        liq_burst_flag=None,
+        delta_vs_liq_relation_flag="flat_or_unknown",
     )
 
 
@@ -222,4 +233,3 @@ def test_m2_5_unknown_reference_direction_keeps_favorable_and_adverse_null():
     assert row.reference_direction == "unknown"
     assert row.favorable_max_5m is None
     assert row.adverse_max_5m is None
-

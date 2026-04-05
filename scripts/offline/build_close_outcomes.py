@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,14 @@ def _safe_load_json(path: Path) -> dict[str, Any]:
         raise OfflineBuildError(f"invalid state json: {path}: {exc}") from exc
 
 
-def _load_peak_events(archive_file: Path) -> pd.DataFrame:
-    rows = [r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT"]
+def _load_peak_events(archive_files: Path | list[Path]) -> pd.DataFrame:
+    if isinstance(archive_files, Path):
+        archive_files = [archive_files]
+    rows: list[dict[str, Any]] = []
+    for archive_file in archive_files:
+        if not archive_file.exists():
+            continue
+        rows.extend(r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT")
     if not rows:
         return pd.DataFrame(
             {
@@ -226,12 +233,48 @@ def _join_peak(close_row: dict[str, Any], peaks: pd.DataFrame, window_min: int) 
     if kind:
         cands = cands[cands["kind"] == kind]
     lo = close_ts - pd.Timedelta(minutes=window_min)
+    opened_at = pd.to_datetime(close_row.get("lc_opened_at") or close_row.get("opened_at"), utc=True, errors="coerce")
+    if pd.notna(opened_at):
+        lo = max(lo, opened_at)
     cands = cands[(cands["event_ts"] <= close_ts) & (cands["event_ts"] >= lo)]
     if len(cands) == 1:
         return "window_match", 0.6, cands.iloc[0].to_dict()
     if len(cands) > 1:
         return "ambiguous", 0.2, None
     return "missing", 0.0, None
+
+
+def _derive_trade_lifecycle_state(row: dict[str, Any]) -> str:
+    tp1_done = _to_bool(row.get("lc_tp1_done"))
+    tp2_done = _to_bool(row.get("lc_tp2_done"))
+    sl_done = _to_bool(row.get("lc_sl_done"))
+    trail_active = _to_bool(row.get("lc_trail_active"))
+
+    if (not tp1_done) and (not tp2_done) and sl_done:
+        return "plain_sl"
+    if tp1_done and (not tp2_done) and sl_done:
+        return "tp1_then_sl"
+    if tp1_done and tp2_done and sl_done:
+        return "tp1_tp2_then_trailing_stop"
+    return ""
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes"}
+
+
+def _load_peak_archive_files(input_root: Path, source_date: str, lookback_days: int) -> list[Path]:
+    start = pd.Timestamp(source_date) - pd.Timedelta(days=lookback_days)
+    end = pd.Timestamp(source_date)
+    files: list[Path] = []
+    current = start
+    while current <= end:
+        files.append(input_root / "archive" / "deltascout" / f"{current.strftime('%Y-%m-%d')}.jsonl")
+        current += pd.Timedelta(days=1)
+    return files
 
 
 def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFrame, source_date: str, window_min: int) -> pd.DataFrame:
@@ -253,6 +296,16 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "sl": r.get("sl"),
             "join_status": join_status,
             "join_confidence": confidence,
+            "lifecycle_tp1_done": r.get("lc_tp1_done", ""),
+            "lifecycle_tp2_done": r.get("lc_tp2_done", ""),
+            "lifecycle_sl_done": r.get("lc_sl_done", ""),
+            "lifecycle_trail_active": r.get("lc_trail_active", ""),
+            "lifecycle_trail_sl_price": r.get("lc_trail_sl_price", ""),
+            "lifecycle_prices_entry": r.get("lc_prices_entry", ""),
+            "lifecycle_prices_sl": r.get("lc_prices_sl", ""),
+            "lifecycle_prices_tp1": r.get("lc_prices_tp1", ""),
+            "lifecycle_prices_tp2": r.get("lc_prices_tp2", ""),
+            "trade_lifecycle_state": _derive_trade_lifecycle_state(r),
             "src_evt_ts": (src_evt or {}).get("ts"),
             "src_evt_kind": (src_evt or {}).get("kind"),
             "src_evt_price": (src_evt or {}).get("price"),
@@ -290,6 +343,16 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "sl",
             "join_status",
             "join_confidence",
+            "lifecycle_tp1_done",
+            "lifecycle_tp2_done",
+            "lifecycle_sl_done",
+            "lifecycle_trail_active",
+            "lifecycle_trail_sl_price",
+            "lifecycle_prices_entry",
+            "lifecycle_prices_sl",
+            "lifecycle_prices_tp1",
+            "lifecycle_prices_tp2",
+            "trade_lifecycle_state",
             "src_evt_ts",
             "src_evt_kind",
             "src_evt_price",
@@ -313,14 +376,13 @@ def run(args: argparse.Namespace) -> None:
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    archive_file = input_root / "archive" / "deltascout" / f"{args.date}.jsonl"
     exec_log = Path(args.exec_log) if args.exec_log else input_root / "logs" / "executor.log"
     state_file = Path(args.state_file) if args.state_file else input_root / "state" / "executor_state.json"
     trade_outcomes_file = Path(args.trade_outcomes_file) if args.trade_outcomes_file else input_root / "state" / "trade_outcomes.jsonl"
 
-    peaks = _load_peak_events(archive_file)
+    peak_files = _load_peak_archive_files(input_root, args.date, args.peak_lookback_days)
+    peaks = _load_peak_events(peak_files)
     close_events = _load_close_events(exec_log, state_file, trade_outcomes_file, args.date)
-    peaks = _filter_df_by_date(peaks, "event_ts", args.date)
     close_events = _filter_close_events_by_date(close_events, args.date)
     close_events = _dedupe_close_events(close_events)
     close_df = derive_close_outcomes(close_events, peaks, args.date, args.window_min)
@@ -337,7 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trade-outcomes-file", default=None, help="Optional explicit trade_outcomes.jsonl path")
     p.add_argument("--exec-log", default=None, help="Optional explicit executor.log path")
     p.add_argument("--state-file", default=None, help="Optional explicit executor_state.json path")
-    p.add_argument("--window-min", type=int, default=360, help="Fallback join window in minutes")
+    p.add_argument("--window-min", type=int, default=4320, help="Fallback join window in minutes")
+    p.add_argument("--peak-lookback-days", type=int, default=3, help="How many prior UTC days of PEAK_EMIT archive rows to load for close linkage")
     return p
 
 

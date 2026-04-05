@@ -28,6 +28,9 @@ def _minute(
     vol_1m: float | None = None,
     delta_1m: float | None = None,
     vwap: float | None = None,
+    open_interest: float | None = None,
+    liq_buy_qty: float | None = None,
+    liq_sell_qty: float | None = None,
 ) -> MinuteEventRow:
     return MinuteEventRow(
         ts=_dt(ts),
@@ -42,10 +45,10 @@ def _minute(
         delta_1m=delta_1m,
         imbalance_1m=None,
         vwap=vwap,
-        open_interest=None,
+        open_interest=open_interest,
         funding_rate=None,
-        liq_buy_qty=None,
-        liq_sell_qty=None,
+        liq_buy_qty=liq_buy_qty,
+        liq_sell_qty=liq_sell_qty,
         is_synthetic=None,
         source_file="synthetic.csv",
     )
@@ -204,3 +207,91 @@ def test_m2a_vwap_fields_handle_unknowns_and_below_side():
     assert rows[1].price_vs_vwap_side == "at_or_unknown"
     assert rows[1].high_above_vwap_flag is None
     assert rows[1].low_below_vwap_flag is None
+
+
+def test_m2b_oi_change_and_alignment_fields_compute_correctly():
+    rows = build_minute_events_mechanics_dataset(
+        [
+            _minute("2026-01-01T00:00:00", open=100.0, close=101.0, delta_1m=5.0, open_interest=100.0),
+            _minute("2026-01-01T00:01:00", open=101.0, close=102.0, delta_1m=4.0, open_interest=110.0),
+            _minute("2026-01-01T00:02:00", open=102.0, close=101.0, delta_1m=4.0, open_interest=105.0),
+            _minute("2026-01-01T00:03:00", open=101.0, close=101.0, delta_1m=0.0, open_interest=105.0),
+        ]
+    )
+
+    assert rows[0].oi_change_1m is None
+    assert rows[1].oi_change_1m == 10.0
+    assert rows[1].abs_oi_change_1m == 10.0
+    assert rows[1].delta_oi_alignment_flag == "aligned"
+    assert rows[1].price_oi_alignment_flag == "aligned"
+    assert rows[2].oi_change_1m == -5.0
+    assert rows[2].abs_oi_change_1m == 5.0
+    assert rows[2].delta_oi_alignment_flag == "opposed"
+    assert rows[2].price_oi_alignment_flag == "aligned"
+    assert rows[3].delta_oi_alignment_flag == "flat_or_unknown"
+    assert rows[3].price_oi_alignment_flag == "flat_or_unknown"
+
+
+def test_m2b_oi_percentile_fields_use_windows_and_min_history():
+    start = _dt("2026-01-01T00:00:00")
+    rows = [_minute(start.isoformat(), open_interest=100.0)]
+    for idx in range(1, 21):
+        ts = (start + timedelta(minutes=idx)).isoformat()
+        rows.append(_minute(ts, open_interest=100.0 + idx))
+
+    mechanics = build_minute_events_mechanics_dataset(rows)
+    assert mechanics[19].oi_change_pct_60m is None
+    assert mechanics[20].oi_change_pct_60m == 1.0
+    assert mechanics[20].oi_change_pct_180m == 1.0
+
+
+def test_m2b_oi_percentiles_respect_time_windows_and_nulls():
+    start = _dt("2026-01-01T00:00:00")
+    rows = [_minute(start.isoformat(), open_interest=100.0)]
+    for idx in range(1, 20):
+        ts = (start + timedelta(minutes=idx)).isoformat()
+        rows.append(_minute(ts, open_interest=100.0 + idx))
+    rows.append(_minute("2026-01-01T02:00:00", open_interest=130.0))
+
+    mechanics = build_minute_events_mechanics_dataset(rows)
+    last = mechanics[-1]
+    assert last.oi_change_pct_60m is None
+    assert last.oi_change_pct_180m == 1.0
+
+
+def test_m2b_liquidation_fields_compute_deterministically():
+    rows = build_minute_events_mechanics_dataset(
+        [
+            _minute("2026-01-01T00:00:00", delta_1m=5.0, liq_buy_qty=4.0, liq_sell_qty=1.0),
+            _minute("2026-01-01T00:01:00", delta_1m=-5.0, liq_buy_qty=1.0, liq_sell_qty=4.0),
+            _minute("2026-01-01T00:02:00", delta_1m=5.0, liq_buy_qty=3.0, liq_sell_qty=None),
+            _minute("2026-01-01T00:03:00", delta_1m=5.0, liq_buy_qty=None, liq_sell_qty=None),
+        ]
+    )
+
+    assert rows[0].liq_total_1m == 5.0
+    assert rows[0].liq_imbalance_1m == 3.0
+    assert rows[0].liq_dominant_side == "buy"
+    assert rows[0].delta_vs_liq_relation_flag == "aligned"
+    assert rows[1].liq_total_1m == 5.0
+    assert rows[1].liq_imbalance_1m == -3.0
+    assert rows[1].liq_dominant_side == "sell"
+    assert rows[1].delta_vs_liq_relation_flag == "aligned"
+    assert rows[2].liq_total_1m == 3.0
+    assert rows[2].liq_imbalance_1m is None
+    assert rows[2].liq_dominant_side == "balanced_or_unknown"
+    assert rows[2].delta_vs_liq_relation_flag == "flat_or_unknown"
+    assert rows[3].liq_total_1m is None
+    assert rows[3].liq_burst_flag is None
+
+
+def test_m2b_liq_burst_flag_uses_percentile_threshold():
+    start = _dt("2026-01-01T00:00:00")
+    rows = []
+    for idx in range(20):
+        ts = (start + timedelta(minutes=idx)).isoformat()
+        rows.append(_minute(ts, liq_buy_qty=float(idx + 1), liq_sell_qty=0.0))
+
+    mechanics = build_minute_events_mechanics_dataset(rows)
+    assert mechanics[18].liq_burst_flag is None
+    assert mechanics[19].liq_burst_flag is True

@@ -67,7 +67,14 @@ Phase M2a currently includes only:
 - price-response mechanics
 - VWAP / structure mechanics
 
-It does not include OI mechanics, liquidation mechanics, funding mechanics, taxonomy, or process-phase logic.
+## Phase M2b Scope
+
+Phase M2b extends `minute_events_mechanics` with:
+
+- OI mechanics
+- liquidation mechanics
+
+Funding mechanics, taxonomy, and process-phase logic are still not implemented.
 
 ## Phase M2.5 Scope
 

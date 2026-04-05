@@ -88,8 +88,14 @@ DeltaScout
 Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
 ```
 
-An external minute-feed archive (`/opt/aitrader/feed/YYYY-MM-DD.csv`) uses the same schema
-and can serve as a reference dataset for offline joins. It is **not** part of the
+An external minute-feed archive (`/opt/aitrader/feed/YYYY-MM-DD.csv`) is also referenced by current research/offline workflows, but it must be treated as a separate market-data contour from the local Aggregator archive at `/data/archive/feed/YYYY-MM-DD.csv`.
+
+Current code/docs split:
+- `aggregator/binance_run_aggregator.py` writes `/data/archive/feed/YYYY-MM-DD.csv` using the validated 10-column Aggregator schema
+- `scripts/offline/build_phase1_derived.py` can fall back to a self-contained local feed copy, but current server workflow typically passes `--feed-root /opt/aitrader/feed`
+- `deltascout.delta_analyzer.cli` defaults `--feed-glob` to `/opt/aitrader/feed/*.csv`
+
+This means offline market-state research may be performed against a different feed contour than the one written locally by the Aggregator. It is **not** part of the
 DeltaScout runtime root — see [Runtime Topology Note](#runtime-topology-note).
 
 ---
@@ -556,6 +562,8 @@ Market-feed archives under `/opt/aitrader/feed/YYYY-MM-DD.csv` belong to a
 separate project/container and are **not** part of the DeltaScout runtime root.
 They may be used for offline joins and backfill but must not be assumed
 writable or locally available at runtime.
+
+The local Aggregator archive contour `/data/archive/feed/YYYY-MM-DD.csv` is different: it is written by this repo's Aggregator and mirrors the live `aggregated.csv` rows minute by minute. Current research documentation therefore needs to preserve both facts at once: the project has a local runtime archive contour and a separate external research contour, and they can diverge.
 
 ---
 
