@@ -1,4 +1,4 @@
-﻿# DeltaScout Minute Event M0 Audit
+# DeltaScout Minute Event M0 Audit
 
 ## Purpose
 
@@ -311,7 +311,7 @@ Why this is the safest seam:
 - it is additive
 - it does not require changing archive ingestion
 - it does not require changing `events_base` / `events_context`
-- it reuses the already canonical event-source minute base ingestion path for DeltaScout-linked analysis
+- it reuses the already canonical feed ingestion path
 - it keeps minute-event foundation below the current event-centric layer instead of entangling them
 
 ### 7. Which current documents and code paths are inconsistent today?
@@ -459,5 +459,3 @@ The narrowest safe next step is therefore:
 - add `minute_events_base` as a feed-native analyzer dataset
 - keep it fully additive
 - defer all mechanics and taxonomy work until after M1 is stable
-
-

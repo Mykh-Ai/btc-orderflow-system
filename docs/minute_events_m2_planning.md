@@ -1,4 +1,4 @@
-﻿# DeltaScout Minute Events M2 Planning Memo
+# DeltaScout Minute Events M2 Planning Memo
 
 ## Purpose
 
@@ -11,11 +11,6 @@ This is a planning memo only.
 It does not implement M2.
 
 ## Current Starting Point
-
-Source-consistency note:
-- `data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base for DeltaScout event-linked research.
-- `/opt/aitrader/feed/YYYY-MM-DD.csv` is a secondary enrichment layer for additional minute context and must not replace the archive feed as the primary source-of-truth for `PEAK_EMIT`-linked analysis.
-- If both sources are used, event-source fields and enrichment-derived fields must remain explicitly separated.
 
 M1 now provides a canonical minute dataset with one row per normalized feed minute.
 
@@ -402,5 +397,3 @@ The recommended M2 implementation should:
 - materialize a separate `minute_events_mechanics` dataset
 - prefer explicit deterministic contracts over heuristic interpretation
 - keep taxonomy and phase logic strictly out of scope
-
-

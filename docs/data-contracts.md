@@ -1,10 +1,10 @@
-﻿# Data Contracts
+# Data Contracts
 
 This document describes the main data interfaces between modules.
 
 The system is built around two primary artifacts:
-- `aggregated.csv` вЂ” normalized market feed produced by **Aggregator**
-- `deltascout.log` (JSONL) вЂ” event stream produced by **DeltaScout** (PEAK events)
+- `aggregated.csv` — normalized market feed produced by **Aggregator**
+- `deltascout.log` (JSONL) — event stream produced by **DeltaScout** (PEAK events)
 
 These contracts allow Buyer and Executor to remain decoupled from the raw Binance API.
 
@@ -35,10 +35,6 @@ These contracts allow Buyer and Executor to remain decoupled from the raw Binanc
 - DeltaScout treats the feed as append-only time series.
 - If both `ClosePrice` and `AvgPrice` exist, `ClosePrice` is preferred.
 - Timestamps are expected to be minute-aligned (or will be floored to minute resolution).
-- For DeltaScout event-linked research, `data/archive/feed/YYYY-MM-DD.csv` is the canonical event-source minute base because it is produced by the same raw writer chain that feeds runtime `aggregated.csv`.
-- Any external enriched minute feed, including `/opt/aitrader/feed/YYYY-MM-DD.csv`, is a secondary enrichment layer and must not replace the archived event-source minute base as the primary source-of-truth for `PEAK_EMIT`-linked analysis.
-- If both sources are used in one workflow, event-source fields and enrichment-derived fields must remain explicitly separated.
-
 
 ---
 
@@ -104,5 +100,3 @@ Executor:
 runs paper execution in DRY mode
 
 live execution is planned (Binance integration)
-
-
