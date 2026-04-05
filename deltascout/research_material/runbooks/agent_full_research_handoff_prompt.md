@@ -4,14 +4,16 @@ Goal:
 Run the correct sequence of DeltaScout research steps so the local repo ends with:
 - rebuilt artifacts on the server when requested
 - synced research materials in `deltascout/research_material/`
+- local minute datasets in `deltascout/research_material/minute_datasets`
 - one analyst-facing final compact markdown summary for the same date range
 - one standard local research bundle ready for analyst or LLM handoff
 
 This runbook is the master workflow above:
 1. `agent_rebuild_date_range_prompt.md`
 2. `agent_analyze_materials_prompt.md`
-3. `agent_summary_promt.md`
-4. `agent_step4_hend.md`
+3. local minute-dataset materialization
+4. `agent_summary_promt.md`
+5. `agent_step4_hend.md`
 
 Use this runbook when the user wants an end-to-end research package ready for analyst review or handoff to a stronger LLM.
 
@@ -35,6 +37,7 @@ Mode semantics:
 1. `full_rebuild`
 - Rebuild the full date range on the server
 - Sync all resulting artifacts to the local repo
+- Build local minute datasets for the same date range
 - Produce the final compact summary markdown for the same date range
 - Build the standard research bundle from the currently available local review folders
 
@@ -42,6 +45,7 @@ Mode semantics:
 - Do not rebuild
 - Verify server artifacts already exist for the full date range
 - Sync all artifacts to the local repo
+- Build local minute datasets for the same date range
 - Produce a concise pre-summary
 - Do not produce the final compact summary unless the user explicitly asks for it
 - Do not run the standard bundle step
@@ -86,7 +90,7 @@ Requirements:
 If Stage 1 fails:
 - stop immediately
 - return the failure in the same structure as the rebuild runbook
-- do not continue to Stage 2, Stage 3, or Stage 4
+- do not continue to Stage 2, Stage 2.5, Stage 3, or Stage 4
 
 If Stage 1 succeeds:
 - continue automatically to Stage 2 using the same date range
@@ -116,14 +120,44 @@ Then prepare a concise range-level pre-summary:
 
 If Stage 2 fails:
 - stop immediately
+- do not continue to Stage 2.5, Stage 3, or Stage 4
+
+If Stage 2 succeeds:
+- continue automatically to Stage 2.5
+
+Stage 2.5. Build local minute-event datasets when mode is `full_rebuild` or `sync_only`
+
+After fresh raw archive/feed files are synced locally, build local minute-event datasets for every date from `DATE_FROM` through `DATE_TO`, inclusive.
+
+Local output root:
+- `D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets`
+
+For each date in the range, run locally:
+
+```bash
+python -m deltascout.delta_analyzer.cli --dataset minute_events_base --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+
+python -m deltascout.delta_analyzer.cli --dataset minute_events_mechanics --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+
+python -m deltascout.delta_analyzer.cli --dataset minute_events_outcomes --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+```
+
+Requirements:
+- stop on first failure
+- for each date, verify the 3 output files exist and are non-empty
+- report row counts for `minute_events_base`, `minute_events_mechanics`, and `minute_events_outcomes`
+- do not rebuild server artifacts again in this stage
+
+If Stage 2.5 fails:
+- stop immediately
 - do not continue to Stage 3 or Stage 4
 
 If mode is `sync_only`:
-- stop after Stage 2
+- stop after Stage 2.5
 - do not create the final compact summary markdown
 - do not run the standard bundle step
 
-If Stage 2 succeeds and mode is `full_rebuild`:
+If Stage 2.5 succeeds and mode is `full_rebuild`:
 - continue automatically to Stage 3
 
 Stage 3. Final compact summary when mode is `full_rebuild` or `summary_only`
@@ -149,7 +183,7 @@ Required contents:
 
 If Stage 3 fails:
 - report the failure clearly
-- preserve Stage 1 and Stage 2 outputs
+- preserve Stage 1, Stage 2, and Stage 2.5 outputs
 - do not continue to Stage 4
 
 If Stage 3 succeeds:
@@ -173,7 +207,7 @@ Expected outputs from Stage 4:
 
 If Stage 4 fails:
 - report the failure clearly
-- preserve Stage 1, Stage 2, and Stage 3 outputs
+- preserve Stage 1, Stage 2, Stage 2.5, and Stage 3 outputs
 
 ---
 
@@ -194,23 +228,30 @@ Return structure
 - per-date sync status if executed
 - package readiness assessment
 
-4. Stage 3 final summary
+4. Stage 2.5 local minute datasets
+- skipped or executed
+- per-date local build status if executed
+- exact output root used
+- whether `minute_events_base`, `minute_events_mechanics`, and `minute_events_outcomes` were materialized cleanly
+
+5. Stage 3 final summary
 - skipped or executed
 - exact output markdown path if created
 - whether final summary is ready for analyst/LLM handoff
 
-5. Stage 4 standard bundle
+6. Stage 4 standard bundle
 - skipped or executed
 - exact output paths if created
 - discovered local scope used by the bundle
 - whether the bundle is ready for analyst/LLM handoff
 
-6. Blockers or anomalies
+7. Blockers or anomalies
 - missing inputs
 - pipeline failure
 - missing synced files
 - empty files
 - low coverage warnings
+- minute-dataset build failure
 - bundle-generation failure
 - anything that weakens confidence in the final package
 

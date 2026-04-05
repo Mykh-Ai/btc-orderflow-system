@@ -1,14 +1,14 @@
-Task: synchronize the latest post-close research artifacts from the server into the local repo and prepare a concise pre-summary for the project lead.
+Task: synchronize the latest post-close research artifacts from the server into the local repo, build local minute datasets, and prepare a concise pre-summary for the project lead.
 
 Goal:
-After the daily post-close watcher has already run on the server, copy the latest generated research artifacts for the most recently processed close date into the local repo under `deltascout/research_material/`, then produce a short pre-summary of what is available for deeper analysis.
+After the daily post-close watcher has already run on the server, copy the latest generated research artifacts for the most recently processed close date into the local repo under `deltascout/research_material/`, build local minute-event datasets for that same date, then produce a short pre-summary of what is available for deeper analysis.
 
 Important:
-- Do NOT rebuild anything
+- Do NOT rebuild anything on the server
 - Do NOT rerun the watcher
 - Do NOT modify code, tests, docs, or pipeline files
-- Do NOT modify local research files except by copying the synced artifacts into the correct local folders
-- This is a sync + pre-summary task only
+- Do NOT modify local research files except by copying the synced artifacts into the correct local folders and materializing local minute datasets under the documented output root
+- This is a sync + local minute-dataset build + pre-summary task only
 
 Server access:
 - `ssh -F NUL root@95.216.139.172`
@@ -22,8 +22,9 @@ Local repo root:
 Required workflow:
 1. Read watcher state on the server to discover the latest processed close date
 2. Verify the expected review artifacts exist for that date
-3. Copy those artifacts into the correct local research_material folders
-4. Return a concise pre-summary for the project lead
+3. Copy those artifacts into the correct local `research_material` folders
+4. Build local minute datasets for the same date from synced raw feed
+5. Return a concise pre-summary for the project lead
 
 A. Determine the latest processed date from watcher state
 On the server, inspect:
@@ -112,8 +113,29 @@ Use local path syntax consistently for the shell you are running in.
 
 After copy, verify the local files exist and are non-empty.
 
-D. Inspect the synced artifacts briefly
-After sync, do a brief inspection only:
+D. Build local minute datasets for the synced date
+After sync, materialize local minute datasets for the same `YYYY-MM-DD`.
+
+Local output root:
+- `D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets`
+
+Run locally:
+
+```bash
+python -m deltascout.delta_analyzer.cli --dataset minute_events_base --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+
+python -m deltascout.delta_analyzer.cli --dataset minute_events_mechanics --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+
+python -m deltascout.delta_analyzer.cli --dataset minute_events_outcomes --feed-glob "deltascout/research_material/raw_feed/*.csv" --date YYYY-MM-DD --output-root "D:\Project_V\btc-orderflow-system\deltascout\research_material\minute_datasets"
+```
+
+Requirements:
+- stop on first failure
+- verify the 3 output files exist and are non-empty
+- report row counts for `minute_events_base`, `minute_events_mechanics`, and `minute_events_outcomes`
+
+E. Inspect the synced artifacts briefly
+After sync and local minute-dataset build, do a brief inspection only:
 
 1. `daily_review_summary_YYYY-MM-DD.md`
 - read it fully
@@ -143,7 +165,7 @@ After sync, do a brief inspection only:
 Do not perform deep analysis yet.
 This is only to prepare a pre-summary.
 
-E. Return this exact output structure
+F. Return this exact output structure
 
 A. Watcher state
 - latest processed date
@@ -160,20 +182,28 @@ C. Local sync result
 - whether each file was copied successfully
 - whether each copied file is non-empty
 
-D. Pre-summary for project lead
-In 5â€“10 bullets maximum, summarize only:
+D. Local minute dataset result
+- exact local output root
+- whether each of the 3 files was materialized successfully
+- whether each file is non-empty
+- row counts for `minute_events_base`, `minute_events_mechanics`, and `minute_events_outcomes`
+
+E. Pre-summary for project lead
+In 5–10 bullets maximum, summarize only:
 - accepted row count
 - reject row count
 - interesting reject row count and dominant buckets/rule_ids
 - whether accepted-to-close join appears present
 - dominant reject reasons if visible from summary
 - whether raw archive/feed for the same date are now synced locally
+- whether local minute datasets for the same date are now materialized
 - whether the local package now looks ready for deeper analysis
 
-E. Any blockers or anomalies
+F. Any blockers or anomalies
 - missing file
 - empty file
 - format mismatch
+- minute-dataset build failure
 - anything that may affect later analysis
 
 Rules:
@@ -181,4 +211,4 @@ Rules:
 - no watcher rerun
 - no code edits
 - no deep interpretation
-- just sync and prepare the local research package cleanly
+- just sync, build local minute datasets, and prepare the local research package cleanly
