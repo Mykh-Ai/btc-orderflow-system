@@ -151,6 +151,8 @@ def main() -> None:
     if args.build_m2_6:
         if args.date and (args.date_from or args.date_to):
             raise SystemExit("--date cannot be combined with --date-from/--date-to in --build-m2-6 mode")
+        if args.date_to and not args.date_from:
+            raise SystemExit("--date-to requires --date-from in --build-m2-6 mode")
         if args.date_from and not args.date_to:
             args.date_to = args.date_from
         try:
