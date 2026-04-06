@@ -178,7 +178,7 @@ This is the implementation consequence of the broader research shift already fix
 
 ## Implementation phases
 
-## Phase M0 — Code Audit
+## Phase M0 - Code Audit
 
 ### Goal
 
@@ -221,7 +221,7 @@ Phase M0 must **not**:
 
 ---
 
-## Phase M1 — `minute_events_base`
+## Phase M1 - `minute_events_base`
 
 ### Goal
 
@@ -305,7 +305,7 @@ Phase M1 must **not** yet include:
 
 ---
 
-## Phase M2 — `minute_events_mechanics`
+## Phase M2 - `minute_events_mechanics`
 
 ### Goal
 
@@ -459,7 +459,7 @@ Phase M2 must **not** yet include:
 
 ---
 
-## Phase M2.5 — `minute_events_outcomes`
+## Phase M2.5 - `minute_events_outcomes`
 
 ### Goal
 
@@ -539,7 +539,7 @@ What is valid here:
 
 ---
 
-## Phase M3 — `minute_events_typed` (later phase)
+## Phase M3 - `minute_events_typed` (later phase)
 
 ### Goal
 
@@ -579,7 +579,7 @@ These are future research classes, not current implementation requirements.
 
 ---
 
-## Phase M4 — Sequence / Process Extensions (later phase)
+## Phase M4 - Sequence / Process Extensions (later phase)
 
 ### Goal
 
@@ -590,6 +590,36 @@ Use minute-event classes and mechanics to build:
 - phase-marker vs entry-candidate distinctions
 
 This phase is explicitly out of current implementation scope.
+
+### Working process-chain hypothesis for later research
+
+Future minute-event discovery should not be constrained by the current `PEAK` gate logic.
+
+Minute rows remain first-class observation rows even when they do not map cleanly onto current `PEAK` / reject boundaries.
+
+In this later research frame, `PEAK` / reject remains a diagnostics layer, not the boundary of discovery.
+
+One working hypothesis to test is that strong minute-event families may appear as linked process stages rather than isolated standalone classes.
+
+That means future sequence / process extensions may need to model both:
+
+- family-level hints
+- chain-role hints
+
+Candidate chain-role hints for later-phase research:
+
+- `seed`
+- `release`
+- `continuation`
+- `late/exhaustion`
+
+This is a working research/process-chain hypothesis only.
+
+It is not validated truth, and it is not already-implemented runtime logic.
+
+Current family findings should therefore be treated as an initial discovery surface only: evidence-bearing early families, not the final boundary of future `AI_Emit` or minute-event discovery.
+
+Future research must remain open to additional families, subfamilies, and chain roles beyond the currently observed examples. The current process-chain lens is a working extension, not a closed taxonomy.
 
 It should only begin after:
 
@@ -728,6 +758,5 @@ but:
 - **a real minute-event foundation and evidence bridge**
 
 This is the required bridge between the current research blueprint and the next credible analyzer architecture.
-
 
 

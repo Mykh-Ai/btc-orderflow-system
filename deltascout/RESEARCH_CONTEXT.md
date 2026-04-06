@@ -81,6 +81,10 @@ Current research is explicitly shifting away from PEAK/reject-centered reading t
 
 Current PEAK remains a diagnostics/reference surface, not the dominant center of setup discovery.
 
+Operating rule: Track A should continue to focus on current `PEAK_EMIT` diagnostics, but Track B and future `AI_Emit` / minute-event discovery should be read minute-first rather than only through current `PEAK` gate outcomes. Later process reading may need a chain-style lens such as `seed`, `release`, `continuation`, and `late/exhaustion`, but only as a working hypothesis for future discovery rather than implemented logic or validated truth.
+
+Currently observed minute-event families should be treated only as the first visible `AI_Emit` discovery set. Research should not stop at these families: future analysis should remain open to additional families, subfamilies, and process-chain roles, while treating current findings as useful starting reference classes rather than the final map of future `AI_Emit` logic.
+
 Future analysis should explicitly separate:
 
 - phase marker
@@ -258,5 +262,4 @@ Not yet justified based on current data:
 - profitability conclusions from sparse accepted-flow samples
 - live logic changes
 - PEAK-centric research framing that treats accepted-event review as the sole or primary research objective
-
 
