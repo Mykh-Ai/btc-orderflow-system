@@ -90,6 +90,18 @@ Phase M2.5 currently includes:
 
 It remains feed-native and additive. It does not implement taxonomy, process-phase logic, setup validation, or trade-close logic.
 
+## Phase M2.6 Scope
+
+Phase M2.6 adds a research-only process-chain bridge above `minute_events_outcomes`.
+
+Phase M2.6 currently includes deterministic derived outputs:
+
+- `minute_event_chain_candidates`
+- `minute_event_chain_reference_cases`
+- `chain_cluster_summaries`
+
+This layer remains provisional and hypothesis-driven. It is not final taxonomy or full process-engine truth.
+
 ## Not Implemented
 
 `delta_analyzer` still does not implement:
@@ -124,6 +136,8 @@ python -m deltascout.delta_analyzer.cli --dataset minute_events_mechanics --date
 python -m deltascout.delta_analyzer.cli --dataset minute_events_outcomes
 python -m deltascout.delta_analyzer.cli --dataset minute_events_outcomes --date YYYY-MM-DD --output-root /data/archive/datasets
 python -m deltascout.delta_analyzer.cli --build-review --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
+python -m deltascout.delta_analyzer.cli --build-m2-6 --date YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
+python -m deltascout.delta_analyzer.cli --build-m2-6 --date-from YYYY-MM-DD --date-to YYYY-MM-DD --input-root /data/archive/datasets --output-root /data/archive/datasets
 ```
 
 The default archive glob still points to the local research-material archive sample. The default feed glob is now the canonical enriched archive path `/opt/aitrader/feed/*.csv`, and the analyzer fails loudly when that glob matches no files. Any explicit `--feed-glob` override still wins.

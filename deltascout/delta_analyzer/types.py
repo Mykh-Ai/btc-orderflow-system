@@ -239,6 +239,73 @@ class MinuteEventOutcomesRow:
 
 
 @dataclass(frozen=True)
+class MinuteEventChainCandidateRow:
+    ts: datetime
+    day: str
+    direction: str
+    family_hint: str
+    chain_role_hypothesis: str
+    reference_window_id: str
+    price_vs_vwap_side: str
+    cum_delta_24h: float | None
+    cum_delta_180m: float | None
+    cum_delta_60m: float | None
+    ret_15m: float | None
+    ret_60m: float | None
+    delta_1m: float | None
+    vol_1m: float | None
+    imbalance_1m: float | None
+    delta_price_alignment_1m: str
+    delta_price_efficiency_1m: float | None
+    dist_from_vwap: float | None
+    open_interest: float | None
+    funding_rate: float | None
+    liq_buy_qty: float | None
+    liq_sell_qty: float | None
+    ret_fwd_30m: float | None
+    ret_fwd_60m: float | None
+    favorable_max_30m: float | None
+    adverse_max_30m: float | None
+    notes: str
+    reference_case_flag: bool
+    minutes_from_prev_candidate_same_family: float | None
+    minutes_from_prev_candidate_any_family: float | None
+    candidate_rank_in_window: int
+
+
+@dataclass(frozen=True)
+class MinuteEventChainReferenceCaseRow:
+    ts: datetime
+    day: str
+    direction: str
+    family_hint: str
+    chain_role_label: str
+    role_confidence: str
+    phase_marker_vs_entry_candidate: str
+    reference_window_id: str
+    pre_window_summary: str
+    post_window_summary: str
+    move_followthrough_notes: str
+    invalidating_notes: str
+
+
+@dataclass(frozen=True)
+class ChainClusterSummaryRow:
+    reference_window_id: str
+    day: str
+    directional_bias: str
+    candidate_count: int
+    family_mix: str
+    earliest_ts: datetime
+    latest_ts: datetime
+    provisional_chain_pattern: str
+    contains_seed_flag: bool
+    contains_release_flag: bool
+    contains_continuation_flag: bool
+    contains_late_flag: bool
+
+
+@dataclass(frozen=True)
 class EventsBaseRow:
     ts: datetime
     event_type: str

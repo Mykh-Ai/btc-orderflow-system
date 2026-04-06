@@ -15,6 +15,7 @@ from .modules.build_events_context import build_events_context_dataset
 from .modules.build_minute_events_base import build_minute_events_base_dataset
 from .modules.build_minute_events_mechanics import build_minute_events_mechanics_dataset
 from .modules.build_minute_events_outcomes import build_minute_events_outcomes_dataset
+from .modules.build_minute_event_process_chain import build_m2_6_outputs_for_scope
 from .modules.build_review_tables import ReviewBuildError, build_daily_review_package
 from .modules.feed_reader import read_feed_rows
 from .modules.integrity_checks import run_integrity_checks
@@ -60,7 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Highest dataset layer to build. events_context also builds events_base.",
     )
     parser.add_argument("--build-review", action="store_true", help="Build Phase 2.5 daily review artifacts from dataset CSV inputs.")
+    parser.add_argument("--build-m2-6", action="store_true", help="Build M2.6 process-chain bridge outputs from minute datasets.")
     parser.add_argument("--date", help="UTC date for review build mode in YYYY-MM-DD format.")
+    parser.add_argument("--date-from", help="Start UTC date for range builds in YYYY-MM-DD format.")
+    parser.add_argument("--date-to", help="End UTC date for range builds in YYYY-MM-DD format.")
     parser.add_argument("--input-root", default=DEFAULT_DATASET_ROOT, help="Dataset root for review-builder inputs.")
     parser.add_argument("--output-root", default=DEFAULT_DATASET_ROOT, help="Dataset root for review-builder outputs.")
     return parser
@@ -143,6 +147,26 @@ def main() -> None:
         print(f"reject_rows={result.reject_count}")
         print(f"matched_accepted_close_rows={result.matched_close_count}")
         print(f"output_dir={result.output_dir}")
+        return
+    if args.build_m2_6:
+        if args.date and (args.date_from or args.date_to):
+            raise SystemExit("--date cannot be combined with --date-from/--date-to in --build-m2-6 mode")
+        if args.date_from and not args.date_to:
+            args.date_to = args.date_from
+        try:
+            result = build_m2_6_outputs_for_scope(
+                input_root=args.input_root,
+                output_root=args.output_root,
+                date=args.date,
+                date_from=args.date_from,
+                date_to=args.date_to,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print("Delta Analyzer M2.6 Build")
+        print(f"minute_event_chain_candidates_csv={result['candidates']}")
+        print(f"minute_event_chain_reference_cases_csv={result['reference_cases']}")
+        print(f"chain_cluster_summaries_csv={result['cluster_summaries']}")
         return
 
     feed_files = _resolve_feed_files(args.feed_glob)
@@ -254,4 +278,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
