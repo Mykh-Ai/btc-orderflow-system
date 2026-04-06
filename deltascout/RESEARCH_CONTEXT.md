@@ -13,6 +13,8 @@ This work is not about replacing the current strict `PEAK_EMIT` logic. The curre
 - where future expansion ideas should be tested
 - how to build an analysis layer around archived DeltaScout decisions
 
+Phase 2 (backward-looking event context) has been validated. Phase 2.5 review-package outputs now exist and are the primary daily analysis surface when present.
+
 ## What DeltaScout Already Produces
 
 Runtime research events are written by DeltaScout into a separate research archive.
@@ -33,9 +35,13 @@ Primary research archive path in the server project layout:
 
 - `/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl`
 
-Matching feed archive path:
+Runtime archive contour copied from the local Aggregator path:
 
 - `/root/volume-alert/data/archive/feed/YYYY-MM-DD.csv`
+
+Separate external research contour used by current offline workflows:
+
+- `/opt/aitrader/feed/YYYY-MM-DD.csv`
 
 Derived dataset output path:
 
@@ -49,32 +55,81 @@ The near-term focus is the reject funnel, especially:
 - very low gate-reject frequency
 - identifying metrics that may allow future PEAK expansion without obvious quality collapse
 
-At the moment, the early copied sample showed:
+The early copied sample showed meaningful `CANDIDATE_COMPARISON_REJECT` coverage and almost no `CANDIDATE_GATE_REJECT`. The sample now includes at least one `PEAK_EMIT`, so accepted-event review should no longer be ignored completely.
 
-- meaningful `CANDIDATE_COMPARISON_REJECT` coverage
-- almost no `CANDIDATE_GATE_REJECT`
-- no `PEAK_EMIT` in the sampled days
+This does not make current PEAK the center of the research program. Current PEAK remains a reference class, not the boundary of thinking.
 
-That means the first analysis modules should focus on:
+Primary research framing should remain:
+
+- market state
+- transition
+- setup-class discovery
+- entry-timing implications
+
+Accepted-event review should be treated as one input into broader market-behavior research, not as the sole priority. It does not replace reject-funnel analysis, and it does not justify collapsing the research program into PEAK-only thinking.
+
+## Current operating research blueprint
+
+The canonical operating blueprint now lives in `deltascout/research_material/research_blueprint_v2.md`.
+
+Current research is explicitly shifting away from PEAK/reject-centered reading toward:
+
+- market state
+- transition
+- process phase
+- entry timing
+
+Current PEAK remains a diagnostics/reference surface, not the dominant center of setup discovery.
+
+Operating rule: Track A should continue to focus on current `PEAK_EMIT` diagnostics, but Track B and future `AI_Emit` / minute-event discovery should be read minute-first rather than only through current `PEAK` gate outcomes. Later process reading may need a chain-style lens such as `seed`, `release`, `continuation`, and `late/exhaustion`, but only as a working hypothesis for future discovery rather than implemented logic or validated truth.
+
+Currently observed minute-event families should be treated only as the first visible `AI_Emit` discovery set. Research should not stop at these families: future analysis should remain open to additional families, subfamilies, and process-chain roles, while treating current findings as useful starting reference classes rather than the final map of future `AI_Emit` logic.
+
+Future analysis should explicitly separate:
+
+- phase marker
+- entry candidate
+- late-risk / no-edge state
+
+Process-phase hypotheses must remain invalidatable, and move-potential testing remains mandatory.
+
+When Phase 2.5 review-package outputs are available, the recommended working order is:
+
+1. `daily_review_summary_YYYY-MM-DD.md` — start here for the day's picture
+2. `accepted_event_context_YYYY-MM-DD.csv` — accepted-event rows with Phase 2 context attached
+3. `reject_event_context_YYYY-MM-DD.csv` — reject rows with context for funnel analysis
+4. `raw_archive/` and `raw_feed/` — secondary sources for drill-down, anomaly checks, or deeper sequence/transition analysis
+
+Raw archive and feed files are not obsolete. They remain the direct sources for any interpretation that requires full event sequences or transition-level context that derived outputs do not expose. For feed analysis, `/data/archive/feed` and `/opt/aitrader/feed` are separate evidence sources, not one implied market-data history.
+
+The first analysis modules should focus on:
 
 - archive coverage and archive health
 - reject-reason distribution
 - comparison-stage bottlenecks
 - joins between decision timestamps and same-day feed context
-
-Do not assume accepted-signal analytics is the first priority unless new archive coverage shows otherwise.
+- accepted-event to close-outcome review where accepted rows exist
+- comparing accepted context versus same-day reject context
 
 ## Local Research Material
 
 The first copied working material is stored here:
 
-- `deltascout/дослідницький матеріал/`
+- `deltascout/research_material/`
 
 Current contents:
 
-- `raw_archive/` copied DeltaScout archive JSONL files
-- `raw_feed/` copied feed CSV files for the same dates
-- `2026-03-16_to_2026-03-19_initial_findings.md`
+- `raw_archive/` — copied DeltaScout archive JSONL files
+- `raw_feed/` — copied feed CSV files for the same dates
+- `2026-03-16_to_2026-03-20_initial_findings.md`
+
+Phase 2.5 review-package outputs (derived analyzer artifacts, present when Phase 2.5 has been run for a date):
+
+- `accepted_event_context_YYYY-MM-DD.csv` — accepted events with backward-looking Phase 2 context attached
+- `reject_event_context_YYYY-MM-DD.csv` — reject events with backward-looking Phase 2 context attached
+- `daily_review_summary_YYYY-MM-DD.md` — human-readable daily review summary
+
+When Phase 2.5 outputs exist for a date, treat them as the primary daily research artifacts. Use raw archive and raw feed for drill-down, anomaly checks, or deeper sequence/transition analysis that derived outputs do not expose.
 
 When future agents inspect early research state, this folder should be treated as the starting material set.
 
@@ -82,9 +137,17 @@ When future agents inspect early research state, this folder should be treated a
 
 Read these documents before proposing analyzer design, research priorities, or PEAK-family expansion:
 
-- `deltascout/дослідницький матеріал/research_manifesto.md`
-- `deltascout/дослідницький матеріал/delta_analyzer_implementation_plan_v1_1.md`
-- `deltascout/дослідницький матеріал/2026-03-16_to_2026-03-19_initial_findings.md`
+- `deltascout/research_material/research_manifesto.md`
+- `deltascout/research_material/delta_analyzer_implementation_plan_v1_1.md`
+- `deltascout/research_material/2026-03-16_to_2026-03-20_initial_findings.md`
+
+## Operational Runbooks
+
+Agent-executable prompts for routine server operations:
+
+- `deltascout/research_material/runbooks/agent_analyze_materials_prompt.md` — sync latest post-close artifacts from server to local and produce a pre-summary
+- `deltascout/research_material/runbooks/agent_rebuild_date_range_prompt.md` — rebuild the full 4-step pipeline for a specified date range and sync results to local
+- `deltascout/research_material/runbooks/post_close_watcher.md` — operational reference for the automatic post-close watcher cron
 
 ## Server Workflow
 
@@ -92,13 +155,19 @@ Server:
 
 - `root@95.216.139.172`
 
-Project root on server:
+Research code and data root on server:
 
 - `/root/volume-alert`
 
-Virtual environment:
+Known working Python environment on server:
 
-- `source .venv/bin/activate`
+- `/opt/aitrader/.venv/bin/python`
+
+Important deployment note:
+
+- offline DeltaScout builders and research data currently live under `/root/volume-alert`
+- the currently working Python environment with `pandas` may live outside that tree
+- if `/root/volume-alert/.venv` is missing, run builders from `/root/volume-alert` with `PYTHONPATH=/root/volume-alert` and `/opt/aitrader/.venv/bin/python`
 
 If local Windows SSH config causes permission issues, use:
 
@@ -111,14 +180,14 @@ Connect:
 ```bash
 ssh -F NUL root@95.216.139.172
 cd /root/volume-alert
-source .venv/bin/activate
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python --version
 ```
 
 Quick environment check:
 
 ```bash
-python --version
-python -c "import pandas; print(pandas.__version__)"
+/opt/aitrader/.venv/bin/python --version
+/opt/aitrader/.venv/bin/python -c "import pandas; print(pandas.__version__)"
 ```
 
 List DeltaScout archive files:
@@ -127,10 +196,16 @@ List DeltaScout archive files:
 ls -1 /root/volume-alert/data/archive/deltascout
 ```
 
-List feed archive files:
+List local Aggregator archive files:
 
 ```bash
 ls -1 /root/volume-alert/data/archive/feed
+```
+
+List external research-feed files:
+
+```bash
+ls -1 /opt/aitrader/feed
 ```
 
 Inspect one research archive file:
@@ -143,14 +218,14 @@ tail -n 20 /root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl
 Rebuild offline datasets after a close date:
 
 ```bash
-python scripts/offline/build_phase1_derived.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-python scripts/offline/build_close_outcomes.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date YYYY-MM-DD --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets --feed-root /opt/aitrader/feed
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_close_outcomes --date YYYY-MM-DD --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets
 ```
 
 Check produced datasets:
 
 ```bash
-ls -lh /data/archive/datasets | tail -n 20
+ls -lh /root/volume-alert/data/archive/datasets | tail -n 20
 ```
 
 ## Deployment and Git Rules
@@ -166,19 +241,25 @@ ls -lh /data/archive/datasets | tail -n 20
 - Prefer additive instrumentation and analysis over broad refactors
 - When making research claims, anchor them to copied archive material or server inspection
 - If the next step is analytics, start from the reject funnel and event coverage before inventing strategy changes
-- When useful, copy raw server material into `deltascout/дослідницький матеріал/` before designing analysis code
+- When useful, copy raw server material into `deltascout/research_material/` before designing analysis code
+- When Phase 2.5 review-package outputs exist, start daily analysis from `daily_review_summary` before opening raw archive files
+- Accepted-event review is a legitimate input when accepted rows exist; it is not the primary directive and does not override reject-funnel analysis or the core market-state → transition → setup-class framing
 
 ## Recommended Next Work
 
 Good next tasks for future agents:
 
-- build a small archive-health and reject-analysis module
-- summarize reject reasons by day and by event kind
-- join reject timestamps with feed context from `raw_feed/`
+- use Phase 2.5 review-package outputs as the primary daily analysis surface when present
+- continue reject-funnel analysis: summarize reject reasons by day and by event kind
+- review accepted-event rows and compare their context against same-day reject context where accepted rows exist
+- join reject timestamps with feed context from `raw_feed/` for transition-level interpretation
 - identify which pre-gate constraints are most likely suppressing future PEAK growth
+- use repeated review-package outputs across multiple days to decide what later layers are justified before building them
 
-Less urgent until more data appears:
+Not yet justified based on current data:
 
-- accepted-signal performance analytics
-- outcome analytics tied to `PEAK_EMIT`
-- pass-vs-reject comparative modeling
+- broad market-state engine or full setup taxonomy
+- profitability conclusions from sparse accepted-flow samples
+- live logic changes
+- PEAK-centric research framing that treats accepted-event review as the sole or primary research objective
+

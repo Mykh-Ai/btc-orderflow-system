@@ -67,6 +67,8 @@ Archive ingestion:
 
 Feed ingestion:
 
+- use `/opt/aitrader/feed/*.csv` as the canonical default feed source unless `--feed-glob` is provided explicitly
+- fail loudly when the selected feed glob matches no files
 - read CSV files with `Timestamp`
 - sort rows by timestamp
 - use `ClosePrice` as preferred price, fallback to `AvgPrice`

@@ -1,0 +1,2 @@
+source_date,event_ts,kind,seq,move_start_ts,latency_min,move_size,peak_price,reference_price,lookback_rows
+2026-03-20,2026-03-20 00:40:00+00:00,short,74,2026-03-20 00:40:00+00:00,0.0,383.3647690000071,69822.435231,70205.8,30

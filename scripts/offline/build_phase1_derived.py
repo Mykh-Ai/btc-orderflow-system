@@ -10,6 +10,9 @@ import pandas as pd
 from scripts.offline.common import OfflineBuildError, load_feed, read_jsonl, sort_and_order, write_dataframe
 
 
+DEFAULT_RELATIVE_FEED_DIR = Path("feed")
+
+
 def _read_archive(archive_file: Path) -> pd.DataFrame:
     events = read_jsonl(archive_file)
     if not events:
@@ -176,10 +179,17 @@ def derive_late_peak(df_feed: pd.DataFrame, df_evt: pd.DataFrame, source_date: s
     return sort_and_order(pd.DataFrame(out_rows), ["event_ts", "seq"], ["source_date", "event_ts", "kind", "seq", "move_start_ts", "latency_min", "move_size", "peak_price", "reference_price", "lookback_rows"])
 
 
+def resolve_feed_file(*, date: str, input_root: Path, feed_root: str | None, feed_file: str | None) -> Path:
+    if feed_file:
+        return Path(feed_file)
+    base_root = Path(feed_root) if feed_root else input_root / DEFAULT_RELATIVE_FEED_DIR
+    return base_root / f"{date}.csv"
+
+
 def run(args: argparse.Namespace) -> None:
     input_root = Path(args.input_root)
     archive_file = input_root / "archive" / "deltascout" / f"{args.date}.jsonl"
-    feed_file = Path(args.feed_file) if args.feed_file else input_root / "feed" / "aggregated.csv"
+    feed_file = resolve_feed_file(date=args.date, input_root=input_root, feed_root=args.feed_root, feed_file=args.feed_file)
 
     df_evt = _read_archive(archive_file)
     df_feed = load_feed(feed_file)
@@ -211,9 +221,10 @@ def run(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Build DeltaScout Phase 1 derived datasets (offline only)")
     p.add_argument("--date", required=True, help="Date in YYYY-MM-DD")
-    p.add_argument("--input-root", default="/data", help="Root with archive/ and feed/")
+    p.add_argument("--input-root", default="/data", help="Root with archive/ and self-contained feed/ by default")
     p.add_argument("--output-root", default="/data/archive/datasets", help="Output dataset root")
-    p.add_argument("--feed-file", default=None, help="Optional explicit feed CSV path")
+    p.add_argument("--feed-root", default=None, help="Optional external feed root containing YYYY-MM-DD.csv files")
+    p.add_argument("--feed-file", default=None, help="Optional explicit feed CSV path; highest-priority source override")
     p.add_argument("--roll-window", type=int, default=180, help="Rolling ownership window")
     p.add_argument("--owner-quantile", type=float, default=0.75, help="Quantile for meaningful abs(delta) threshold")
     p.add_argument("--late-lookback-rows", type=int, default=30, help="Lookback rows for move-start proxy")

@@ -25,12 +25,24 @@ CSV row -> Delta Detection -> Comparison (3/3 rule) -> Gate Logic -> PEAK Emit
 | What | Path | Description |
 |------|------|-------------|
 | Live feed | `/data/feed/aggregated.csv` | Rolling feed used by DeltaScout during runtime |
-| Feed archive | `/data/archive/feed/YYYY-MM-DD.csv` | Append-only historical minute archive used for research |
+| External research feed contour | `/opt/aitrader/feed/YYYY-MM-DD.csv` | Separate external research contour used by current offline/analyzer workflows |
+| Local Aggregator archive contour | `/data/archive/feed/YYYY-MM-DD.csv` | Local Aggregator archive contour written by this repository |
 
-CSV schema:
+The two daily archive paths above are not one feed with two aliases. They are two different market-data contours used by different parts of the current system documentation and workflow.
+
+Observed current-state split:
+
+- `/data/archive/feed/YYYY-MM-DD.csv` is written by this repository's Aggregator and follows the 10-column Aggregator contract.
+- `/opt/aitrader/feed/YYYY-MM-DD.csv` is not written by code in this repository, but current offline research flows explicitly read it.
+- `DeltaScout` runtime itself reads the live rolling file `FILE_PATH` (default `/data/feed/aggregated.csv`), not either daily archive path directly.
+- `Buyer` and `Executor` also stay on the live path (`AGG_CSV` default under `/data/feed`) and on the PEAK bus; they do not consume either daily archive contour directly.
+
+The research workflow therefore has a real path/source split. This documentation keeps that split explicit for market-state research.
+
+Enriched CSV schema documented for the external `/opt/aitrader/feed` contour:
 
 ```text
-Timestamp, Trades, TotalQty, AvgSize, BuyQty, SellQty, AvgPrice, ClosePrice, HiPrice, LowPrice
+Timestamp,Open,High,Low,Close,Volume,AggTrades,BuyQty,SellQty,VWAP,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty,IsSynthetic
 ```
 
 ### Live signal output
@@ -130,13 +142,20 @@ Typical outputs:
 - `baseline_init_YYYY-MM-DD.parquet|csv`
 - `window_owner_miss_YYYY-MM-DD.parquet|csv`
 - `late_peak_YYYY-MM-DD.parquet|csv`
+- `events_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_reason_summary_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
 
 Builders:
 
-| Dataset area | Source | Script |
-|--------------|--------|--------|
-| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + feed archive | `scripts/offline/build_phase1_derived.py` |
+| Dataset area | Source | Builder |
+|--------------|--------|---------|
+| Rejects, baseline init, ownership misses, late peaks | DeltaScout archive + enriched feed | `scripts/offline/build_phase1_derived.py` |
 | Close outcomes | Primary: `trade_outcomes.jsonl`; fallback: executor artifacts | `scripts/offline/build_close_outcomes.py` |
+| Events context CSV | DeltaScout archive + enriched feed | `deltascout.delta_analyzer.cli` (main mode with `--date`) |
+| Daily review package | Prebuilt `events_context`, `close_outcomes`, Phase 1 CSVs | `deltascout.delta_analyzer.cli --build-review` |
 
 ---
 
@@ -144,19 +163,22 @@ Builders:
 
 ### Feed archive contract
 
-Path:
+Default self-contained path:
 
 ```text
-/data/archive/feed/YYYY-MM-DD.csv
+INPUT_ROOT/feed/YYYY-MM-DD.csv
 ```
 
-Properties:
+Properties of the self-contained/default offline feed contract (`INPUT_ROOT/feed/YYYY-MM-DD.csv` or `/data/archive/feed/YYYY-MM-DD.csv` when copied there):
 
 - append-only
 - one file per UTC day
 - deduplicated by `Timestamp`
-- same schema as `aggregated.csv`
+- same 10-column schema as `aggregated.csv` when sourced from the local Aggregator archive contour
 - chronologically ordered
+- builder normalization uses `Timestamp -> ts` (UTC), `BuyQty - SellQty -> delta`, and `ClosePrice` with row-level `AvgPrice` fallback -> `price`
+
+Current research workflow also uses a separate external contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`. In current docs and commands this contour may include columns that do not exist in the local 10-column archive.
 
 Rules:
 
@@ -222,21 +244,58 @@ Gate parameters include `CHOP30_MAX`, `COH10_MIN`, `IMB_MIN`, `IMB_MAX`, and `VW
 The system automatically accumulates:
 
 ```text
-/data/archive/feed/YYYY-MM-DD.csv
-/data/archive/deltascout/YYYY-MM-DD.jsonl
-/data/state/trade_outcomes.jsonl
+/opt/aitrader/feed/YYYY-MM-DD.csv        # enriched feed (canonical)
+/data/archive/deltascout/YYYY-MM-DD.jsonl # DeltaScout decision archive
+/data/state/trade_outcomes.jsonl          # closed trade outcomes
 ```
 
 No manual action is required during collection.
 
 ### 2. Rebuild datasets after a trade close
 
-Run the offline builders for the UTC close date:
+In routine operation this is handled by the post-close watcher / cron flow. For a manual rebuild of the UTC close date, run the four steps in order:
 
 ```bash
-python scripts/offline/build_phase1_derived.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
-python scripts/offline/build_close_outcomes.py --date YYYY-MM-DD --input-root /data --output-root /data/archive/datasets
+# Step 1 — Phase 1 derived datasets (rejects, baseline, ownership misses, late peaks)
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  scripts/offline/build_phase1_derived.py \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data \
+  --output-root /root/volume-alert/data/archive/datasets \
+  --feed-root /opt/aitrader/feed
+
+# Step 2 — Close outcomes join
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  scripts/offline/build_close_outcomes.py \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data \
+  --output-root /root/volume-alert/data/archive/datasets \
+  --trade-outcomes-file /root/volume-alert/data/state/trade_outcomes.jsonl
+
+# Step 3 — Build events_context CSV from archive + enriched feed
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  -m deltascout.delta_analyzer.cli \
+  --archive-glob "/root/volume-alert/data/archive/deltascout/YYYY-MM-DD.jsonl" \
+  --feed-glob "/opt/aitrader/feed/YYYY-MM-DD.csv" \
+  --date YYYY-MM-DD \
+  --output-root /root/volume-alert/data/archive/datasets
+
+# Step 4 — Daily review package from prebuilt datasets
+PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python \
+  -m deltascout.delta_analyzer.cli \
+  --build-review \
+  --date YYYY-MM-DD \
+  --input-root /root/volume-alert/data/archive/datasets \
+  --output-root /root/volume-alert/data/archive/datasets
 ```
+
+**Feed resolution.** `build_phase1_derived` resolves feed input in this order:
+
+1. `--feed-file` explicit file override (highest priority)
+2. `--feed-root/YYYY-MM-DD.csv` — external research feed root, often `/opt/aitrader/feed/` in current server workflow
+3. self-contained `--input-root/feed/YYYY-MM-DD.csv` (fallback)
+
+In current server research workflow, `--feed-root /opt/aitrader/feed` is used intentionally as a different market-data contour from `/data/archive/feed`. Current docs assume it may expose enriched columns such as `OpenInterest`, `FundingRate`, `LiqBuyQty`, and `LiqSellQty`. Step 3 reads that same external contour via `--feed-glob`. This is a real current-state divergence, not just an alternate spelling for the local Aggregator archive.
 
 Expected outputs:
 
@@ -245,6 +304,11 @@ Expected outputs:
 - `window_owner_miss_YYYY-MM-DD.*`
 - `late_peak_YYYY-MM-DD.*`
 - `close_outcomes_YYYY-MM-DD.*`
+- `events_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/accepted_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_event_context_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/reject_reason_summary_YYYY-MM-DD.csv`
+- `reviews/YYYY-MM-DD/daily_review_summary_YYYY-MM-DD.md`
 
 ### 3. Validate outputs
 
@@ -261,43 +325,28 @@ If `join_status = missing`, it means the corresponding `PEAK_EMIT` was not found
 
 ## Research Roadmap
 
-### Phase 1: Data accumulation
+### Phase 1: Foundation / base derived layer
 
 Goal:
 
 - accumulate feed archive
 - accumulate DeltaScout decision archive
-- build baseline derived datasets
+- build the base derived datasets used for reject and close-outcome research
 
-### Phase 2: Signal research
+### Phase 2: Backward-looking event context ✓ Complete
 
-Typical directions:
+- `events_context` per-event context layer
+- cumulative delta and return context around archive events
+- deterministic research surface for later review and outcome joins
 
-- signal density maps
-- profitability by delta bucket
-- profitability by regime
-- reject signal analysis
-- threshold sensitivity
+### Phase 2.5: Daily review package ✓ Complete, in production
 
-Future dataset registry:
+- accepted and reject review tables built from `events_context`
+- reject reason summary for the day
+- deterministic daily review summary for repeated research use
+- automated daily via post-close watcher cron at 06:10 server time
 
-```text
-/data/archive/datasets/manifest.json
-```
-
-This should track dataset metadata such as name, file, build time, source date range, row count, and builder script.
-
-### Phase 3: Strategy modeling
-
-Potential directions:
-
-- adaptive thresholds
-- regime-specific signals
-- multi-factor signal scoring
-
-### Phase 4: Production strategy
-
-After statistical validation, new signal logic may be promoted into the live trading system.
+Later phases remain research-facing and should be defined from accumulated evidence rather than assumed in advance.
 
 ---
 
@@ -305,11 +354,11 @@ After statistical validation, new signal logic may be promoted into the live tra
 
 ```bash
 pip install pandas numpy
-python -u delta_scout.py
+python -u deltascout/delta_scout.py
 ```
 
 ## Tests
 
 ```bash
-pytest deltascout/test/ -v
+pytest tests/ deltascout/test/ -v
 ```

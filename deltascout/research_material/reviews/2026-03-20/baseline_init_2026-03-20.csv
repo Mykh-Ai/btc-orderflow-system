@@ -1,0 +1,2 @@
+source_date,event_ts,kind,seq,reject_reason,event,ts,schema,delta,vol,imb,price,vwap,poc,price_now,ema50_now,chop30,coh10,imb_min,imb_max,chop30_max,coh10_min,prev_price,prev_vol,prev_vwap,vwap_now
+2026-03-20,2026-03-20 22:19:00+00:00,long,2,no_prev_peak,CANDIDATE_COMPARISON_REJECT,2026-03-20 22:19:00,1,66.07,112.12,0.589,70413.368162,70264.0,,,,,,,,,,,,,

@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -F NUL root@95.216.139.172 \"grep -r ''events_context'' /root/volume-alert/ --include=''*.py'' -l 2>/dev/null\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cat /root/volume-alert/deltascout/delta_analyzer/__init__.py\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"grep -r ''events_context'' /root/volume-alert/ --include=''*.sh'' -l 2>/dev/null; grep -r ''events_context'' /root/volume-alert/ --include=''*.json'' -l 2>/dev/null; crontab -l 2>/dev/null | grep -i analyzer\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"grep -r ''events_context'' /root/volume-alert/ --include=''*.py'' --include=''*.sh'' -l 2>/dev/null; ls /root/volume-alert/data/archive/datasets/events_context_2026-03-20.csv 2>/dev/null && wc -l /root/volume-alert/data/archive/datasets/events_context_2026-03-20.csv\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"head -2 /root/volume-alert/data/archive/datasets/events_context_2026-03-20.csv\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"ls -la /root/volume-alert/data/archive/datasets/events_context_*.csv\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cat ~/.bash_history | grep -i ''events_context\\\\|delta_analyzer\\\\|analyzer'' | tail -30\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cat ~/.bash_history | grep -i ''build_events\\\\|delta_analyzer.cli\\\\|events_context'' | tail -20\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cat /root/volume-alert/data/logs/post_close_watcher.log 2>/dev/null | tail -50\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"ls /root/volume-alert/data/archive/datasets/reviews/\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"head -1 /root/volume-alert/data/archive/datasets/reviews/2026-03-21/accepted_event_context_2026-03-21.csv 2>/dev/null && head -1 /root/volume-alert/data/archive/datasets/reviews/2026-03-23/accepted_event_context_2026-03-23.csv 2>/dev/null\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cd /root/volume-alert && for DATE in 2026-03-17 2026-03-18 2026-03-19 2026-03-20 2026-03-21 2026-03-22; do echo \"\"=== build_phase1_derived $DATE ===\"\"; PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date $DATE --input-root /data --output-root /data/archive/datasets && echo OK || echo FAILED; done\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"ls -la /data 2>/dev/null || echo ''no /data symlink''\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"cd /root/volume-alert && for DATE in 2026-03-17 2026-03-18 2026-03-19 2026-03-20 2026-03-21 2026-03-22; do echo \"\"=== build_phase1_derived $DATE ===\"\"; PYTHONPATH=/root/volume-alert /opt/aitrader/.venv/bin/python -m scripts.offline.build_phase1_derived --date $DATE --input-root /root/volume-alert/data --output-root /root/volume-alert/data/archive/datasets && echo OK || echo FAILED; done\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"head -2 /opt/aitrader/feed/aggregated.csv 2>/dev/null | head -c 300\")",
+      "Bash(python -m pytest tests/ deltascout/test/ -v --tb=short)",
+      "Bash(ssh -F NUL root@95.216.139.172 \"ls -la /root/volume-alert/data/archive/deltascout/2026-03-1[7-9].jsonl /root/volume-alert/data/archive/deltascout/2026-03-2[0-2].jsonl 2>&1\")",
+      "Bash(ssh -F NUL root@95.216.139.172 \"head -1 /opt/aitrader/feed/2026-03-17.csv\")",
+      "Bash(DS=/root/volume-alert/data/archive/datasets)",
+      "Bash(LOCAL=\"d:/Project_V/btc-orderflow-system/deltascout/research_material\")",
+      "Bash(for DATE in 2026-03-17 2026-03-18 2026-03-19 2026-03-20 2026-03-21 2026-03-22)",
+      "Bash(scp -F NUL \"root@95.216.139.172:$DS/reviews/$DATE/*\" \"$LOCAL/reviews/$DATE/\")",
+      "Bash(scp -F NUL \"root@95.216.139.172:$DS/events_context_$DATE.csv\" \"$LOCAL/reviews/$DATE/\")",
+      "Bash(scp -F NUL \"d:/Project_V/btc-orderflow-system/deltascout/delta_analyzer/modules/feed_reader.py\" root@95.216.139.172:/root/volume-alert/deltascout/delta_analyzer/modules/feed_reader.py)",
+      "Bash(DS=root@95.216.139.172:/root/volume-alert/data/archive/datasets)",
+      "Bash(scp -F NUL \"$DS/events_context_$DATE.csv\" \"$LOCAL/reviews/$DATE/\")",
+      "Bash(python -m pytest tests/offline/test_delta_analyzer_prev_day_feed.py -v --tb=short)",
+      "Bash(scp -F NUL \"d:/Project_V/btc-orderflow-system/deltascout/delta_analyzer/cli.py\" root@95.216.139.172:/root/volume-alert/deltascout/delta_analyzer/cli.py)",
+      "Bash(gh pr:*)"
+    ]
+  }
+}

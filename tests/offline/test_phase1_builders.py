@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from scripts.offline.build_close_outcomes import (
     _filter_df_by_date as _filter_close_df_by_date,
     _dedupe_close_events,
     _filter_close_events_by_date,
     _load_close_events,
+    _load_manual_close_overrides,
     _load_trade_outcomes_events,
+    _merge_manual_close_overrides,
     _load_peak_events,
     derive_close_outcomes,
 )
-from scripts.offline.build_phase1_derived import _filter_df_by_date, derive_reject_dataset
+from scripts.offline.build_phase1_derived import _filter_df_by_date, derive_reject_dataset, resolve_feed_file, run
+from scripts.offline.common import OfflineBuildError, load_feed
+
+
+def _read_output_dataset(path_base):
+    parquet_path = path_base.with_suffix(".parquet")
+    if parquet_path.exists():
+        return pd.read_parquet(parquet_path)
+    return pd.read_csv(path_base.with_suffix(".csv"))
 
 
 def test_reject_classification_soft_and_multi():
@@ -83,6 +94,230 @@ def test_date_scoping_filters_daily_rows():
     assert len(feed_scoped) == 1
     assert evt_scoped.iloc[0]["event_ts"].strftime("%Y-%m-%d") == "2026-01-01"
     assert feed_scoped.iloc[0]["ts"].strftime("%Y-%m-%d") == "2026-01-01"
+
+
+def test_load_feed_accepts_canonical_enriched_schema_and_sorts_rows(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:01:00Z,100,101,8,3,12345,0.0001,7,8",
+                "2026-01-02T00:00:00Z,99,100,5,1,12344,0.0002,1,2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = load_feed(feed)
+
+    assert list(out["ts"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")) == ["2026-01-02T00:00:00Z", "2026-01-02T00:01:00Z"]
+    assert list(out["delta"]) == [4, 5]
+    assert list(out["price"]) == [100, 101]
+
+
+def test_load_feed_accepts_core_columns_only_and_closeprice_fallbacks_to_avgprice(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty",
+                "2026-01-02T00:00:00Z,100,,5,2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = load_feed(feed)
+
+    assert len(out) == 1
+    assert out.iloc[0]["delta"] == 3
+    assert out.iloc[0]["price"] == 100
+
+
+def test_load_feed_fails_loudly_on_invalid_timestamp(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "not-a-ts,100,101,5,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="invalid Timestamp"):
+        load_feed(feed)
+
+
+def test_load_feed_fails_loudly_on_invalid_required_numeric_fields(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:00:00Z,100,101,not-a-number,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="invalid BuyQty/SellQty"):
+        load_feed(feed)
+
+
+def test_load_feed_fails_loudly_when_closeprice_and_avgprice_are_both_invalid(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:00:00Z,,,5,2,12345,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OfflineBuildError, match="invalid ClosePrice/AvgPrice"):
+        load_feed(feed)
+
+
+def test_resolve_feed_file_priority_order(tmp_path):
+    input_root = tmp_path / "input"
+    explicit_file = tmp_path / "explicit.csv"
+    external_root = tmp_path / "external"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=str(external_root),
+        feed_file=str(explicit_file),
+    )
+
+    assert resolved == explicit_file
+
+
+def test_resolve_feed_file_uses_explicit_feed_root_when_feed_file_missing(tmp_path):
+    input_root = tmp_path / "input"
+    external_root = tmp_path / "external"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=str(external_root),
+        feed_file=None,
+    )
+
+    assert resolved == external_root / "2026-01-02.csv"
+
+
+def test_resolve_feed_file_defaults_to_self_contained_input_root(tmp_path):
+    input_root = tmp_path / "input"
+
+    resolved = resolve_feed_file(
+        date="2026-01-02",
+        input_root=input_root,
+        feed_root=None,
+        feed_file=None,
+    )
+
+    assert resolved == input_root / "feed" / "2026-01-02.csv"
+
+
+def test_enriched_feed_normalization_preserves_late_peak_behavior(tmp_path):
+    feed = tmp_path / "2026-01-02.csv"
+    feed.write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty,OpenInterest,FundingRate,LiqBuyQty,LiqSellQty",
+                "2026-01-02T00:02:00Z,102,102,6,1,12347,0.0001,7,8",
+                "2026-01-02T00:00:00Z,100,100,5,1,12345,0.0001,7,8",
+                "2026-01-02T00:01:00Z,98,98,4,1,12346,0.0001,7,8",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    df_feed = load_feed(feed)
+    peaks = pd.DataFrame(
+        [
+            {"event": "PEAK_EMIT", "event_ts": pd.Timestamp("2026-01-02T00:02:00Z"), "kind": "long", "price": 102.0, "seq": 1},
+        ]
+    )
+
+    from scripts.offline.build_phase1_derived import derive_late_peak
+
+    out = derive_late_peak(df_feed, peaks, "2026-01-02", lookback_rows=3)
+
+    assert len(out) == 1
+    assert out.iloc[0]["move_start_ts"] == pd.Timestamp("2026-01-02T00:01:00Z")
+    assert out.iloc[0]["latency_min"] == 1.0
+    assert out.iloc[0]["move_size"] == 4.0
+
+
+def test_run_uses_self_contained_feed_by_default_and_preserves_output_parity(tmp_path):
+    input_root = tmp_path / "data"
+    archive_dir = input_root / "archive" / "deltascout"
+    feed_dir = input_root / "feed"
+    output_root = tmp_path / "out"
+    archive_dir.mkdir(parents=True)
+    feed_dir.mkdir(parents=True)
+
+    (archive_dir / "2026-01-02.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event":"DELTA_MAX","ts":"2026-01-02T00:02:00Z","seq":1,"delta":5,"price":102}',
+                '{"event":"PEAK_EMIT","ts":"2026-01-02T00:02:00Z","seq":2,"kind":"long","price":102}',
+                '{"event":"CANDIDATE_COMPARISON_REJECT","ts":"2026-01-02T00:03:00Z","seq":3,"kind":"long","reject_reason":"no_prev_peak"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (feed_dir / "2026-01-02.csv").write_text(
+        "\n".join(
+            [
+                "Timestamp,AvgPrice,ClosePrice,BuyQty,SellQty",
+                "2026-01-02T00:02:00Z,102,102,6,1",
+                "2026-01-02T00:00:00Z,100,100,5,1",
+                "2026-01-02T00:01:00Z,98,98,4,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run(
+        type(
+            "Args",
+            (),
+            {
+                "date": "2026-01-02",
+                "input_root": str(input_root),
+                "output_root": str(output_root),
+                "feed_root": None,
+                "feed_file": None,
+                "roll_window": 3,
+                "owner_quantile": 0.75,
+                "late_lookback_rows": 3,
+                "soft_vwap_margin": 50.0,
+                "soft_imb_margin": 0.01,
+            },
+        )()
+    )
+
+    baseline = _read_output_dataset(output_root / "baseline_init_2026-01-02")
+    late_peak = _read_output_dataset(output_root / "late_peak_2026-01-02")
+
+    assert baseline["reject_reason"].tolist() == ["no_prev_peak"]
+    assert late_peak.loc[0, "move_start_ts"] == "2026-01-02 00:01:00+00:00"
+    assert late_peak.loc[0, "latency_min"] == 1.0
 
 
 def test_close_dedup_state_and_log_duplicate():
@@ -255,3 +490,149 @@ def test_trade_outcomes_dedupe_prefers_trade_key_identity():
     }
     deduped = _dedupe_close_events([e1, e2])
     assert len(deduped) == 1
+
+
+def test_close_outcomes_derives_tp1_then_sl_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "long", "price": 100.0, "delta": 1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-01T00:30:00Z",
+            "side": "LONG",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 100.5,
+            "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "long"},
+            "lc_tp1_done": True,
+            "lc_tp2_done": False,
+            "lc_sl_done": True,
+            "lc_trail_active": False,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-01", window_min=4320)
+    assert out.iloc[0]["trade_lifecycle_state"] == "tp1_then_sl"
+
+
+def test_close_outcomes_derives_tp1_tp2_then_trailing_stop_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "long", "price": 100.0, "delta": 1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-02T00:30:00Z",
+            "side": "LONG",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 100.5,
+            "lc_opened_at": "2026-01-01T00:05:00Z",
+            "lc_tp1_done": True,
+            "lc_tp2_done": True,
+            "lc_sl_done": True,
+            "lc_trail_active": True,
+            "lc_trail_sl_price": 105.0,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-02", window_min=4320)
+    assert out.iloc[0]["join_status"] == "window_match"
+    assert out.iloc[0]["peak_ts"] == pd.Timestamp("2026-01-01T00:10:00Z")
+    assert out.iloc[0]["trade_lifecycle_state"] == "tp1_tp2_then_trailing_stop"
+
+
+def test_close_outcomes_derives_plain_sl_lifecycle_state():
+    peaks = pd.DataFrame(
+        [
+            {"event_ts": pd.Timestamp("2026-01-01T00:10:00Z"), "kind": "short", "price": 100.0, "delta": -1.0, "imb": 0.6, "vol": 10.0, "seq": 1},
+        ]
+    )
+    close_events = [
+        {
+            "ts": "2026-01-01T00:30:00Z",
+            "side": "SHORT",
+            "mode": "paper",
+            "reason": "SL",
+            "entry": 99.5,
+            "src_evt": {"ts": "2026-01-01T00:10:00Z", "kind": "short"},
+            "lc_tp1_done": False,
+            "lc_tp2_done": False,
+            "lc_sl_done": True,
+            "lc_trail_active": False,
+        }
+    ]
+    out = derive_close_outcomes(close_events, peaks, "2026-01-01", window_min=4320)
+    assert out.iloc[0]["trade_lifecycle_state"] == "plain_sl"
+
+
+def test_manual_close_overrides_append_missing_peak_close(tmp_path):
+    overrides = tmp_path / "manual_close_overrides.jsonl"
+    overrides.write_text(
+        '\n'.join(
+            [
+                '{"source_date":"2026-04-05","peak_ts":"2026-04-05T14:34:00Z","peak_kind":"short","close_reason":"SL","side":"SHORT","entry":66774.628139,"sl":67121.0,"source":"manual_user_confirmed"}',
+                '{"source_date":"2026-04-06","peak_ts":"2026-04-06T00:00:00Z","peak_kind":"long","close_reason":"TP1"}',
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    loaded = _load_manual_close_overrides(overrides, '2026-04-05')
+    assert len(loaded) == 1
+    assert loaded[0]['peak_kind'] == 'short'
+
+    close_df = pd.DataFrame(
+        [
+            {
+                'close_key': 'existing',
+                'source_date': '2026-04-05',
+                'close_ts': '2026-04-05T01:00:00Z',
+                'join_status': 'missing',
+                'peak_ts': '',
+                'peak_kind': '',
+                'close_reason': 'SL',
+            }
+        ]
+    )
+    merged = _merge_manual_close_overrides(close_df, loaded, '2026-04-05')
+
+    assert len(merged) == 2
+    manual_row = merged[merged['source'] == 'manual_user_confirmed'].iloc[0]
+    assert manual_row['peak_ts'] == '2026-04-05T14:34:00Z'
+    assert manual_row['peak_kind'] == 'short'
+    assert manual_row['close_reason'] == 'SL'
+    assert manual_row['join_status'] == 'manual_override'
+
+
+def test_manual_close_overrides_do_not_duplicate_existing_exact_peak_match():
+    close_df = pd.DataFrame(
+        [
+            {
+                'close_key': 'existing',
+                'source_date': '2026-04-05',
+                'close_ts': '2026-04-05T15:00:00Z',
+                'join_status': 'window_match',
+                'peak_ts': '2026-04-05T14:34:00Z',
+                'peak_kind': 'short',
+                'close_reason': 'SL',
+            }
+        ]
+    )
+    merged = _merge_manual_close_overrides(
+        close_df,
+        [
+            {
+                'source_date': '2026-04-05',
+                'peak_ts': '2026-04-05T14:34:00Z',
+                'peak_kind': 'short',
+                'close_reason': 'SL',
+                'source': 'manual_user_confirmed',
+            }
+        ],
+        '2026-04-05',
+    )
+
+    assert len(merged) == 1

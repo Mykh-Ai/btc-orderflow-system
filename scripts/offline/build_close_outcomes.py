@@ -4,12 +4,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from scripts.offline.common import OfflineBuildError, read_jsonl, sort_and_order, write_dataframe
+
+DEFAULT_MANUAL_CLOSE_OVERRIDES_FILE = Path("deltascout/research_material/manual_close_overrides.jsonl")
 
 
 def _safe_load_json(path: Path) -> dict[str, Any]:
@@ -21,8 +24,14 @@ def _safe_load_json(path: Path) -> dict[str, Any]:
         raise OfflineBuildError(f"invalid state json: {path}: {exc}") from exc
 
 
-def _load_peak_events(archive_file: Path) -> pd.DataFrame:
-    rows = [r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT"]
+def _load_peak_events(archive_files: Path | list[Path]) -> pd.DataFrame:
+    if isinstance(archive_files, Path):
+        archive_files = [archive_files]
+    rows: list[dict[str, Any]] = []
+    for archive_file in archive_files:
+        if not archive_file.exists():
+            continue
+        rows.extend(r for r in read_jsonl(archive_file) if r.get("event") == "PEAK_EMIT")
     if not rows:
         return pd.DataFrame(
             {
@@ -102,6 +111,24 @@ def _load_trade_outcomes_events(trade_outcomes_file: Path, source_date: str | No
                 continue
         events.append(evt)
     return events
+
+
+def _load_manual_close_overrides(overrides_file: Path, source_date: str) -> list[dict[str, Any]]:
+    if not overrides_file.exists():
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for row in read_jsonl(overrides_file):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("source_date") or "").strip() != source_date:
+            continue
+        if str(row.get("peak_ts") or "").strip() == "":
+            continue
+        if str(row.get("peak_kind") or "").strip() == "":
+            continue
+        rows.append(row)
+    return rows
 
 
 def _load_close_events(exec_log_file: Path, state_file: Path, trade_outcomes_file: Path, source_date: str) -> list[dict[str, Any]]:
@@ -226,12 +253,48 @@ def _join_peak(close_row: dict[str, Any], peaks: pd.DataFrame, window_min: int) 
     if kind:
         cands = cands[cands["kind"] == kind]
     lo = close_ts - pd.Timedelta(minutes=window_min)
+    opened_at = pd.to_datetime(close_row.get("lc_opened_at") or close_row.get("opened_at"), utc=True, errors="coerce")
+    if pd.notna(opened_at):
+        lo = max(lo, opened_at)
     cands = cands[(cands["event_ts"] <= close_ts) & (cands["event_ts"] >= lo)]
     if len(cands) == 1:
         return "window_match", 0.6, cands.iloc[0].to_dict()
     if len(cands) > 1:
         return "ambiguous", 0.2, None
     return "missing", 0.0, None
+
+
+def _derive_trade_lifecycle_state(row: dict[str, Any]) -> str:
+    tp1_done = _to_bool(row.get("lc_tp1_done"))
+    tp2_done = _to_bool(row.get("lc_tp2_done"))
+    sl_done = _to_bool(row.get("lc_sl_done"))
+    trail_active = _to_bool(row.get("lc_trail_active"))
+
+    if (not tp1_done) and (not tp2_done) and sl_done:
+        return "plain_sl"
+    if tp1_done and (not tp2_done) and sl_done:
+        return "tp1_then_sl"
+    if tp1_done and tp2_done and sl_done:
+        return "tp1_tp2_then_trailing_stop"
+    return ""
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes"}
+
+
+def _load_peak_archive_files(input_root: Path, source_date: str, lookback_days: int) -> list[Path]:
+    start = pd.Timestamp(source_date) - pd.Timedelta(days=lookback_days)
+    end = pd.Timestamp(source_date)
+    files: list[Path] = []
+    current = start
+    while current <= end:
+        files.append(input_root / "archive" / "deltascout" / f"{current.strftime('%Y-%m-%d')}.jsonl")
+        current += pd.Timedelta(days=1)
+    return files
 
 
 def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFrame, source_date: str, window_min: int) -> pd.DataFrame:
@@ -253,6 +316,16 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "sl": r.get("sl"),
             "join_status": join_status,
             "join_confidence": confidence,
+            "lifecycle_tp1_done": r.get("lc_tp1_done", ""),
+            "lifecycle_tp2_done": r.get("lc_tp2_done", ""),
+            "lifecycle_sl_done": r.get("lc_sl_done", ""),
+            "lifecycle_trail_active": r.get("lc_trail_active", ""),
+            "lifecycle_trail_sl_price": r.get("lc_trail_sl_price", ""),
+            "lifecycle_prices_entry": r.get("lc_prices_entry", ""),
+            "lifecycle_prices_sl": r.get("lc_prices_sl", ""),
+            "lifecycle_prices_tp1": r.get("lc_prices_tp1", ""),
+            "lifecycle_prices_tp2": r.get("lc_prices_tp2", ""),
+            "trade_lifecycle_state": _derive_trade_lifecycle_state(r),
             "src_evt_ts": (src_evt or {}).get("ts"),
             "src_evt_kind": (src_evt or {}).get("kind"),
             "src_evt_price": (src_evt or {}).get("price"),
@@ -290,6 +363,128 @@ def derive_close_outcomes(close_events: list[dict[str, Any]], peaks: pd.DataFram
             "sl",
             "join_status",
             "join_confidence",
+            "lifecycle_tp1_done",
+            "lifecycle_tp2_done",
+            "lifecycle_sl_done",
+            "lifecycle_trail_active",
+            "lifecycle_trail_sl_price",
+            "lifecycle_prices_entry",
+            "lifecycle_prices_sl",
+            "lifecycle_prices_tp1",
+            "lifecycle_prices_tp2",
+            "trade_lifecycle_state",
+            "src_evt_ts",
+            "src_evt_kind",
+            "src_evt_price",
+            "peak_ts",
+            "peak_kind",
+            "peak_price",
+            "peak_delta",
+            "peak_imb",
+            "peak_vol",
+            "schema",
+            "event",
+            "record_ts",
+            "symbol",
+            "source",
+        ],
+    )
+
+
+def _manual_override_identity_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("peak_ts") or "").strip(),
+        str(row.get("peak_kind") or "").strip().lower(),
+    )
+
+
+def _merge_manual_close_overrides(close_df: pd.DataFrame, manual_rows: list[dict[str, Any]], source_date: str) -> pd.DataFrame:
+    if not manual_rows:
+        return close_df
+
+    existing_peak_keys: set[tuple[str, str]] = set()
+    if not close_df.empty:
+        for _, row in close_df.iterrows():
+            peak_ts = row.get("peak_ts")
+            peak_kind = row.get("peak_kind")
+            if pd.notna(peak_ts) and str(peak_ts).strip():
+                existing_peak_keys.add((str(peak_ts).strip(), str(peak_kind or "").strip().lower()))
+
+    manual_records: list[dict[str, Any]] = []
+    for row in manual_rows:
+        peak_key = _manual_override_identity_key(row)
+        if peak_key in existing_peak_keys:
+            continue
+        manual_records.append(
+            {
+                "close_key": str(row.get("close_key") or f"manual_override:{source_date}:{peak_key[0]}:{peak_key[1]}"),
+                "source_date": source_date,
+                "close_ts": row.get("close_ts", ""),
+                "mode": row.get("mode", "manual_override"),
+                "close_reason": row.get("close_reason", ""),
+                "close_price": row.get("close_price", ""),
+                "side": row.get("side", ""),
+                "entry": row.get("entry", ""),
+                "sl": row.get("sl", ""),
+                "join_status": row.get("join_status", "manual_override"),
+                "join_confidence": row.get("join_confidence", "1.0"),
+                "lifecycle_tp1_done": row.get("lifecycle_tp1_done", ""),
+                "lifecycle_tp2_done": row.get("lifecycle_tp2_done", ""),
+                "lifecycle_sl_done": row.get("lifecycle_sl_done", ""),
+                "lifecycle_trail_active": row.get("lifecycle_trail_active", ""),
+                "lifecycle_trail_sl_price": row.get("lifecycle_trail_sl_price", ""),
+                "lifecycle_prices_entry": row.get("lifecycle_prices_entry", row.get("entry", "")),
+                "lifecycle_prices_sl": row.get("lifecycle_prices_sl", row.get("sl", "")),
+                "lifecycle_prices_tp1": row.get("lifecycle_prices_tp1", ""),
+                "lifecycle_prices_tp2": row.get("lifecycle_prices_tp2", ""),
+                "trade_lifecycle_state": row.get("trade_lifecycle_state", "manual_override"),
+                "src_evt_ts": row.get("src_evt_ts", row.get("peak_ts", "")),
+                "src_evt_kind": row.get("src_evt_kind", row.get("peak_kind", "")),
+                "src_evt_price": row.get("src_evt_price", row.get("peak_price", row.get("entry", ""))),
+                "peak_ts": row.get("peak_ts", ""),
+                "peak_kind": row.get("peak_kind", ""),
+                "peak_price": row.get("peak_price", ""),
+                "peak_delta": row.get("peak_delta", ""),
+                "peak_imb": row.get("peak_imb", ""),
+                "peak_vol": row.get("peak_vol", ""),
+                "schema": row.get("schema", "manual_close_override_v1"),
+                "event": row.get("event", "MANUAL_CLOSE_OVERRIDE"),
+                "record_ts": row.get("record_ts", ""),
+                "symbol": row.get("symbol", ""),
+                "source": row.get("source", "manual_user_confirmed"),
+            }
+        )
+
+    if not manual_records:
+        return close_df
+
+    manual_df = pd.DataFrame(manual_records)
+    combined = pd.concat([close_df, manual_df], ignore_index=True, sort=False)
+    return sort_and_order(
+        combined,
+        sort_cols=["close_ts", "close_key", "join_status"],
+        col_order=[
+            "close_key",
+            "source_date",
+            "close_ts",
+            "mode",
+            "close_reason",
+            "close_price",
+            "side",
+            "entry",
+            "sl",
+            "join_status",
+            "join_confidence",
+            "lifecycle_tp1_done",
+            "lifecycle_tp2_done",
+            "lifecycle_sl_done",
+            "lifecycle_trail_active",
+            "lifecycle_trail_sl_price",
+            "lifecycle_prices_entry",
+            "lifecycle_prices_sl",
+            "lifecycle_prices_tp1",
+            "lifecycle_prices_tp2",
+            "trade_lifecycle_state",
             "src_evt_ts",
             "src_evt_kind",
             "src_evt_price",
@@ -313,17 +508,22 @@ def run(args: argparse.Namespace) -> None:
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    archive_file = input_root / "archive" / "deltascout" / f"{args.date}.jsonl"
     exec_log = Path(args.exec_log) if args.exec_log else input_root / "logs" / "executor.log"
     state_file = Path(args.state_file) if args.state_file else input_root / "state" / "executor_state.json"
     trade_outcomes_file = Path(args.trade_outcomes_file) if args.trade_outcomes_file else input_root / "state" / "trade_outcomes.jsonl"
+    manual_overrides_file = Path(args.manual_overrides_file) if args.manual_overrides_file else DEFAULT_MANUAL_CLOSE_OVERRIDES_FILE
 
-    peaks = _load_peak_events(archive_file)
+    peak_files = _load_peak_archive_files(input_root, args.date, args.peak_lookback_days)
+    peaks = _load_peak_events(peak_files)
     close_events = _load_close_events(exec_log, state_file, trade_outcomes_file, args.date)
-    peaks = _filter_df_by_date(peaks, "event_ts", args.date)
     close_events = _filter_close_events_by_date(close_events, args.date)
     close_events = _dedupe_close_events(close_events)
     close_df = derive_close_outcomes(close_events, peaks, args.date, args.window_min)
+    close_df = _merge_manual_close_overrides(
+        close_df,
+        _load_manual_close_overrides(manual_overrides_file, args.date),
+        args.date,
+    )
 
     out_path = write_dataframe(close_df, output_root / f"close_outcomes_{args.date}")
     print(f"close_outcomes rows={len(close_df)} path={out_path} join_status={close_df['join_status'].value_counts().to_dict()}")
@@ -337,7 +537,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trade-outcomes-file", default=None, help="Optional explicit trade_outcomes.jsonl path")
     p.add_argument("--exec-log", default=None, help="Optional explicit executor.log path")
     p.add_argument("--state-file", default=None, help="Optional explicit executor_state.json path")
-    p.add_argument("--window-min", type=int, default=360, help="Fallback join window in minutes")
+    p.add_argument("--manual-overrides-file", default=None, help="Optional manual close-override JSONL path")
+    p.add_argument("--window-min", type=int, default=4320, help="Fallback join window in minutes")
+    p.add_argument("--peak-lookback-days", type=int, default=3, help="How many prior UTC days of PEAK_EMIT archive rows to load for close linkage")
     return p
 
 
