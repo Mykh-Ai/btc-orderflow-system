@@ -1,0 +1,13 @@
+ts,kind,reject_reason,price,vol,vwap,prev_price,prev_vol,prev_vwap,price_check_pass,vol_check_pass,vwap_check_pass,three_of_three_pass_count,decomposition_status,decomposition_basis,notes_short
+2026-04-04 23:56:00,long,,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 06:55:00,long,3of3_fail,66857.191333,40.55,66847,66936.800647,120.69255,66814.0,no,no,yes,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-04-04 09:58:00,long,3of3_fail,67022.858385,87.24,66909,66872.02231,114.2122,66853.0,yes,no,yes,2,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-04-04 01:20:00,long,3of3_fail,66869.380534,54.13,66813,66877.904767,41.875479999999996,66813.0,no,yes,no,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-04-04 07:15:00,short,vwap_side,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 13:10:00,long,3of3_fail,67174.094401,63.96,66903,67022.858385,87.23510999999999,66909.0,yes,no,no,1,direct_from_source_fields,prev_fields_present,direct source diagnostics available
+2026-04-04 16:40:00,short,vwap_side,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 07:30:00,long,direction_mismatch,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 01:26:00,short,direction_mismatch,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 07:00:00,short,direction_mismatch,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 13:11:00,short,direction_mismatch,,,,,,,,,,,not_available,,not a 3of3_fail case
+2026-04-04 20:00:00,short,direction_mismatch,,,,,,,,,,,not_available,,not a 3of3_fail case

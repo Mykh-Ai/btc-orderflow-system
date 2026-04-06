@@ -18,6 +18,8 @@ You may use any locally available repository materials that are relevant to the 
 - `README.md`
 - `RESEARCH_CONTEXT.md`
 - research blueprint / manifesto / implementation-plan documents
+- strategic research frame in `deltascout/research_material/research_blueprint_v2.md`
+- minute-event implementation path in `deltascout/research_material/minute_event_research_spec_v1.md`
 - `deltascout.py`
 - related runtime and research logic files
 
@@ -64,6 +66,11 @@ When analyzing, use sources in this priority order unless the operator explicitl
 4. Local raw feed / raw archive files under `deltascout/research_material/raw_feed/` and `deltascout/research_material/raw_archive/`
 5. Runtime logic in `deltascout.py` and related implementation files
 6. Research framing docs such as `README.md`, `RESEARCH_CONTEXT.md`, blueprint, manifesto, implementation-plan materials
+
+When research framing or future-discovery direction matters, explicitly read these two documents in continuity:
+
+- `deltascout/research_material/research_blueprint_v2.md` defines the strategic research frame: market state -> transition -> process phase -> entry timing
+- `deltascout/research_material/minute_event_research_spec_v1.md` defines the analyzer implementation shift toward minute-level rows as a first-class research surface
 
 If the newest rebuilt sub-range is visible inside the repo, treat it as the highest-attention recent slice inside the broader discovered scope.
 
@@ -239,6 +246,11 @@ but not the boundary of discovery.
 Follow the current blueprint v2 framing:
 
 market state -> transition -> process phase -> entry timing
+
+Read Track B / future `AI_EMIT` discovery in continuity not only with `PEAK_EMIT` and reject-review materials, but also with:
+
+- `deltascout/research_material/research_blueprint_v2.md`
+- `deltascout/research_material/minute_event_research_spec_v1.md`
 
 For Track B, search for:
 

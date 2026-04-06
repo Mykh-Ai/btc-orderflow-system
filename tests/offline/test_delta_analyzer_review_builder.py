@@ -855,3 +855,72 @@ def test_accepted_table_marks_ambiguous_when_multiple_exact_close_rows_match(
     assert row["join_confidence"] == "0.0"
     assert row["close_reason"] == ""
     assert result.matched_close_count == 0
+
+
+def test_accepted_table_applies_manual_close_override_when_close_outcomes_missing(dataset_root: Path, tmp_path: Path):
+    overrides_path = REPO_ROOT / 'deltascout' / 'research_material' / 'manual_close_overrides.jsonl'
+    original = overrides_path.read_text(encoding='utf-8') if overrides_path.exists() else None
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+    overrides_path.write_text(
+        '{"source_date":"2026-01-02","peak_ts":"2026-01-02T00:10:00Z","peak_kind":"long","close_reason":"SL","side":"LONG","entry":"101.25","join_status":"manual_override","join_confidence":"1.0","source":"manual_user_confirmed"}\n',
+        encoding='utf-8',
+    )
+    try:
+        result = build_daily_review_package('2026-01-02', dataset_root, tmp_path)
+        with result.accepted_path.open('r', encoding='utf-8', newline='') as handle:
+            row = next(csv.DictReader(handle))
+        assert row['join_status'] == 'joined'
+        assert row['close_reason'] == 'SL'
+        assert row['entry'] == '101.25'
+        assert row['side'] == 'LONG'
+        assert result.matched_close_count == 1
+    finally:
+        if original is None:
+            overrides_path.unlink(missing_ok=True)
+        else:
+            overrides_path.write_text(original, encoding='utf-8')
+
+
+def test_reject_table_preserves_3of3_decomposition_fields(tmp_path: Path):
+    extended_fields = EVENTS_CONTEXT_FIELDS + [
+        "prev_price",
+        "prev_vol",
+        "prev_vwap",
+        "comparison_price_pass",
+        "comparison_vol_pass",
+        "comparison_vwap_pass",
+        "comparison_3of3_pass_count",
+        "comparison_3of3_failed_subconditions",
+    ]
+    _write_csv(
+        tmp_path / "events_context_2026-01-02.csv",
+        extended_fields,
+        [
+            {
+                **{field: "" for field in extended_fields},
+                "ts": "2026-01-02T00:20:00Z",
+                "day": "2026-01-02",
+                "event_type": "CANDIDATE_COMPARISON_REJECT",
+                "kind": "long",
+                "reject_reason": "3of3_fail",
+                "prev_price": "105",
+                "prev_vol": "20",
+                "prev_vwap": "99",
+                "comparison_price_pass": "False",
+                "comparison_vol_pass": "True",
+                "comparison_vwap_pass": "False",
+                "comparison_3of3_pass_count": "1",
+                "comparison_3of3_failed_subconditions": "price|vwap",
+            }
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+    with result.reject_path.open("r", encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row["comparison_price_pass"] == "False"
+    assert row["comparison_vol_pass"] == "True"
+    assert row["comparison_vwap_pass"] == "False"
+    assert row["comparison_3of3_pass_count"] == "1"
+    assert row["comparison_3of3_failed_subconditions"] == "price|vwap"

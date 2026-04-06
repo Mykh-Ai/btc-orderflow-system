@@ -8,7 +8,9 @@ from scripts.offline.build_close_outcomes import (
     _dedupe_close_events,
     _filter_close_events_by_date,
     _load_close_events,
+    _load_manual_close_overrides,
     _load_trade_outcomes_events,
+    _merge_manual_close_overrides,
     _load_peak_events,
     derive_close_outcomes,
 )
@@ -563,3 +565,74 @@ def test_close_outcomes_derives_plain_sl_lifecycle_state():
     ]
     out = derive_close_outcomes(close_events, peaks, "2026-01-01", window_min=4320)
     assert out.iloc[0]["trade_lifecycle_state"] == "plain_sl"
+
+
+def test_manual_close_overrides_append_missing_peak_close(tmp_path):
+    overrides = tmp_path / "manual_close_overrides.jsonl"
+    overrides.write_text(
+        '\n'.join(
+            [
+                '{"source_date":"2026-04-05","peak_ts":"2026-04-05T14:34:00Z","peak_kind":"short","close_reason":"SL","side":"SHORT","entry":66774.628139,"sl":67121.0,"source":"manual_user_confirmed"}',
+                '{"source_date":"2026-04-06","peak_ts":"2026-04-06T00:00:00Z","peak_kind":"long","close_reason":"TP1"}',
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    loaded = _load_manual_close_overrides(overrides, '2026-04-05')
+    assert len(loaded) == 1
+    assert loaded[0]['peak_kind'] == 'short'
+
+    close_df = pd.DataFrame(
+        [
+            {
+                'close_key': 'existing',
+                'source_date': '2026-04-05',
+                'close_ts': '2026-04-05T01:00:00Z',
+                'join_status': 'missing',
+                'peak_ts': '',
+                'peak_kind': '',
+                'close_reason': 'SL',
+            }
+        ]
+    )
+    merged = _merge_manual_close_overrides(close_df, loaded, '2026-04-05')
+
+    assert len(merged) == 2
+    manual_row = merged[merged['source'] == 'manual_user_confirmed'].iloc[0]
+    assert manual_row['peak_ts'] == '2026-04-05T14:34:00Z'
+    assert manual_row['peak_kind'] == 'short'
+    assert manual_row['close_reason'] == 'SL'
+    assert manual_row['join_status'] == 'manual_override'
+
+
+def test_manual_close_overrides_do_not_duplicate_existing_exact_peak_match():
+    close_df = pd.DataFrame(
+        [
+            {
+                'close_key': 'existing',
+                'source_date': '2026-04-05',
+                'close_ts': '2026-04-05T15:00:00Z',
+                'join_status': 'window_match',
+                'peak_ts': '2026-04-05T14:34:00Z',
+                'peak_kind': 'short',
+                'close_reason': 'SL',
+            }
+        ]
+    )
+    merged = _merge_manual_close_overrides(
+        close_df,
+        [
+            {
+                'source_date': '2026-04-05',
+                'peak_ts': '2026-04-05T14:34:00Z',
+                'peak_kind': 'short',
+                'close_reason': 'SL',
+                'source': 'manual_user_confirmed',
+            }
+        ],
+        '2026-04-05',
+    )
+
+    assert len(merged) == 1

@@ -1,0 +1,13 @@
+target_ts,session_date,event_type,kind,reject_reason,reason_selected,selection_priority,source_basis,selected_case_source
+2026-04-04 23:56:00,2026-04-04,PEAK_EMIT,long,,accepted reference case,1000,accepted_event_context,accepted_reference
+2026-04-04 06:55:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, possible_reversal_confirmation",155,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 09:58:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, possible_continuation_pressure",152,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 01:20:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,3of3_fail,140,reject_event_context,auto_priority
+2026-04-04 07:15:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,vwap_side,"short-side reject, vwap_side",140,reject_event_context,auto_priority
+2026-04-04 13:10:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 16:40:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,vwap_side,"short-side reject, vwap_side, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 07:30:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,long,direction_mismatch,"direction_mismatch, possible_reversal_onset",135,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 01:26:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch",130,reject_event_context,auto_priority
+2026-04-04 07:00:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch, unclear_but_constructive",130,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 13:11:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch, unclear_but_constructive",130,reject_event_context+interesting_rejects,auto_priority
+2026-04-04 20:00:00,2026-04-04,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch, unclear_but_constructive",130,reject_event_context+interesting_rejects,auto_priority

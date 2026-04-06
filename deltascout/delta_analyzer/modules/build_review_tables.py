@@ -9,6 +9,8 @@ from math import isnan
 from statistics import mean, median
 from typing import Any
 
+from scripts.offline.common import read_jsonl
+
 ACCEPTED_EVENT_TYPE = "PEAK_EMIT"
 REJECT_EVENT_TYPES = (
     "CANDIDATE_COMPARISON_REJECT",
@@ -99,6 +101,7 @@ REJECT_REASON_NUMERIC_FIELDS = (
 )
 UNKNOWN_REJECT_REASON = "UNKNOWN"
 UNKNOWN_KIND = "UNKNOWN"
+DEFAULT_MANUAL_CLOSE_OVERRIDES_FILE = Path("deltascout/research_material/manual_close_overrides.jsonl")
 
 
 INTERESTING_REJECT_FIELDS = (
@@ -572,15 +575,81 @@ def _load_optional_csv(path: Path) -> list[dict[str, str]]:
     return _load_csv(path)
 
 
+def _load_manual_close_override_rows(date: str) -> list[dict[str, str]]:
+    if not DEFAULT_MANUAL_CLOSE_OVERRIDES_FILE.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    for row in read_jsonl(DEFAULT_MANUAL_CLOSE_OVERRIDES_FILE):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("source_date") or "").strip() != date:
+            continue
+        peak_ts = str(row.get("peak_ts") or "").strip()
+        peak_kind = str(row.get("peak_kind") or "").strip()
+        if not peak_ts or not peak_kind:
+            continue
+        rows.append(
+            {
+                "peak_ts": peak_ts,
+                "peak_kind": peak_kind,
+                "join_status": row.get("join_status", "manual_override"),
+                "join_confidence": row.get("join_confidence", "1.0"),
+                "close_ts": row.get("close_ts", ""),
+                "close_reason": row.get("close_reason", ""),
+                "entry": row.get("entry", ""),
+                "side": row.get("side", ""),
+                "final_close_ts": row.get("final_close_ts", row.get("close_ts", "")),
+                "final_close_reason": row.get("final_close_reason", row.get("close_reason", "")),
+                "lifecycle_tp1_done": row.get("lifecycle_tp1_done", ""),
+                "lifecycle_tp2_done": row.get("lifecycle_tp2_done", ""),
+                "lifecycle_sl_done": row.get("lifecycle_sl_done", ""),
+                "lifecycle_trail_active": row.get("lifecycle_trail_active", ""),
+                "lifecycle_trail_sl_price": row.get("lifecycle_trail_sl_price", ""),
+                "lifecycle_prices_entry": row.get("lifecycle_prices_entry", row.get("entry", "")),
+                "lifecycle_prices_sl": row.get("lifecycle_prices_sl", row.get("sl", "")),
+                "lifecycle_prices_tp1": row.get("lifecycle_prices_tp1", ""),
+                "lifecycle_prices_tp2": row.get("lifecycle_prices_tp2", ""),
+                "trade_lifecycle_state": row.get("trade_lifecycle_state", "manual_override"),
+                "schema": row.get("schema", "manual_close_override_v1"),
+                "event": row.get("event", "MANUAL_CLOSE_OVERRIDE"),
+                "record_ts": row.get("record_ts", ""),
+                "symbol": row.get("symbol", ""),
+                "source": row.get("source", "manual_user_confirmed"),
+            }
+        )
+    return rows
+
+
+def _merge_manual_close_override_rows(rows: list[dict[str, str]], manual_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not manual_rows:
+        return rows
+
+    existing_keys = {
+        (_normalize_ts_key(row.get("peak_ts")), _normalize_kind_key(row.get("peak_kind")))
+        for row in rows
+        if _normalize_ts_key(row.get("peak_ts"))
+    }
+    merged = list(rows)
+    for row in manual_rows:
+        key = (_normalize_ts_key(row.get("peak_ts")), _normalize_kind_key(row.get("peak_kind")))
+        if key in existing_keys:
+            continue
+        merged.append(row)
+        existing_keys.add(key)
+    return merged
+
+
 def _load_optional_close_outcomes(input_root: Path, date: str) -> list[dict[str, str]]:
     csv_path = input_root / f"close_outcomes_{date}.csv"
     parquet_path = input_root / f"close_outcomes_{date}.parquet"
+    rows: list[dict[str, str]] = []
     # Prefer CSV when both are present to match the review builder's existing file convention.
     if csv_path.exists():
-        return _load_csv(csv_path)
-    if parquet_path.exists():
-        return _load_parquet(parquet_path)
-    return []
+        rows = _load_csv(csv_path)
+    elif parquet_path.exists():
+        rows = _load_parquet(parquet_path)
+    return _merge_manual_close_override_rows(rows, _load_manual_close_override_rows(date))
 
 
 def _load_forward_close_outcomes(

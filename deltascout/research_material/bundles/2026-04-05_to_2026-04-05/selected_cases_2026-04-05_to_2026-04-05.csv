@@ -1,9 +1,13 @@
 target_ts,session_date,event_type,kind,reject_reason,reason_selected,selection_priority,source_basis,selected_case_source
+2026-04-05 14:34:00,2026-04-05,PEAK_EMIT,short,,accepted reference case,1000,accepted_event_context,accepted_reference
+2026-04-05 14:31:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"anomaly coverage, direction_mismatch, unclear_but_constructive, IR_F1",590,reject_event_context+interesting_rejects,anomaly_case
+2026-04-05 14:33:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,3of3_fail,"short-side reject, 3of3_fail, possible_reversal_confirmation",165,reject_event_context+interesting_rejects,auto_priority
+2026-04-05 00:20:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, possible_reversal_confirmation",155,reject_event_context+interesting_rejects,auto_priority
+2026-04-05 00:45:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, possible_reversal_confirmation",155,reject_event_context+interesting_rejects,auto_priority
 2026-04-05 01:46:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,vwap_side,"short-side reject, vwap_side, possible_reversal_confirmation",155,reject_event_context+interesting_rejects,auto_priority
 2026-04-05 07:20:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,3of3_fail,"short-side reject, 3of3_fail",150,reject_event_context,auto_priority
-2026-04-05 00:20:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
-2026-04-05 00:45:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
+2026-04-05 17:15:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,3of3_fail,"short-side reject, 3of3_fail",150,reject_event_context,auto_priority
+2026-04-05 09:53:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,vwap_side,"vwap_side, possible_trap_or_false_break",142,reject_event_context+interesting_rejects,auto_priority
+2026-04-05 21:19:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
+2026-04-05 21:20:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,3of3_fail,"3of3_fail, unclear_but_constructive",140,reject_event_context+interesting_rejects,auto_priority
 2026-04-05 00:46:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch, unclear_but_constructive",130,reject_event_context+interesting_rejects,auto_priority
-2026-04-05 01:11:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,short,direction_mismatch,"short-side reject, direction_mismatch, unclear_but_constructive",130,reject_event_context+interesting_rejects,auto_priority
-2026-04-05 01:10:00,2026-04-05,CANDIDATE_COMPARISON_REJECT,long,direction_mismatch,"direction_mismatch, unclear_but_constructive",120,reject_event_context+interesting_rejects,auto_priority
-2026-04-05 07:57:00,2026-04-05,CANDIDATE_GATE_REJECT,short,imb_band,"short-side reject, imb_band",110,reject_event_context,auto_priority

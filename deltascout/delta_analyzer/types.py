@@ -257,6 +257,14 @@ class EventsBaseRow:
     matched_liq_sell_qty: float | None
     source_file: str
     terminal_decision_present: bool
+    prev_price: float | None
+    prev_vol: float | None
+    prev_vwap: float | None
+    comparison_price_pass: bool | None
+    comparison_vol_pass: bool | None
+    comparison_vwap_pass: bool | None
+    comparison_3of3_pass_count: int | None
+    comparison_3of3_failed_subconditions: str
 
 
 @dataclass(frozen=True)
@@ -278,6 +286,14 @@ class EventsContextRow:
     matched_liq_sell_qty: float | None
     source_file: str
     terminal_decision_present: bool
+    prev_price: float | None
+    prev_vol: float | None
+    prev_vwap: float | None
+    comparison_price_pass: bool | None
+    comparison_vol_pass: bool | None
+    comparison_vwap_pass: bool | None
+    comparison_3of3_pass_count: int | None
+    comparison_3of3_failed_subconditions: str
     cum_delta_24h: float | None
     cum_delta_180m: float | None
     cum_delta_60m: float | None
