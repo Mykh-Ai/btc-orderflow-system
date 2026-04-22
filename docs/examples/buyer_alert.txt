@@ -1,0 +1,10 @@
+🚀 START SHORT
+🕒 Time: 2025-12-13 11:34 UTC
+
+📍 Entry: 90399
+⛔ Stop Loss: 90635
+🎯 TP1: 90218
+🎯 TP2: 90037
+
+This message was generated automatically by the Buyer module
+and delivered via n8n to Telegram.

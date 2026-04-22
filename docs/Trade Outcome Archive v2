@@ -1,0 +1,325 @@
+Trade Outcome Archive v2
+1. Мета
+
+Trade Outcome Archive v2 — це канонічний архів фактів закритих угод, який пишеться в момент фіналізації угоди в executor.
+
+Його задача:
+
+зафіксувати фінальний стан угоди
+
+не залежати від подальших змін state
+
+не блокувати торгову логіку
+
+бути базою для:
+
+offline fee enrichment
+
+pnl analytics
+
+manager reporting
+
+join із DeltaScout archive
+
+Це не research archive DeltaScout і не manager report.
+Це окремий шар trade outcomes.
+
+2. Принципи
+2.1 Runtime writer тільки фіксує факт
+
+У runtime пишеться тільки:
+
+факт закриття
+
+мінімально достатній snapshot
+
+Runtime не рахує складну фінаналітику.
+
+2.2 Best-effort
+
+Запис у архів:
+
+не повинен блокувати close flow
+
+не повинен змінювати state machine executor
+
+при помилці тільки логувати warning/error
+
+2.3 Atomic write
+
+Кожен snapshot має записуватись:
+
+через temp file + os.replace
+
+або іншим еквівалентно атомарним способом
+
+2.4 Idempotent
+
+Повторна спроба запису тієї ж угоди:
+
+не повинна створювати дублікати
+
+або повинна безпечно перезаписувати той самий artifact
+
+3. Місце в архітектурі
+Runtime layers
+
+DeltaScout → decision archive
+
+Executor → trade outcome archive
+
+Offline layers
+
+fee enrichment
+
+pnl / roi analytics
+
+manager report
+
+joins із PEAK / PEAK_EMIT
+
+4. Канонічний шлях
+Root
+/data/archive/trade_outcomes/
+Layout
+/data/archive/trade_outcomes/YYYY-MM-DD/<trade_key>.json
+
+де:
+
+YYYY-MM-DD — дата закриття угоди UTC
+
+trade_key — canonical trade identifier
+
+Чому file-per-trade
+
+Переваги:
+
+простіша атомарність
+
+простіша ідемпотентність
+
+менший ризик пошкодити весь архів
+
+простіше вручну дебажити
+
+5. Точка запису
+
+Запис робиться тільки в канонічній точці фіналізації close в executor.
+
+Не в середині процесу.
+Не на TP1.
+Не на проміжних апдейтах.
+
+Тільки там, де система вже вважає угоду закритою.
+
+6. Мінімальний payload v2
+{
+  "schema": 2,
+  "event": "TRADE_OUTCOME",
+  "trade_key": "EX_EN_1773684559",
+  "symbol": "BTCUSDC",
+  "mode": "live",
+  "side": "LONG",
+  "opened_at": "2026-03-16T18:09:19.000000+00:00",
+  "closed_at": "2026-03-17T04:53:13.286218+00:00",
+  "close_reason": "SL",
+  "exit_type": "NORMAL_SL",
+  "qty_base_total": 0.05393,
+  "entry_price": 74157.8,
+  "exit_qty_total": 0.05393,
+  "exit_quote_total": 3998.42,
+  "avg_exit_price": 74138.21,
+  "tp1_hit": true,
+  "tp2_hit": false,
+  "sl_hit": true,
+  "trail_active_at_close": true,
+  "src_evt": {
+    "ts": "2026-03-16T18:09:00Z",
+    "kind": "long",
+    "price": 74148.1,
+    "delta": 114.88,
+    "imb": 0.589,
+    "vol": 195.12
+  }
+}
+7. Обов’язкові поля
+
+schema
+
+event
+
+trade_key
+
+symbol
+
+mode
+
+side
+
+opened_at
+
+closed_at
+
+close_reason
+
+exit_type
+
+8. Сильно бажані поля
+
+qty_base_total
+
+entry_price
+
+exit_qty_total
+
+exit_quote_total
+
+avg_exit_price
+
+tp1_hit
+
+tp2_hit
+
+sl_hit
+
+trail_active_at_close
+
+src_evt
+
+9. Чого не повинно бути у runtime contract
+Не включати в runtime enrichment:
+
+fees_total_quote
+
+pnl_quote
+
+roi_pct
+
+monthly summaries
+
+aggregate performance metrics
+
+Не робити в runtime:
+
+додаткові запити на біржу тільки для аналітики
+
+читання великих historical logs
+
+важкі розрахунки
+
+Це все — offline layer.
+
+10. Failure policy
+
+Якщо archive write не вдався:
+
+угода все одно має закритись нормально
+
+close state machine не змінюється
+
+у log пишеться помилка типу:
+
+TRADE_OUTCOME_WRITE_ERROR
+
+Запис архіву ніколи не може бути причиною fail close flow.
+
+11. Idempotency rule
+
+Canonical key:
+
+trade_key
+
+Canonical file:
+
+/data/archive/trade_outcomes/YYYY-MM-DD/<trade_key>.json
+
+Повторний запис тієї ж угоди:
+
+перезаписує той самий файл
+
+не створює новий дубль
+
+12. Відношення до legacy layer
+
+Legacy артефакти:
+
+/data/reports/trades.jsonl
+
+/data/reports/trades_enriched.jsonl
+
+/data/reports/manager_report.md
+
+не є джерелом істини для v2.
+
+Але їх дозволено використовувати як:
+
+джерело структури полів
+
+основу для offline enrichment scripts
+
+reference implementation
+
+13. Offline follow-up layers
+
+Після появи Trade Outcome Archive v2 можна будувати окремо:
+
+13.1 Fee enrichment
+
+Вхід:
+
+trade_outcomes/*.json
+
+Вихід:
+
+trade_outcomes_enriched/*.jsonl або dataset
+
+13.2 Financial metrics
+
+gross pnl
+
+net pnl
+
+roi
+
+hold time
+
+win rate
+
+expectancy
+
+drawdown
+
+monthly stats
+
+13.3 Manager report
+
+Окремий derived artifact, не runtime contract.
+
+14. Success criteria
+
+Trade Outcome Archive v2 вважається успішним, якщо:
+
+кожна закрита угода створює один canonical artifact
+
+artifact не залежить від подальшого очищення executor state
+
+write failure не впливає на торгівлю
+
+повторний запис не створює дублікати
+
+archive придатний для подальшого offline enrichment
+
+15. Рішення по впровадженню
+Зараз
+
+legacy layer не видаляти
+
+використовувати як reference
+
+Далі
+
+зробити окремий audit insertion points в executor
+
+визначити exact close-finalization hook
+
+тільки потім імплементувати v2

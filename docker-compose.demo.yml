@@ -1,0 +1,15 @@
+services:
+  aggregator:
+    image: python:3.11-slim
+    container_name: demo-aggregator
+    working_dir: /app
+    volumes:
+      - ./aggregator:/app
+      - ./data/feed:/data/feed
+      - ./data/logs:/data/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -lc "pip -q install websocket-client &&
+              python aggregator.py"
+    restart: unless-stopped
