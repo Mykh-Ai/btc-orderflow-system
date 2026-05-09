@@ -142,6 +142,12 @@ DeltaScout runtime validation in `deltascout/delta_scout.py` is aligned to this 
 This repository also documents a separate enriched research contour at `/opt/aitrader/feed/YYYY-MM-DD.csv`.
 That contour is read by offline research tooling, but it is not written by the Aggregator code in this repo and it must not be described as the same storage object as `/data/archive/feed/YYYY-MM-DD.csv`.
 
+Important historical recovery note:
+
+- The enriched AiTrader/SHI contour has a known gap from `2026-04-23 17:05:00` through `2026-05-06 22:51:00` UTC caused by Binance Futures WebSocket route migration.
+- Do not use the original flat/synthetic rows in that window as real market evidence.
+- For the durable recovery contract, paths, and interpretation rules, see [feed_recovery_context_2026_04_23.md](feed_recovery_context_2026_04_23.md).
+
 Known current-state divergence:
 
 - `/data/archive/feed/YYYY-MM-DD.csv` is the archive written by this repo's Aggregator from the same rows it writes into live `aggregated.csv`.
