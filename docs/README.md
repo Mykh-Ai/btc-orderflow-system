@@ -147,6 +147,7 @@ Important historical recovery note:
 - The enriched AiTrader/SHI contour has a known gap from `2026-04-23 17:05:00` through `2026-05-06 22:51:00` UTC caused by Binance Futures WebSocket route migration.
 - Do not use the original flat/synthetic rows in that window as real market evidence.
 - For the durable recovery contract, paths, and interpretation rules, see [feed_recovery_context_2026_04_23.md](feed_recovery_context_2026_04_23.md).
+- For the interrupted fast-money / pre-impulse research thread that should resume after recovered-feed rebuilds, see [fast_money_research_state_2026_05_09.md](fast_money_research_state_2026_05_09.md).
 
 Known current-state divergence:
 
