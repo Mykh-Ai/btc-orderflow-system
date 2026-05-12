@@ -100,6 +100,10 @@ ENV: Dict[str, Any] = {
 "LLM_TRADE_JUDGE_ENABLED": _get_bool("LLM_TRADE_JUDGE_ENABLED", False),
 "LLM_TRADE_JUDGE_VERDICTS_FN": os.getenv("LLM_TRADE_JUDGE_VERDICTS_FN", "/data/state/llm_trade_verdicts.jsonl"),
 "LLM_TRADE_JUDGE_MODE": _get_str("LLM_TRADE_JUDGE_MODE", "stub"),
+"LLM_TRADE_JUDGE_MODEL": _get_str("LLM_TRADE_JUDGE_MODEL", "gpt-5.5"),
+"LLM_TRADE_JUDGE_TIMEOUT_SEC": _get_float("LLM_TRADE_JUDGE_TIMEOUT_SEC", 20.0),
+"LLM_TRADE_JUDGE_MAX_RETRIES": _get_int("LLM_TRADE_JUDGE_MAX_RETRIES", 1),
+"LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": _get_bool("LLM_TRADE_JUDGE_NOTIFY_TELEGRAM", True),
 
 # safety / log reader
 "TAIL_LINES": _get_int("TAIL_LINES", 80),
@@ -876,12 +880,13 @@ exits_flow.configure(
     send_webhook_fn=lambda payload: send_webhook(payload),
     validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
     place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
-    post_exits_success_hook_fn=lambda st, pos, trigger="EXITS_PLACED_V15": llm_trade_judge.maybe_record_llm_pretrade_stub(st, pos, trigger=trigger),
+    post_exits_success_hook_fn=lambda st, pos, trigger="EXITS_PLACED_V15": llm_trade_judge.maybe_record_llm_pretrade_judge(st, pos, trigger=trigger),
 )
 llm_trade_judge.configure(
     ENV,
     save_state_fn=lambda st: save_state(st),
     log_event_fn=lambda *a, **k: log_event(*a, **k),
+    send_webhook_fn=lambda payload: send_webhook(payload),
 )
 def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     """Live V1.5 manager: TP1 -> move SL to BE (entry), TP2 continues.
@@ -2415,7 +2420,7 @@ def main() -> None:
                 save_state(st)
                 if status0 == "OPEN_FILLED" and exits_placed_open_filled:
                     with suppress(Exception):
-                        llm_trade_judge.maybe_record_llm_pretrade_stub(st, st.get("position") or {}, trigger="EXITS_PLACED_V15")
+                        llm_trade_judge.maybe_record_llm_pretrade_judge(st, st.get("position") or {}, trigger="EXITS_PLACED_V15")
                 if baseline_log is not None:
                     log_event("BASELINE_TAKEN", **baseline_log)
 

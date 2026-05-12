@@ -142,6 +142,281 @@ class TestVerdictJournal(unittest.TestCase):
             self.assertFalse(os.path.exists(journal))
 
 
+class TestRealOpenAIMode(unittest.TestCase):
+    def _configure(self, journal, *, client=None, webhook=None, notify=True, saved=None):
+        judge.configure(
+            {
+                "SYMBOL": "BTCUSDC",
+                "LLM_TRADE_JUDGE_ENABLED": True,
+                "LLM_TRADE_JUDGE_MODE": "openai",
+                "LLM_TRADE_JUDGE_VERDICTS_FN": journal,
+                "LLM_TRADE_JUDGE_MODEL": "gpt-5.5",
+                "LLM_TRADE_JUDGE_TIMEOUT_SEC": 20,
+                "LLM_TRADE_JUDGE_MAX_RETRIES": 1,
+                "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": notify,
+            },
+            save_state_fn=(lambda st: saved.append(dict(st))) if saved is not None else None,
+            send_webhook_fn=webhook,
+            openai_client_fn=client,
+        )
+
+    def _records(self, journal):
+        with open(journal, "r", encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def test_disabled_mode_does_not_call_client_or_append(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            calls = []
+            judge.configure(
+                {
+                    "SYMBOL": "BTCUSDC",
+                    "LLM_TRADE_JUDGE_ENABLED": False,
+                    "LLM_TRADE_JUDGE_MODE": "openai",
+                    "LLM_TRADE_JUDGE_VERDICTS_FN": journal,
+                },
+                openai_client_fn=lambda **kw: calls.append(kw),
+            )
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "noop")
+            self.assertEqual(calls, [])
+            self.assertFalse(os.path.exists(journal))
+
+    def test_stub_mode_still_works(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            judge.configure(
+                {
+                    "SYMBOL": "BTCUSDC",
+                    "LLM_TRADE_JUDGE_ENABLED": True,
+                    "LLM_TRADE_JUDGE_MODE": "stub",
+                    "LLM_TRADE_JUDGE_VERDICTS_FN": journal,
+                }
+            )
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            record = self._records(journal)[0]
+            self.assertEqual(record["verdict"], "STUB_NOT_CALLED")
+
+    def test_openai_mode_calls_fake_client_once_and_appends_real_verdict(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            calls = []
+
+            def fake_client(**kwargs):
+                calls.append(kwargs)
+                return json.dumps({
+                    "verdict": "SUPPORT",
+                    "competitive_side": "WRONG",
+                    "confidence": 0.72,
+                    "setup_class": "continuation_pressure",
+                    "reason_codes": ["price_confirms_direction"],
+                    "risk_flags": ["late_after_impulse"],
+                    "summary_ua": "Погоджуюсь з ботом.",
+                })
+
+            self._configure(journal, client=fake_client, notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(calls), 1)
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "success")
+            self.assertEqual(record["model"], "gpt-5.5")
+            self.assertEqual(record["verdict"], "SUPPORT")
+            self.assertEqual(record["competitive_side"], "BOT")
+            self.assertEqual(record["evidence_pack"]["analysis_cutoff_ts"], "2026-01-01T00:00:00Z")
+
+    def test_duplicate_trade_key_does_not_call_fake_client(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            calls = []
+
+            def fake_client(**_kwargs):
+                calls.append(1)
+                return json.dumps({
+                    "verdict": "REJECT",
+                    "competitive_side": "BOT",
+                    "confidence": 0.74,
+                    "setup_class": "exhaustion",
+                    "reason_codes": [],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                })
+
+            self._configure(journal, client=fake_client, notify=False)
+            first = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            second = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(second["reason"], "duplicate_primary")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(self._records(journal)), 1)
+
+    def test_reject_and_unclear_normalize_to_llm_reject(self):
+        for verdict in ("REJECT", "UNCLEAR"):
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as td:
+                journal = os.path.join(td, "v.jsonl")
+                self._configure(
+                    journal,
+                    client=lambda **_kw: json.dumps({
+                        "verdict": verdict,
+                        "competitive_side": "BOT",
+                        "confidence": 0.5,
+                        "setup_class": "noisy_peak",
+                        "reason_codes": [],
+                        "risk_flags": [],
+                        "summary_ua": None,
+                    }),
+                    notify=False,
+                )
+                judge.maybe_record_llm_pretrade_judge({}, _pos(trade_key=f"TK_{verdict}", client_id=f"TK_{verdict}"))
+                record = self._records(journal)[0]
+                self.assertEqual(record["competitive_side"], "LLM_REJECT")
+
+    def test_invalid_json_appends_error_record_no_raise(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            self._configure(journal, client=lambda **_kw: "not-json", notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "error")
+            self.assertEqual(record["error_type"], "json_validation_error")
+            self.assertEqual(record["verdict"], "ERROR_NOT_SCORED")
+
+    def test_api_exception_appends_error_record_no_raise(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+
+            def boom(**_kwargs):
+                raise RuntimeError("api down")
+
+            self._configure(journal, client=boom, notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "error")
+            self.assertEqual(record["error_type"], "api_error")
+
+    def test_timeout_appends_error_record_no_raise(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+
+            def timeout(**_kwargs):
+                raise judge.requests.exceptions.Timeout("slow")
+
+            self._configure(journal, client=timeout, notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "error")
+            self.assertEqual(record["error_type"], "timeout")
+
+    def test_telegram_notification_sent_only_after_successful_append(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            sent = []
+            self._configure(
+                journal,
+                client=lambda **_kw: json.dumps({
+                    "verdict": "UNCLEAR",
+                    "competitive_side": "BOT",
+                    "confidence": 0.51,
+                    "setup_class": "unknown",
+                    "reason_codes": [],
+                    "risk_flags": ["late_entry"],
+                    "summary_ua": "Перевага неясна.",
+                }),
+                webhook=lambda payload: sent.append(payload),
+                notify=True,
+            )
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(sent), 1)
+            self.assertIn("LLM Trade Judge", sent[0]["text"])
+            self.assertIn("Game rule: UNCLEAR counts as reject-side.", sent[0]["text"])
+
+    def test_telegram_disabled_does_not_send(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            sent = []
+            self._configure(
+                journal,
+                client=lambda **_kw: json.dumps({
+                    "verdict": "SUPPORT",
+                    "competitive_side": "BOT",
+                    "confidence": 0.7,
+                    "setup_class": "honest_directional_flow",
+                    "reason_codes": [],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                }),
+                webhook=lambda payload: sent.append(payload),
+                notify=False,
+            )
+            judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(sent, [])
+
+    def test_append_failure_prevents_telegram_notification(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal_dir = os.path.join(td, "as_file")
+            with open(journal_dir, "w", encoding="utf-8") as fh:
+                fh.write("not a dir")
+            journal = os.path.join(journal_dir, "v.jsonl")
+            sent = []
+            self._configure(
+                journal,
+                client=lambda **_kw: json.dumps({
+                    "verdict": "SUPPORT",
+                    "competitive_side": "BOT",
+                    "confidence": 0.7,
+                    "setup_class": "honest_directional_flow",
+                    "reason_codes": [],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                }),
+                webhook=lambda payload: sent.append(payload),
+                notify=True,
+            )
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(sent, [])
+
+    def test_unknown_setup_class_becomes_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            self._configure(
+                journal,
+                client=lambda **_kw: json.dumps({
+                    "verdict": "SUPPORT",
+                    "competitive_side": "BOT",
+                    "confidence": 0.7,
+                    "setup_class": "custom_new_class",
+                    "reason_codes": [],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                }),
+                notify=False,
+            )
+            judge.maybe_record_llm_pretrade_judge({}, _pos())
+            record = self._records(journal)[0]
+            self.assertEqual(record["setup_class"], "unknown")
+            self.assertIn("unknown_setup_class:custom_new_class", record["validation_errors"])
+
+    def test_missing_api_key_records_error_without_crash(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            self._configure(journal, client=None, notify=False)
+            old_key = os.environ.pop("OPENAI_API_KEY", None)
+            try:
+                result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            finally:
+                if old_key is not None:
+                    os.environ["OPENAI_API_KEY"] = old_key
+            self.assertEqual(result["status"], "ok")
+            record = self._records(journal)[0]
+            self.assertEqual(record["error_type"], "missing_api_key")
+
+
 class TestLifecycleAndScoring(unittest.TestCase):
     def test_lifecycle_classes(self):
         self.assertEqual(judge.classify_lifecycle(False, False, True, False, "SL"), "plain_sl")
