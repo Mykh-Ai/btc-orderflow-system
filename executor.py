@@ -7,7 +7,7 @@ Design goals
 - Reads DeltaScout JSONL events from a shared log file (DELTASCOUT_LOG)
 - Single-position mode: ignores new PEAK while a position is OPEN/PENDING
 - Writes ONLY to its own state/log files (never appends to deltascout.log)
-- Keeps executor log capped to LOG_MAX_LINES (default: 200)
+- Keeps executor log capped to LOG_MAX_LINES (default: 5000)
 
 Hardening (this patch)
 - Strictly accepts only valid DeltaScout PEAK events
@@ -43,6 +43,7 @@ import executor_mod.risk_math as risk_math
 import executor_mod.trade_outcome_archive as trade_outcome_archive
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
+import executor_mod.llm_trade_judge as llm_trade_judge
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -95,7 +96,10 @@ ENV: Dict[str, Any] = {
 # outputs
 "STATE_FN": os.getenv("STATE_FN", "/data/state/executor_state.json"),
 "EXEC_LOG": os.getenv("EXEC_LOG", "/data/logs/executor.log"),
-"LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 200),
+"LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 5000),
+"LLM_TRADE_JUDGE_ENABLED": _get_bool("LLM_TRADE_JUDGE_ENABLED", False),
+"LLM_TRADE_JUDGE_VERDICTS_FN": os.getenv("LLM_TRADE_JUDGE_VERDICTS_FN", "/data/state/llm_trade_verdicts.jsonl"),
+"LLM_TRADE_JUDGE_MODE": _get_str("LLM_TRADE_JUDGE_MODE", "stub"),
 
 # safety / log reader
 "TAIL_LINES": _get_int("TAIL_LINES", 80),
@@ -872,6 +876,12 @@ exits_flow.configure(
     send_webhook_fn=lambda payload: send_webhook(payload),
     validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
     place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
+    post_exits_success_hook_fn=lambda st, pos, trigger="EXITS_PLACED_V15": llm_trade_judge.maybe_record_llm_pretrade_stub(st, pos, trigger=trigger),
+)
+llm_trade_judge.configure(
+    ENV,
+    save_state_fn=lambda st: save_state(st),
+    log_event_fn=lambda *a, **k: log_event(*a, **k),
 )
 def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     """Live V1.5 manager: TP1 -> move SL to BE (entry), TP2 continues.
@@ -2399,9 +2409,13 @@ def main() -> None:
                     pos0 = st.get("position") or {}
                     with suppress(Exception):
                         margin_guard.on_after_entry_opened(st, trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
+                    exits_placed_open_filled = False
                     if (not pos0.get("orders")) and pos0.get("prices"):
-                        exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
+                        exits_placed_open_filled = exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
                 save_state(st)
+                if status0 == "OPEN_FILLED" and exits_placed_open_filled:
+                    with suppress(Exception):
+                        llm_trade_judge.maybe_record_llm_pretrade_stub(st, st.get("position") or {}, trigger="EXITS_PLACED_V15")
                 if baseline_log is not None:
                     log_event("BASELINE_TAKEN", **baseline_log)
 

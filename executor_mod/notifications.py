@@ -17,7 +17,7 @@ def _get_int(name: str, default: int) -> int:
 
 ENV: Dict[str, Any] = {
     "EXEC_LOG": os.getenv("EXEC_LOG", "/data/logs/executor.log"),
-    "LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 200),
+    "LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 5000),
     "N8N_WEBHOOK_URL": os.getenv("N8N_WEBHOOK_URL", ""),
     "N8N_BASIC_AUTH_USER": os.getenv("N8N_BASIC_AUTH_USER", ""),
     "N8N_BASIC_AUTH_PASSWORD": os.getenv("N8N_BASIC_AUTH_PASSWORD", ""),

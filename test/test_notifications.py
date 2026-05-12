@@ -49,6 +49,12 @@ class TestNotifications(unittest.TestCase):
             self.assertEqual(len(lines), 3)
             self.assertEqual([x["i"] for x in lines], [2, 3, 4])
 
+    def test_default_log_max_lines_is_5000(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            import executor_mod.notifications as n
+            importlib.reload(n)
+            self.assertEqual(n.ENV["LOG_MAX_LINES"], 5000)
+
     def test_send_webhook_error_logs(self):
         with tempfile.TemporaryDirectory() as td:
             log_fn = os.path.join(td, "executor.log")

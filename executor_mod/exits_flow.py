@@ -15,6 +15,7 @@ log_event: Optional[Callable[..., None]] = None
 send_webhook: Optional[Callable[[dict], None]] = None
 validate_exit_plan: Optional[Callable[[str, str, float, Dict[str, float]], Dict[str, Any]]] = None
 place_exits_v15: Optional[Callable[[str, str, float, Dict[str, float]], Dict[str, Any]]] = None
+post_exits_success_hook: Optional[Callable[[dict, dict, str], Any]] = None
 
 
 def configure(
@@ -25,14 +26,16 @@ def configure(
     send_webhook_fn=lambda payload: send_webhook(payload),
     validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
     place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
+    post_exits_success_hook_fn: Optional[Callable[[dict, dict, str], Any]] = None,
 ) -> None:
-    global ENV, save_state, log_event, send_webhook, validate_exit_plan, place_exits_v15
+    global ENV, save_state, log_event, send_webhook, validate_exit_plan, place_exits_v15, post_exits_success_hook
     ENV = env
     save_state = save_state_fn
     log_event = log_event_fn
     send_webhook = send_webhook_fn
     validate_exit_plan = validate_exit_plan_fn
     place_exits_v15 = place_exits_v15_fn
+    post_exits_success_hook = post_exits_success_hook_fn
 
 
 def ensure_exits(
@@ -63,6 +66,11 @@ def ensure_exits(
         else:
             log_event("EXITS_PLACED_V15", mode="live", orders=pos["orders"])
             send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos["orders"], "prices": pos["prices"]})
+        if save_on_success and post_exits_success_hook is not None:
+            try:
+                post_exits_success_hook(st, pos, "EXITS_PLACED_V15")
+            except Exception:
+                pass
         return True
     except Exception as ee:
         if save_on_fail:
