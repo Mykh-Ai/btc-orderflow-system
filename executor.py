@@ -40,6 +40,7 @@ import executor_mod.invariants as invariants
 import executor_mod.binance_api as binance_api
 import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
+import executor_mod.trade_outcome_archive as trade_outcome_archive
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 from executor_mod.risk_math import (
@@ -599,18 +600,41 @@ def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, s
 def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None:
     """Fail-safe cleanup: free position slot so new PEAKs can be handled."""
     pos = st.get("position")
+    _p = pos or {}
+    _orders = _p.get("orders") or {}
     st["last_closed"] = {
         "ts": iso_utc(),
-        "mode": (pos or {}).get("mode"),
+        "mode": _p.get("mode"),
         "reason": reason,
-        "pos_status": (pos or {}).get("status"),
-        **fields,
+        "pos_status": _p.get("status"),
+        # close snapshot — additive whitelist enrichment (no API calls, no logic change)
+        "opened_at": _p.get("opened_at"),
+        "trade_key": _p.get("trade_key") or _p.get("client_id"),
+        "order_id": _p.get("order_id"),
+        "qty": _p.get("qty"),
+        "entry_ref": (_p.get("prices") or {}).get("entry"),
+        "entry_actual": _p.get("entry_actual"),
+        "order_id_sl": _orders.get("sl"),
+        "order_id_tp1": _orders.get("tp1"),
+        "order_id_tp2": _orders.get("tp2"),
+        "qty1": _orders.get("qty1"),
+        "qty2": _orders.get("qty2"),
+        "qty3": _orders.get("qty3"),
+        "tp1_done": bool(_p.get("tp1_done")),
+        "tp2_done": bool(_p.get("tp2_done")),
+        "sl_done": bool(_p.get("sl_done")),
+        "trail_active": bool(_p.get("trail_active")),
+        "trail_sl_price": _p.get("trail_sl_price"),
+        "prices": _p.get("prices"),
+        **fields,  # caller-supplied overrides — preserve existing semantics
     }
     st["position"] = None
 
     # unlock; avoid blocking next PEAK for no reason
     st["lock_until"] = 0.0
     save_state(st)
+    with suppress(Exception):
+        trade_outcome_archive.record_outcome(st, "_clear_position_slot", ENV.get("SYMBOL", ""))
         # Margin safety: if borrow happened but entry failed/canceled, repay here best-effort.
     with suppress(Exception):
         tk = (pos or {}).get("trade_key") or (pos or {}).get("client_id") or (pos or {}).get("order_id")
@@ -892,17 +916,39 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return False
 
     def _close_slot(reason: str) -> None:
+        _orders = pos.get("orders") or {}
         st["last_closed"] = {
             "ts": iso_utc(),
             "mode": "live",
             "reason": reason,
             "side": pos.get("side"),
             "entry": (pos.get("prices") or {}).get("entry"),
+            # close snapshot — additive whitelist enrichment (no API calls, no logic change)
+            "opened_at": pos.get("opened_at"),
+            "trade_key": pos.get("trade_key") or pos.get("client_id"),
+            "order_id": pos.get("order_id"),
+            "qty": pos.get("qty"),
+            "entry_ref": (pos.get("prices") or {}).get("entry"),
+            "entry_actual": pos.get("entry_actual"),
+            "order_id_sl": _orders.get("sl"),
+            "order_id_tp1": _orders.get("tp1"),
+            "order_id_tp2": _orders.get("tp2"),
+            "qty1": _orders.get("qty1"),
+            "qty2": _orders.get("qty2"),
+            "qty3": _orders.get("qty3"),
+            "tp1_done": bool(pos.get("tp1_done")),
+            "tp2_done": bool(pos.get("tp2_done")),
+            "sl_done": bool(pos.get("sl_done")),
+            "trail_active": bool(pos.get("trail_active")),
+            "trail_sl_price": pos.get("trail_sl_price"),
+            "prices": pos.get("prices"),
         }
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
         save_state(st)
+        with suppress(Exception):
+            trade_outcome_archive.record_outcome(st, "_close_slot", ENV.get("SYMBOL", ""))
         with suppress(Exception):
             margin_guard.on_after_position_closed(st)
 
@@ -1474,12 +1520,29 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                         if str(ENV.get("TRADE_MODE", "")).strip().lower() == "margin":
                             margin = st.get("margin", {})
                             if (margin.get("borrowed_assets") or margin.get("borrowed_by_trade")):
-                                tk = pos.get("trade_key") or margin.get("active_trade_key") or (st.get("last_closed") or {}).get("trade_key")
+                                tk = pos.get("trade_key") or margin.get("active_trade_key")
                                 with suppress(Exception):
                                     margin_guard.on_after_position_closed(st, trade_key=tk)
+                        # P5 fix: write fresh last_closed from current pos before clearing slot.
+                        # Without this, consumers see the stale last_closed from the previous trade.
+                        st["last_closed"] = {
+                            "ts": iso_utc(),
+                            "mode": pos.get("mode"),
+                            "reason": "SYNC_EXCHANGE_CLEAR",
+                            "pos_status": pos.get("status"),
+                            "trade_key": pos.get("trade_key") or pos.get("client_id"),
+                            "order_id": pos.get("order_id"),
+                            "side": pos.get("side"),
+                            "qty": pos.get("qty"),
+                            "entry_ref": (pos.get("prices") or {}).get("entry"),
+                            "entry_actual": pos.get("entry_actual"),
+                            "opened_at": pos.get("opened_at"),
+                        }
                         st["position"] = None
                         st["lock_until"] = 0.0
                         save_state(st)
+                        with suppress(Exception):
+                            trade_outcome_archive.record_outcome(st, "sync_exchange_clear", ENV.get("SYMBOL", ""))
                         return
                     elif ex_pos is None:
                         # unknown -> do nothing, but leave trace (throttled)
@@ -1509,10 +1572,38 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                           prev_status=pos.get("status"), order_id=oid,
                           status=st_o or "UNKNOWN", executedQty=exq)
                 return
+            # P4 fix: write fresh last_closed and call margin hook before clearing slot.
+            # Mirrors _clear_position_slot() contract: snapshot → clear → save → hook.
+            # Must happen while pos is still the live dict (before position=None).
+            st["last_closed"] = {
+                "ts": iso_utc(),
+                "mode": pos.get("mode"),
+                "reason": "SYNC_CONFIRMED_CANCELED",
+                "pos_status": pos.get("status"),
+                "trade_key": pos.get("trade_key") or pos.get("client_id"),
+                "order_id": pos.get("order_id"),
+                "side": pos.get("side"),
+                "qty": pos.get("qty"),
+                "entry_ref": (pos.get("prices") or {}).get("entry"),
+                "entry_actual": pos.get("entry_actual"),
+                "opened_at": pos.get("opened_at"),
+                "order_status": st_o,
+            }
+            # trade_key for hook: prefer pos, then active margin state.
+            # Never fall back to stale st["last_closed"] — that is the bug this patch fixes.
+            _p4_tk = (
+                pos.get("trade_key")
+                or pos.get("client_id")
+                or (st.get("margin") or {}).get("active_trade_key")
+            )
             log_event("SYNC_CLEAR_NO_TAGGED_CONFIRMED_CANCELED", prev_status=pos.get("status"), order_id=oid)
             st["position"] = None
             st["lock_until"] = 0.0
             save_state(st)
+            with suppress(Exception):
+                trade_outcome_archive.record_outcome(st, "sync_confirmed_canceled", ENV.get("SYMBOL", ""))
+            with suppress(Exception):
+                margin_guard.on_after_position_closed(st, trade_key=_p4_tk)
         return
 
     # We have tagged orders. If we already have a live position, reconcile exits.
