@@ -9,7 +9,8 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+import csv
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
@@ -23,6 +24,11 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_TIMEOUT_SEC": os.getenv("LLM_TRADE_JUDGE_TIMEOUT_SEC", "20"),
     "LLM_TRADE_JUDGE_MAX_RETRIES": os.getenv("LLM_TRADE_JUDGE_MAX_RETRIES", "1"),
     "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": os.getenv("LLM_TRADE_JUDGE_NOTIFY_TELEGRAM", "true"),
+    "LLM_TRADE_JUDGE_CONTEXT_ENABLED": os.getenv("LLM_TRADE_JUDGE_CONTEXT_ENABLED", "true"),
+    "LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS": os.getenv("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", "24"),
+    "LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": os.getenv("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", "5000"),
+    "LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
+    "LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
 }
 
 save_state: Optional[Callable[[dict], None]] = None
@@ -97,6 +103,55 @@ def _journal_path() -> str:
     return str(ENV.get("LLM_TRADE_JUDGE_VERDICTS_FN") or "/data/state/llm_trade_verdicts.jsonl")
 
 
+def parse_dt_safe(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = None
+        for candidate in (text, text.replace(" ", "T", 1)):
+            try:
+                dt = datetime.fromisoformat(candidate)
+                break
+            except Exception:
+                pass
+        if dt is None:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except Exception:
+                    pass
+        if dt is None:
+            return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _event_public_fields(evt: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key in ("ts", "kind", "delta", "vol", "imb", "price", "vwap", "poc", "source", "action"):
+        if key in evt:
+            out[key] = evt.get(key)
+    return out
+
+
 def get_trade_key(pos: Dict[str, Any]) -> Optional[str]:
     if not isinstance(pos, dict):
         return None
@@ -135,6 +190,360 @@ def choose_analysis_cutoff(pos: Dict[str, Any]) -> Dict[str, Any]:
         "peak_ts": None,
         "analysis_cutoff_ts": None,
         "cutoff_source": "missing",
+        "data_gaps": data_gaps,
+    }
+
+
+def read_deltascout_events_until_cutoff(
+    path: str,
+    cutoff_ts: Any,
+    lookback_hours: Any,
+    max_events: Any,
+) -> Dict[str, Any]:
+    cutoff = parse_dt_safe(cutoff_ts)
+    data_gaps: List[str] = []
+    if cutoff is None:
+        return {
+            "events": [],
+            "data_gaps": ["missing_or_invalid_cutoff_ts"],
+            "source_path": path,
+            "events_total_read": 0,
+            "events_used": 0,
+        }
+    if not path or not os.path.exists(path):
+        return {
+            "events": [],
+            "data_gaps": ["deltascout_log_missing"],
+            "source_path": path,
+            "events_total_read": 0,
+            "events_used": 0,
+        }
+
+    lookback = timedelta(hours=max(0.0, _as_float(lookback_hours, 24.0)))
+    start = cutoff - lookback
+    cap = max(1, _as_int(max_events, 5000))
+    events: List[Dict[str, Any]] = []
+    total = 0
+    malformed = 0
+    skipped_bad_ts = 0
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                total += 1
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    malformed += 1
+                    continue
+                if not isinstance(evt, dict) or evt.get("action") != "PEAK":
+                    continue
+                event_dt = parse_dt_safe(evt.get("ts"))
+                if event_dt is None:
+                    skipped_bad_ts += 1
+                    continue
+                if start <= event_dt <= cutoff:
+                    events.append(_event_public_fields(evt))
+                    if len(events) > cap:
+                        events.pop(0)
+    except Exception as exc:
+        return {
+            "events": [],
+            "data_gaps": [f"deltascout_log_read_error:{type(exc).__name__}"],
+            "source_path": path,
+            "events_total_read": total,
+            "events_used": 0,
+        }
+    if malformed:
+        data_gaps.append(f"deltascout_malformed_json:{malformed}")
+    if skipped_bad_ts:
+        data_gaps.append(f"deltascout_bad_ts:{skipped_bad_ts}")
+    return {
+        "events": events,
+        "data_gaps": data_gaps,
+        "source_path": path,
+        "events_total_read": total,
+        "events_used": len(events),
+    }
+
+
+def _kind_is_long(kind: Any) -> bool:
+    return str(kind or "").strip().lower() == "long"
+
+
+def _kind_is_short(kind: Any) -> bool:
+    return str(kind or "").strip().lower() == "short"
+
+
+def _avg(values: List[float]) -> Optional[float]:
+    vals = [float(v) for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _max_abs_value(values: List[float]) -> Optional[float]:
+    vals = [float(v) for v in values if v is not None]
+    if not vals:
+        return None
+    return max(vals, key=lambda x: abs(x))
+
+
+def build_peak_context_until_cutoff(
+    events: List[Dict[str, Any]],
+    current_direction: Any,
+    current_price: Any,
+    current_peak: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    data_gaps: List[str] = []
+    safe_events = [e for e in (events or []) if isinstance(e, dict)]
+    safe_events.sort(key=lambda e: parse_dt_safe(e.get("ts")) or datetime.min.replace(tzinfo=timezone.utc))
+    longs = [e for e in safe_events if _kind_is_long(e.get("kind"))]
+    shorts = [e for e in safe_events if _kind_is_short(e.get("kind"))]
+    long_deltas = [d for d in (_to_float(e.get("delta")) for e in longs) if d is not None]
+    short_deltas = [d for d in (_to_float(e.get("delta")) for e in shorts) if d is not None]
+
+    current = current_peak if isinstance(current_peak, dict) else {}
+    current_dt = parse_dt_safe(current.get("ts")) or (parse_dt_safe(safe_events[-1].get("ts")) if safe_events else None)
+    direction = str(current_direction or "").strip().lower()
+    recent_start = current_dt - timedelta(minutes=60) if current_dt is not None else None
+    recent = []
+    if recent_start is not None:
+        recent = [e for e in safe_events if (parse_dt_safe(e.get("ts")) or datetime.min.replace(tzinfo=timezone.utc)) >= recent_start]
+    same_recent = [e for e in recent if str(e.get("kind") or "").strip().lower() == direction]
+    opp_recent = [e for e in recent if str(e.get("kind") or "").strip().lower() in ("long", "short") and str(e.get("kind") or "").strip().lower() != direction]
+
+    price = _to_float(current_price)
+    vwap = _to_float(current.get("vwap"))
+    poc = _to_float(current.get("poc"))
+    if vwap is None:
+        data_gaps.append("missing_current_peak_vwap")
+    if poc is None:
+        data_gaps.append("missing_current_peak_poc")
+
+    price_vs_vwap = (price - vwap) if price is not None and vwap is not None else None
+    price_vs_poc = (price - poc) if price is not None and poc is not None else None
+    current_delta = _to_float(current.get("delta"))
+    all_abs_deltas = sorted(abs(d) for d in [d for d in (_to_float(e.get("delta")) for e in safe_events) if d is not None])
+    percentile = None
+    if current_delta is not None and all_abs_deltas:
+        le_count = sum(1 for d in all_abs_deltas if d <= abs(current_delta))
+        percentile = round(100.0 * le_count / len(all_abs_deltas), 3)
+    elif current_delta is None:
+        data_gaps.append("missing_current_peak_delta")
+
+    return {
+        "count_total": len(safe_events),
+        "count_long": len(longs),
+        "count_short": len(shorts),
+        "last_peak": safe_events[-1] if safe_events else None,
+        "last_5_peaks": safe_events[-5:],
+        "max_delta_long": _max_abs_value(long_deltas),
+        "max_delta_short": _max_abs_value(short_deltas),
+        "avg_delta_long": _avg(long_deltas),
+        "avg_delta_short": _avg(short_deltas),
+        "recent_same_direction_count_60m": len(same_recent),
+        "recent_opposite_direction_count_60m": len(opp_recent),
+        "current_peak": _event_public_fields(current),
+        "current_peak_delta_percentile_24h": percentile,
+        "price_vs_vwap": price_vs_vwap,
+        "price_vs_vwap_pct": (price_vs_vwap / vwap * 100.0) if price_vs_vwap is not None and vwap else None,
+        "price_vs_poc": price_vs_poc,
+        "price_vs_poc_pct": (price_vs_poc / poc * 100.0) if price_vs_poc is not None and poc else None,
+        "data_gaps": data_gaps,
+    }
+
+
+AGG_NUMERIC_FIELDS = ("Trades", "TotalQty", "AvgSize", "BuyQty", "SellQty", "AvgPrice", "ClosePrice", "HiPrice", "LowPrice")
+
+
+def read_agg_rows_until_cutoff(path: str, cutoff_ts: Any, lookback_hours: Any) -> Dict[str, Any]:
+    cutoff = parse_dt_safe(cutoff_ts)
+    data_gaps: List[str] = []
+    if cutoff is None:
+        return {"rows": [], "data_gaps": ["missing_or_invalid_cutoff_ts"], "source_path": path, "rows_used": 0}
+    if not path or not os.path.exists(path):
+        return {"rows": [], "data_gaps": ["agg_csv_missing"], "source_path": path, "rows_used": 0}
+    start = cutoff - timedelta(hours=max(0.0, _as_float(lookback_hours, 24.0)))
+    rows: List[Dict[str, Any]] = []
+    malformed = 0
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for raw in reader:
+                row_dt = parse_dt_safe(raw.get("Timestamp"))
+                if row_dt is None:
+                    malformed += 1
+                    continue
+                if not (start <= row_dt <= cutoff):
+                    continue
+                row: Dict[str, Any] = {"Timestamp": raw.get("Timestamp")}
+                for key in AGG_NUMERIC_FIELDS:
+                    row[key] = _to_float(raw.get(key))
+                rows.append(row)
+    except Exception as exc:
+        return {"rows": [], "data_gaps": [f"agg_csv_read_error:{type(exc).__name__}"], "source_path": path, "rows_used": 0}
+    if malformed:
+        data_gaps.append(f"agg_csv_bad_rows:{malformed}")
+    rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    return {"rows": rows, "data_gaps": data_gaps, "source_path": path, "rows_used": len(rows)}
+
+
+def _row_close(row: Dict[str, Any]) -> Optional[float]:
+    return _to_float(row.get("ClosePrice")) or _to_float(row.get("AvgPrice"))
+
+
+def _return_pct_for_window(rows: List[Dict[str, Any]], minutes: int) -> Optional[float]:
+    if not rows:
+        return None
+    last_dt = parse_dt_safe(rows[-1].get("Timestamp"))
+    last_close = _row_close(rows[-1])
+    if last_dt is None or last_close in (None, 0):
+        return None
+    target = last_dt - timedelta(minutes=minutes)
+    base = None
+    for row in rows:
+        row_dt = parse_dt_safe(row.get("Timestamp"))
+        if row_dt is not None and row_dt <= target:
+            base = row
+        elif row_dt is not None and row_dt > target:
+            if base is None:
+                base = row
+            break
+    base_close = _row_close(base or rows[0])
+    if base_close in (None, 0):
+        return None
+    return (last_close - base_close) / base_close * 100.0
+
+
+def _rows_since(rows: List[Dict[str, Any]], minutes: int) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    last_dt = parse_dt_safe(rows[-1].get("Timestamp"))
+    if last_dt is None:
+        return rows
+    start = last_dt - timedelta(minutes=minutes)
+    return [r for r in rows if (parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc)) >= start]
+
+
+def _volatility_60m(rows: List[Dict[str, Any]]) -> Optional[float]:
+    window = _rows_since(rows, 60)
+    returns: List[float] = []
+    prev = None
+    for row in window:
+        close = _row_close(row)
+        if close is None or close == 0:
+            continue
+        if prev not in (None, 0):
+            returns.append((close - prev) / prev * 100.0)
+        prev = close
+    if len(returns) < 2:
+        return None
+    mean = sum(returns) / len(returns)
+    variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+    return variance ** 0.5
+
+
+def build_agg_context_until_cutoff(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    data_gaps: List[str] = []
+    safe_rows = [r for r in (rows or []) if isinstance(r, dict)]
+    safe_rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    if not safe_rows:
+        return {"rows_used": 0, "data_gaps": ["agg_no_rows_until_cutoff"]}
+    last_close = _row_close(safe_rows[-1])
+    w60 = _rows_since(safe_rows, 60)
+    w240 = _rows_since(safe_rows, 240)
+    buy60 = sum((_to_float(r.get("BuyQty")) or 0.0) for r in w60)
+    sell60 = sum((_to_float(r.get("SellQty")) or 0.0) for r in w60)
+    delta60 = buy60 - sell60
+    total60 = buy60 + sell60
+    cum_delta = sum(((_to_float(r.get("BuyQty")) or 0.0) - (_to_float(r.get("SellQty")) or 0.0)) for r in safe_rows)
+    weighted_sum = sum(((_to_float(r.get("AvgPrice")) or 0.0) * (_to_float(r.get("TotalQty")) or 0.0)) for r in safe_rows)
+    qty_sum = sum((_to_float(r.get("TotalQty")) or 0.0) for r in safe_rows)
+    rolling_vwap = weighted_sum / qty_sum if qty_sum > 0 else None
+    if rolling_vwap is None:
+        data_gaps.append("rolling_vwap_approx_unavailable")
+    return {
+        "rows_used": len(safe_rows),
+        "last_close": last_close,
+        "return_15m_pct": _return_pct_for_window(safe_rows, 15),
+        "return_60m_pct": _return_pct_for_window(safe_rows, 60),
+        "return_240m_pct": _return_pct_for_window(safe_rows, 240),
+        "volatility_60m": _volatility_60m(safe_rows),
+        "high_60m": max((_to_float(r.get("HiPrice")) or _row_close(r) or float("-inf")) for r in w60) if w60 else None,
+        "low_60m": min((_to_float(r.get("LowPrice")) or _row_close(r) or float("inf")) for r in w60) if w60 else None,
+        "high_240m": max((_to_float(r.get("HiPrice")) or _row_close(r) or float("-inf")) for r in w240) if w240 else None,
+        "low_240m": min((_to_float(r.get("LowPrice")) or _row_close(r) or float("inf")) for r in w240) if w240 else None,
+        "buy_qty_sum_60m": buy60,
+        "sell_qty_sum_60m": sell60,
+        "buy_sell_delta_60m": delta60,
+        "buy_sell_imbalance_60m": (delta60 / total60) if total60 > 0 else None,
+        "cumulative_delta_24h_approx": cum_delta,
+        "rolling_vwap_approx": rolling_vwap,
+        "price_vs_rolling_vwap_pct": ((last_close - rolling_vwap) / rolling_vwap * 100.0) if last_close is not None and rolling_vwap else None,
+        "data_gaps": data_gaps,
+    }
+
+
+def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = env if isinstance(env, dict) else ENV
+    if not _as_bool(cfg.get("LLM_TRADE_JUDGE_CONTEXT_ENABLED", True), True):
+        return {"enabled": False, "data_gaps": ["context_disabled"]}
+
+    cutoff_ts = evidence_pack.get("analysis_cutoff_ts")
+    lookback_hours = cfg.get("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", 24)
+    max_events = cfg.get("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", 5000)
+    deltascout_path = (
+        cfg.get("LLM_TRADE_JUDGE_DELTASCOUT_LOG")
+        or cfg.get("DELTASCOUT_LOG")
+        or os.getenv("DELTASCOUT_LOG")
+        or "/data/logs/deltascout.log"
+    )
+    agg_path = (
+        cfg.get("LLM_TRADE_JUDGE_AGG_CSV")
+        or cfg.get("AGG_CSV")
+        or os.getenv("AGG_CSV")
+        or "/data/feed/aggregated.csv"
+    )
+    src_evt = evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {}
+    current_price = (
+        src_evt.get("price")
+        if src_evt.get("price") is not None
+        else src_evt.get("price_usdt")
+        if src_evt.get("price_usdt") is not None
+        else evidence_pack.get("entry_actual")
+        if evidence_pack.get("entry_actual") is not None
+        else evidence_pack.get("entry")
+    )
+
+    data_gaps: List[str] = []
+    delta_result = read_deltascout_events_until_cutoff(deltascout_path, cutoff_ts, lookback_hours, max_events)
+    peak_context = build_peak_context_until_cutoff(
+        delta_result.get("events") or [],
+        evidence_pack.get("direction"),
+        current_price,
+        current_peak=src_evt,
+    )
+    agg_result = read_agg_rows_until_cutoff(agg_path, cutoff_ts, lookback_hours)
+    agg_context = build_agg_context_until_cutoff(agg_result.get("rows") or [])
+
+    for part in (delta_result, peak_context, agg_result, agg_context):
+        for gap in part.get("data_gaps") or []:
+            if gap not in data_gaps:
+                data_gaps.append(gap)
+
+    return {
+        "enabled": True,
+        "cutoff_ts": cutoff_ts,
+        "lookback_hours": _as_float(lookback_hours, 24.0),
+        "deltascout": {
+            "source_path": delta_result.get("source_path"),
+            "events_total_read": delta_result.get("events_total_read"),
+            "events_used": delta_result.get("events_used"),
+            "peak_context": peak_context,
+        },
+        "aggregated": {
+            "source_path": agg_result.get("source_path"),
+            "rows_used": agg_result.get("rows_used"),
+            "context": agg_context,
+        },
         "data_gaps": data_gaps,
     }
 
@@ -197,6 +606,13 @@ def build_pretrade_evidence_pack(pos: Dict[str, Any], st: Dict[str, Any], trigge
     if "price_usdt" in src_evt:
         pack["src_evt_price_usdt"] = src_evt.get("price_usdt")
     _add_required_data_gaps(pack)
+    try:
+        pack["market_context"] = build_market_context_until_cutoff(pack)
+    except Exception as exc:
+        pack["market_context"] = {
+            "enabled": True,
+            "data_gaps": [f"market_context_error:{type(exc).__name__}"],
+        }
     return pack
 
 
@@ -336,12 +752,16 @@ def build_llm_trade_judge_prompt(evidence_pack: Dict[str, Any]) -> str:
         "You are LLM Trade Judge for an automated Binance execution engine.\n"
         "Judge only the trade signal quality at entry time.\n"
         "You only see information available until analysis_cutoff_ts.\n"
+        "The evidence pack includes src_evt/current PEAK, market_context.deltascout, and market_context.aggregated.\n"
+        "All market_context records are intended to be pre-cutoff only; do not use or infer data after analysis_cutoff_ts.\n"
         "Do not infer future outcome. Do not mention whether the trade won or lost.\n"
         "The LLM is advisory only and must not suggest changing live orders.\n"
         "Return only JSON, no markdown.\n"
         "Allowed verdict values: SUPPORT, REJECT, UNCLEAR.\n"
         "SUPPORT means the bot side is favored. REJECT means reject the bot trade. "
-        "UNCLEAR counts as reject-side in the game, but keep verdict UNCLEAR if edge is not clear.\n"
+        "UNCLEAR counts as reject-side in the game. If market_context is sufficient and the signal is weak or bad, use REJECT. "
+        "Use UNCLEAR only when the edge still cannot be assessed after reading market_context.\n"
+        "If direction conflicts with VWAP, rolling_vwap_approx, or orderflow/imbalance context, reflect it in reason_codes or risk_flags.\n"
         "Allowed setup_class values: continuation_pressure, reversal_onset, reversal_confirmation, "
         "exhaustion, trap_false_break, absorption_like, honest_directional_flow, noisy_peak, unknown.\n"
         "Evidence pack follows:\n"

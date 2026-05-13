@@ -37,7 +37,11 @@ def _pos(**overrides):
 
 class TestCutoffAndEvidence(unittest.TestCase):
     def setUp(self):
-        judge.configure({"SYMBOL": "BTCUSDC", "LLM_TRADE_JUDGE_ENABLED": False})
+        judge.configure({
+            "SYMBOL": "BTCUSDC",
+            "LLM_TRADE_JUDGE_ENABLED": False,
+            "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
+        })
 
     def test_choose_analysis_cutoff_uses_src_evt_ts(self):
         cutoff = judge.choose_analysis_cutoff(_pos())
@@ -79,6 +83,183 @@ class TestCutoffAndEvidence(unittest.TestCase):
         self.assertEqual(pack["analysis_cutoff_ts"], "2026-01-01T00:00:00Z")
         self.assertEqual(pack["cutoff_source"], "position.src_evt.ts")
         self.assertIn("baseline", pack)
+        self.assertEqual(pack["market_context"]["enabled"], False)
+        self.assertIn("context_disabled", pack["market_context"]["data_gaps"])
+
+    def test_build_pretrade_evidence_pack_preserves_raw_peak_fields(self):
+        src_evt = {
+            "ts": "2026-01-01T00:00:00Z",
+            "kind": "short",
+            "source": "deltascout",
+            "action": "PEAK",
+            "delta": -420.5,
+            "vol": 88.1,
+            "imb": -0.63,
+            "price": 95010.0,
+            "vwap": 94980.0,
+            "poc": 94950.0,
+            "price_usdt": 95010.0,
+        }
+        pack = judge.build_pretrade_evidence_pack(_pos(src_evt=src_evt, side="SHORT"), {}, "EXITS_PLACED_V15")
+        for key in ("source", "action", "delta", "vol", "imb", "price", "vwap", "poc"):
+            self.assertEqual(pack["src_evt"][key], src_evt[key])
+
+
+class TestMarketContextUntilCutoff(unittest.TestCase):
+    def _write_deltascout_log(self, path):
+        lines = [
+            json.dumps({"ts": "2025-12-30T23:00:00Z", "action": "PEAK", "kind": "long", "delta": 5, "price": 94800}),
+            "not-json",
+            json.dumps({"ts": "2025-12-31T23:15:00Z", "action": "INFO", "kind": "long", "delta": 7, "price": 94850}),
+            json.dumps({"ts": "2025-12-31T23:30:00Z", "action": "PEAK", "kind": "long", "delta": 10, "vol": 20, "imb": 0.2, "price": 94900, "vwap": 94880, "poc": 94860, "source": "ds"}),
+            json.dumps({"ts": "2025-12-31T23:50:00Z", "action": "PEAK", "kind": "short", "delta": -30, "vol": 40, "imb": -0.4, "price": 95020, "vwap": 94990, "poc": 94970, "source": "ds"}),
+            json.dumps({"ts": "2026-01-01T00:00:00Z", "action": "PEAK", "kind": "long", "delta": 50, "vol": 60, "imb": 0.6, "price": 95000, "vwap": 94970, "poc": 94940, "source": "ds"}),
+            json.dumps({"ts": "2026-01-01T00:01:00Z", "action": "PEAK", "kind": "short", "delta": -99, "price": 95100}),
+        ]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+    def _write_agg_csv(self, path):
+        rows = [
+            "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice",
+            "2025-12-31T19:59:00Z,1,10,10,5,5,94000,94000,94010,93990",
+            "2025-12-31T20:00:00Z,1,10,10,6,4,94100,94100,94110,94090",
+            "2025-12-31T23:00:00Z,1,20,20,12,8,94800,94800,94850,94750",
+            "2025-12-31T23:45:00Z,1,30,30,20,10,94900,94900,94950,94850",
+            "2026-01-01T00:00:00Z,1,40,40,30,10,95000,95000,95050,94950",
+            "2026-01-01T00:01:00Z,1,50,50,0,50,96000,96000,96050,95950",
+        ]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(rows) + "\n")
+
+    def test_read_deltascout_events_until_cutoff_filters_future_old_malformed_and_non_peak(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "deltascout.log")
+            self._write_deltascout_log(path)
+            result = judge.read_deltascout_events_until_cutoff(path, "2026-01-01T00:00:00Z", 24, 5000)
+            self.assertEqual(result["events_total_read"], 7)
+            self.assertEqual(result["events_used"], 3)
+            self.assertIn("deltascout_malformed_json:1", result["data_gaps"])
+            self.assertTrue(all(evt["action"] == "PEAK" for evt in result["events"]))
+            self.assertTrue(all(evt["ts"] <= "2026-01-01T00:00:00Z" for evt in result["events"]))
+            self.assertEqual(result["events"][-1]["delta"], 50)
+
+    def test_read_deltascout_missing_file_no_crash(self):
+        result = judge.read_deltascout_events_until_cutoff("missing.log", "2026-01-01T00:00:00Z", 24, 5000)
+        self.assertEqual(result["events"], [])
+        self.assertIn("deltascout_log_missing", result["data_gaps"])
+
+    def test_build_peak_context_counts_price_location_and_recent_direction(self):
+        events = [
+            {"ts": "2025-12-31T23:20:00Z", "action": "PEAK", "kind": "long", "delta": 10, "price": 94900, "vwap": 94880, "poc": 94870},
+            {"ts": "2025-12-31T23:40:00Z", "action": "PEAK", "kind": "short", "delta": -30, "price": 95020, "vwap": 94990, "poc": 94960},
+            {"ts": "2026-01-01T00:00:00Z", "action": "PEAK", "kind": "long", "delta": 50, "price": 95000, "vwap": 94970, "poc": 94940},
+        ]
+        ctx = judge.build_peak_context_until_cutoff(events, "long", 95000, current_peak=events[-1])
+        self.assertEqual(ctx["count_long"], 2)
+        self.assertEqual(ctx["count_short"], 1)
+        self.assertEqual(ctx["recent_same_direction_count_60m"], 2)
+        self.assertEqual(ctx["recent_opposite_direction_count_60m"], 1)
+        self.assertEqual(ctx["price_vs_vwap"], 30)
+        self.assertEqual(ctx["price_vs_poc"], 60)
+        self.assertEqual(ctx["current_peak_delta_percentile_24h"], 100.0)
+
+    def test_build_peak_context_adds_gaps_when_vwap_or_poc_missing(self):
+        ctx = judge.build_peak_context_until_cutoff(
+            [{"ts": "2026-01-01T00:00:00Z", "action": "PEAK", "kind": "long", "delta": 1}],
+            "long",
+            95000,
+            current_peak={"ts": "2026-01-01T00:00:00Z", "kind": "long", "delta": 1},
+        )
+        self.assertIn("missing_current_peak_vwap", ctx["data_gaps"])
+        self.assertIn("missing_current_peak_poc", ctx["data_gaps"])
+
+    def test_read_agg_rows_until_cutoff_ignores_future_and_parses_schema(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "aggregated.csv")
+            self._write_agg_csv(path)
+            result = judge.read_agg_rows_until_cutoff(path, "2026-01-01T00:00:00Z", 4)
+            self.assertEqual(result["rows_used"], 4)
+            self.assertEqual(result["rows"][-1]["Timestamp"], "2026-01-01T00:00:00Z")
+            self.assertEqual(result["rows"][-1]["ClosePrice"], 95000.0)
+
+    def test_read_agg_missing_file_no_crash(self):
+        result = judge.read_agg_rows_until_cutoff("missing.csv", "2026-01-01T00:00:00Z", 24)
+        self.assertEqual(result["rows"], [])
+        self.assertIn("agg_csv_missing", result["data_gaps"])
+
+    def test_build_agg_context_computes_returns_orderflow_and_rolling_vwap_approx(self):
+        rows = [
+            {"Timestamp": "2025-12-31T20:00:00Z", "TotalQty": 10.0, "BuyQty": 6.0, "SellQty": 4.0, "AvgPrice": 94100.0, "ClosePrice": 94100.0, "HiPrice": 94110.0, "LowPrice": 94090.0},
+            {"Timestamp": "2025-12-31T23:00:00Z", "TotalQty": 20.0, "BuyQty": 12.0, "SellQty": 8.0, "AvgPrice": 94800.0, "ClosePrice": 94800.0, "HiPrice": 94850.0, "LowPrice": 94750.0},
+            {"Timestamp": "2025-12-31T23:45:00Z", "TotalQty": 30.0, "BuyQty": 20.0, "SellQty": 10.0, "AvgPrice": 94900.0, "ClosePrice": 94900.0, "HiPrice": 94950.0, "LowPrice": 94850.0},
+            {"Timestamp": "2026-01-01T00:00:00Z", "TotalQty": 40.0, "BuyQty": 30.0, "SellQty": 10.0, "AvgPrice": 95000.0, "ClosePrice": 95000.0, "HiPrice": 95050.0, "LowPrice": 94950.0},
+        ]
+        ctx = judge.build_agg_context_until_cutoff(rows)
+        self.assertEqual(ctx["rows_used"], 4)
+        self.assertIsNotNone(ctx["return_15m_pct"])
+        self.assertIsNotNone(ctx["return_60m_pct"])
+        self.assertIsNotNone(ctx["return_240m_pct"])
+        self.assertEqual(ctx["buy_sell_delta_60m"], 34.0)
+        self.assertAlmostEqual(ctx["buy_sell_imbalance_60m"], 34.0 / 90.0)
+        self.assertIn("rolling_vwap_approx", ctx)
+        self.assertFalse(any("poc" in key.lower() for key in ctx.keys()))
+
+    def test_build_market_context_uses_cutoff_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            delta_path = os.path.join(td, "deltascout.log")
+            agg_path = os.path.join(td, "aggregated.csv")
+            self._write_deltascout_log(delta_path)
+            self._write_agg_csv(agg_path)
+            pack = {
+                "analysis_cutoff_ts": "2026-01-01T00:00:00Z",
+                "direction": "long",
+                "entry": 95000.0,
+                "entry_actual": 95000.0,
+                "src_evt": {"ts": "2026-01-01T00:00:00Z", "kind": "long", "delta": 50, "price": 95000, "vwap": 94970, "poc": 94940},
+            }
+            ctx = judge.build_market_context_until_cutoff(
+                pack,
+                {
+                    "LLM_TRADE_JUDGE_CONTEXT_ENABLED": True,
+                    "LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS": 24,
+                    "LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": 5000,
+                    "LLM_TRADE_JUDGE_DELTASCOUT_LOG": delta_path,
+                    "LLM_TRADE_JUDGE_AGG_CSV": agg_path,
+                },
+            )
+            self.assertTrue(ctx["enabled"])
+            self.assertEqual(ctx["cutoff_ts"], "2026-01-01T00:00:00Z")
+            self.assertEqual(ctx["deltascout"]["events_used"], 3)
+            self.assertEqual(ctx["aggregated"]["rows_used"], 5)
+            disabled = judge.build_market_context_until_cutoff(pack, {"LLM_TRADE_JUDGE_CONTEXT_ENABLED": False})
+            self.assertFalse(disabled["enabled"])
+            self.assertIn("context_disabled", disabled["data_gaps"])
+
+    def test_build_market_context_missing_files_adds_gaps(self):
+        pack = {
+            "analysis_cutoff_ts": "2026-01-01T00:00:00Z",
+            "direction": "long",
+            "entry": 95000.0,
+            "src_evt": {"ts": "2026-01-01T00:00:00Z", "kind": "long", "delta": 1},
+        }
+        ctx = judge.build_market_context_until_cutoff(
+            pack,
+            {
+                "LLM_TRADE_JUDGE_CONTEXT_ENABLED": True,
+                "LLM_TRADE_JUDGE_DELTASCOUT_LOG": "missing.log",
+                "LLM_TRADE_JUDGE_AGG_CSV": "missing.csv",
+            },
+        )
+        self.assertIn("deltascout_log_missing", ctx["data_gaps"])
+        self.assertIn("agg_csv_missing", ctx["data_gaps"])
+        self.assertTrue(ctx["enabled"])
+
+    def test_prompt_mentions_market_context_and_no_hindsight(self):
+        prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
+        self.assertIn("market_context.deltascout", prompt)
+        self.assertIn("Do not infer future outcome", prompt)
+        self.assertIn("use REJECT", prompt)
 
 
 class TestVerdictJournal(unittest.TestCase):
@@ -154,6 +335,7 @@ class TestRealOpenAIMode(unittest.TestCase):
                 "LLM_TRADE_JUDGE_TIMEOUT_SEC": 20,
                 "LLM_TRADE_JUDGE_MAX_RETRIES": 1,
                 "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": notify,
+                "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
             },
             save_state_fn=(lambda st: saved.append(dict(st))) if saved is not None else None,
             send_webhook_fn=webhook,

@@ -104,6 +104,11 @@ ENV: Dict[str, Any] = {
 "LLM_TRADE_JUDGE_TIMEOUT_SEC": _get_float("LLM_TRADE_JUDGE_TIMEOUT_SEC", 20.0),
 "LLM_TRADE_JUDGE_MAX_RETRIES": _get_int("LLM_TRADE_JUDGE_MAX_RETRIES", 1),
 "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": _get_bool("LLM_TRADE_JUDGE_NOTIFY_TELEGRAM", True),
+"LLM_TRADE_JUDGE_CONTEXT_ENABLED": _get_bool("LLM_TRADE_JUDGE_CONTEXT_ENABLED", True),
+"LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS": _get_float("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", 24.0),
+"LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": _get_int("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", 5000),
+"LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
+"LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
 
 # safety / log reader
 "TAIL_LINES": _get_int("TAIL_LINES", 80),
@@ -2374,6 +2379,14 @@ def main() -> None:
                     "src_evt": {
                         "ts": evt.get("ts"),
                         "kind": kind,
+                        "source": evt.get("source"),
+                        "action": evt.get("action"),
+                        "delta": evt.get("delta"),
+                        "vol": evt.get("vol"),
+                        "imb": evt.get("imb"),
+                        "price": evt.get("price"),
+                        "vwap": evt.get("vwap"),
+                        "poc": evt.get("poc"),
                         "price_usdt": close_price_usdt,
                         "entry_usdt": entry_usdt,
                         "sl_usdt": sl_usdt,
