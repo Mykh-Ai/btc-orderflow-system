@@ -599,12 +599,26 @@ def _send_telegram_notification(record: Dict[str, Any]) -> Dict[str, Any]:
     if send_webhook is None:
         return {"status": "noop", "reason": "no_webhook_sender"}
     try:
+        evidence = record.get("evidence_pack") if isinstance(record.get("evidence_pack"), dict) else {}
+        text = _telegram_text(record)
         send_webhook({
-            "event": "LLM_TRADE_JUDGE_TELEGRAM",
-            "text": _telegram_text(record),
+            "event": "LLM_TRADE_JUDGE_VERDICT",
+            "type": "LLM_TRADE_JUDGE_VERDICT",
+            "mode": record.get("mode") or evidence.get("mode") or "live",
+            "symbol": evidence.get("symbol") or "",
             "trade_key": record.get("trade_key"),
             "llm_call_status": record.get("llm_call_status"),
             "verdict": record.get("verdict"),
+            "competitive_side": record.get("competitive_side"),
+            "confidence": record.get("confidence"),
+            "setup_class": record.get("setup_class"),
+            "summary_ua": record.get("summary_ua"),
+            "risk_flags": record.get("risk_flags") if isinstance(record.get("risk_flags"), list) else [],
+            "cutoff": evidence.get("analysis_cutoff_ts"),
+            "cutoff_source": evidence.get("cutoff_source"),
+            "text": text,
+            "message": text,
+            "telegram_text": text,
         })
         return {"status": "ok"}
     except Exception as exc:

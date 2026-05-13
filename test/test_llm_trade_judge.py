@@ -332,8 +332,45 @@ class TestRealOpenAIMode(unittest.TestCase):
             result = judge.maybe_record_llm_pretrade_judge({}, _pos())
             self.assertEqual(result["status"], "ok")
             self.assertEqual(len(sent), 1)
-            self.assertIn("LLM Trade Judge", sent[0]["text"])
-            self.assertIn("Game rule: UNCLEAR counts as reject-side.", sent[0]["text"])
+            payload = sent[0]
+            self.assertEqual(payload["event"], "LLM_TRADE_JUDGE_VERDICT")
+            self.assertEqual(payload["type"], "LLM_TRADE_JUDGE_VERDICT")
+            self.assertEqual(payload["symbol"], "BTCUSDC")
+            self.assertEqual(payload["mode"], "live")
+            self.assertEqual(payload["verdict"], "UNCLEAR")
+            self.assertEqual(payload["competitive_side"], "LLM_REJECT")
+            self.assertEqual(payload["confidence"], 0.51)
+            self.assertEqual(payload["setup_class"], "unknown")
+            self.assertEqual(payload["cutoff"], "2026-01-01T00:00:00Z")
+            self.assertEqual(payload["cutoff_source"], "position.src_evt.ts")
+            self.assertIn("message", payload)
+            self.assertIn("telegram_text", payload)
+            self.assertEqual(payload["message"], payload["text"])
+            self.assertEqual(payload["telegram_text"], payload["text"])
+            self.assertIn("LLM Trade Judge", payload["text"])
+            self.assertIn("Game rule: UNCLEAR counts as reject-side.", payload["text"])
+
+    def test_error_notification_payload_contains_execution_not_affected(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            sent = []
+
+            def boom(**_kwargs):
+                raise RuntimeError("api down")
+
+            self._configure(journal, client=boom, webhook=lambda payload: sent.append(payload), notify=True)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(sent), 1)
+            payload = sent[0]
+            self.assertEqual(payload["event"], "LLM_TRADE_JUDGE_VERDICT")
+            self.assertEqual(payload["type"], "LLM_TRADE_JUDGE_VERDICT")
+            self.assertEqual(payload["symbol"], "BTCUSDC")
+            self.assertEqual(payload["llm_call_status"], "error")
+            self.assertEqual(payload["verdict"], "ERROR_NOT_SCORED")
+            self.assertIn("Execution was not affected.", payload["text"])
+            self.assertEqual(payload["message"], payload["text"])
+            self.assertEqual(payload["telegram_text"], payload["text"])
 
     def test_telegram_disabled_does_not_send(self):
         with tempfile.TemporaryDirectory() as td:
