@@ -41,13 +41,32 @@ class TestCutoffAndEvidence(unittest.TestCase):
             "SYMBOL": "BTCUSDC",
             "LLM_TRADE_JUDGE_ENABLED": False,
             "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
+            "LLM_TRADE_JUDGE_FEED_TIMEZONE": "Europe/Bratislava",
         })
+
+    def test_parse_dt_safe_aware_iso_and_z(self):
+        self.assertEqual(judge.isoformat_z(judge.parse_dt_safe("2026-05-15T02:52:00+00:00")), "2026-05-15T02:52:00Z")
+        self.assertEqual(judge.isoformat_z(judge.parse_dt_safe("2026-05-15T02:52:00Z")), "2026-05-15T02:52:00Z")
+
+    def test_parse_dt_safe_naive_with_feed_timezone(self):
+        dt = judge.parse_dt_safe("2026-05-15 04:52:00", naive_tz="Europe/Bratislava")
+        self.assertEqual(judge.isoformat_z(dt), "2026-05-15T02:52:00Z")
 
     def test_choose_analysis_cutoff_uses_src_evt_ts(self):
         cutoff = judge.choose_analysis_cutoff(_pos())
         self.assertEqual(cutoff["peak_ts"], "2026-01-01T00:00:00Z")
         self.assertEqual(cutoff["analysis_cutoff_ts"], "2026-01-01T00:00:00Z")
         self.assertEqual(cutoff["cutoff_source"], "position.src_evt.ts")
+        self.assertEqual(cutoff["timestamp_contract"], "utc_iso8601")
+
+    def test_choose_analysis_cutoff_normalizes_legacy_feed_local_ts(self):
+        cutoff = judge.choose_analysis_cutoff(_pos(src_evt={"ts": "2026-05-15 04:52:00", "kind": "long"}))
+        self.assertEqual(cutoff["peak_ts"], "2026-05-15T02:52:00Z")
+        self.assertEqual(cutoff["analysis_cutoff_ts"], "2026-05-15T02:52:00Z")
+        self.assertEqual(cutoff["peak_ts_raw"], "2026-05-15 04:52:00")
+        self.assertEqual(cutoff["ts_source_timezone"], "Europe/Bratislava")
+        self.assertTrue(cutoff["ts_normalized"])
+        self.assertEqual(cutoff["timestamp_contract"], "legacy_feed_local_naive")
 
     def test_missing_src_evt_falls_back_to_filled_at(self):
         pos = _pos(src_evt={})
@@ -55,6 +74,7 @@ class TestCutoffAndEvidence(unittest.TestCase):
         self.assertIsNone(cutoff["peak_ts"])
         self.assertEqual(cutoff["analysis_cutoff_ts"], "2026-01-01T00:00:10Z")
         self.assertEqual(cutoff["cutoff_source"], "entry_ts_fallback")
+        self.assertEqual(cutoff["timestamp_contract"], "utc_iso8601")
 
     def test_missing_src_evt_falls_back_to_opened_at(self):
         pos = _pos(src_evt={}, filled_at=None)
@@ -82,6 +102,9 @@ class TestCutoffAndEvidence(unittest.TestCase):
         self.assertEqual(pack["peak_ts"], "2026-01-01T00:00:00Z")
         self.assertEqual(pack["analysis_cutoff_ts"], "2026-01-01T00:00:00Z")
         self.assertEqual(pack["cutoff_source"], "position.src_evt.ts")
+        self.assertEqual(pack["peak_ts_raw"], "2026-01-01T00:00:00Z")
+        self.assertEqual(pack["timestamp_contract"], "utc_iso8601")
+        self.assertIn("ts_normalized", pack)
         self.assertIn("baseline", pack)
         self.assertEqual(pack["market_context"]["enabled"], False)
         self.assertIn("context_disabled", pack["market_context"]["data_gaps"])
@@ -149,6 +172,29 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertEqual(result["events"], [])
         self.assertIn("deltascout_log_missing", result["data_gaps"])
 
+    def test_read_deltascout_naive_feed_timezone_prevents_future_leak(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "deltascout.log")
+            rows = [
+                {"ts": "2026-05-15 04:51:00", "action": "PEAK", "kind": "long", "delta": 1, "price": 100},
+                {"ts": "2026-05-15 04:52:00", "action": "PEAK", "kind": "long", "delta": 2, "price": 101},
+                {"ts": "2026-05-15 04:53:00", "action": "PEAK", "kind": "short", "delta": -3, "price": 102},
+            ]
+            with open(path, "w", encoding="utf-8") as fh:
+                for row in rows:
+                    fh.write(json.dumps(row) + "\n")
+            result = judge.read_deltascout_events_until_cutoff(
+                path,
+                "2026-05-15T02:52:00Z",
+                1,
+                5000,
+                "Europe/Bratislava",
+            )
+            self.assertEqual(result["events_used"], 2)
+            self.assertEqual(result["events"][-1]["ts_raw"], "2026-05-15 04:52:00")
+            self.assertEqual(result["events"][-1]["ts_utc"], "2026-05-15T02:52:00Z")
+            self.assertEqual(result["events"][-1]["timestamp_contract"], "legacy_feed_local_naive")
+
     def test_build_peak_context_counts_price_location_and_recent_direction(self):
         events = [
             {"ts": "2025-12-31T23:20:00Z", "action": "PEAK", "kind": "long", "delta": 10, "price": 94900, "vwap": 94880, "poc": 94870},
@@ -182,6 +228,23 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
             self.assertEqual(result["rows_used"], 4)
             self.assertEqual(result["rows"][-1]["Timestamp"], "2026-01-01T00:00:00Z")
             self.assertEqual(result["rows"][-1]["ClosePrice"], 95000.0)
+
+    def test_read_agg_rows_naive_feed_timezone_prevents_future_leak(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "aggregated.csv")
+            rows = [
+                "Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice",
+                "2026-05-15 04:51:00,1,10,10,6,4,100,100,101,99",
+                "2026-05-15 04:52:00,1,10,10,7,3,101,101,102,100",
+                "2026-05-15 04:53:00,1,10,10,1,9,102,102,103,101",
+            ]
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(rows) + "\n")
+            result = judge.read_agg_rows_until_cutoff(path, "2026-05-15T02:52:00Z", 1, "Europe/Bratislava")
+            self.assertEqual(result["rows_used"], 2)
+            self.assertEqual(result["rows"][-1]["Timestamp_raw"], "2026-05-15 04:52:00")
+            self.assertEqual(result["rows"][-1]["Timestamp_utc"], "2026-05-15T02:52:00Z")
+            self.assertEqual(result["rows"][-1]["timestamp_contract"], "legacy_feed_local_naive")
 
     def test_read_agg_missing_file_no_crash(self):
         result = judge.read_agg_rows_until_cutoff("missing.csv", "2026-01-01T00:00:00Z", 24)
@@ -259,6 +322,8 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
         self.assertIn("market_context.deltascout", prompt)
         self.assertIn("Do not infer future outcome", prompt)
+        self.assertIn("normalized UTC", prompt)
+        self.assertIn("Do not use raw timestamps for filtering", prompt)
         self.assertIn("use REJECT", prompt)
 
 

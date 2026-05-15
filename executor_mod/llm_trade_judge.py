@@ -12,6 +12,7 @@ import uuid
 import csv
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -29,6 +30,7 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": os.getenv("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", "5000"),
     "LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
     "LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
+    "LLM_TRADE_JUDGE_FEED_TIMEZONE": os.getenv("LLM_TRADE_JUDGE_FEED_TIMEZONE", os.getenv("FEED_SOURCE_TIMEZONE", "Europe/Bratislava")),
 }
 
 save_state: Optional[Callable[[dict], None]] = None
@@ -103,7 +105,27 @@ def _journal_path() -> str:
     return str(ENV.get("LLM_TRADE_JUDGE_VERDICTS_FN") or "/data/state/llm_trade_verdicts.jsonl")
 
 
-def parse_dt_safe(value: Any) -> Optional[datetime]:
+def _feed_timezone(env: Optional[Dict[str, Any]] = None) -> str:
+    cfg = env if isinstance(env, dict) else ENV
+    return str(
+        cfg.get("LLM_TRADE_JUDGE_FEED_TIMEZONE")
+        or cfg.get("FEED_SOURCE_TIMEZONE")
+        or "Europe/Bratislava"
+    )
+
+
+def _zoneinfo(name: Any) -> Optional[ZoneInfo]:
+    try:
+        return ZoneInfo(str(name or "UTC"))
+    except Exception:
+        return None
+
+
+def isoformat_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_dt_safe(value: Any, *, naive_tz: Optional[str] = None) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -131,8 +153,58 @@ def parse_dt_safe(value: Any) -> Optional[datetime]:
         if dt is None:
             return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        if not naive_tz:
+            return None
+        tz = _zoneinfo(naive_tz)
+        if tz is None:
+            return None
+        dt = dt.replace(tzinfo=tz)
     return dt.astimezone(timezone.utc)
+
+
+def normalize_feed_ts(value: Any, source_timezone: str) -> Dict[str, Any]:
+    raw = value
+    parsed_original = value if isinstance(value, datetime) else None
+    if parsed_original is None and value is not None:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed_original = datetime.fromisoformat(text)
+        except Exception:
+            parsed_original = None
+    dt = parse_dt_safe(value)
+    if dt is not None:
+        dt_utc = dt.astimezone(timezone.utc)
+        original_offset = parsed_original.utcoffset() if isinstance(parsed_original, datetime) and parsed_original.tzinfo is not None else None
+        contract = "utc_iso8601" if original_offset == timedelta(0) else "aware_input_normalized_utc"
+        return {
+            "dt_utc": dt_utc,
+            "ts_utc": isoformat_z(dt_utc),
+            "ts_raw": raw,
+            "ts_source_timezone": None,
+            "ts_normalized": isoformat_z(dt_utc) != str(raw),
+            "timestamp_contract": contract,
+        }
+
+    dt = parse_dt_safe(value, naive_tz=source_timezone)
+    if dt is None:
+        return {
+            "dt_utc": None,
+            "ts_utc": None,
+            "ts_raw": raw,
+            "ts_source_timezone": source_timezone,
+            "ts_normalized": False,
+            "timestamp_contract": "invalid_timestamp",
+        }
+    return {
+        "dt_utc": dt,
+        "ts_utc": isoformat_z(dt),
+        "ts_raw": raw,
+        "ts_source_timezone": source_timezone,
+        "ts_normalized": True,
+        "timestamp_contract": "legacy_feed_local_naive",
+    }
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -146,10 +218,34 @@ def _to_float(value: Any) -> Optional[float]:
 
 def _event_public_fields(evt: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
-    for key in ("ts", "kind", "delta", "vol", "imb", "price", "vwap", "poc", "source", "action"):
+    for key in (
+        "ts",
+        "ts_raw",
+        "ts_utc",
+        "timestamp_contract",
+        "kind",
+        "delta",
+        "vol",
+        "imb",
+        "price",
+        "vwap",
+        "poc",
+        "source",
+        "action",
+    ):
         if key in evt:
             out[key] = evt.get(key)
     return out
+
+
+def _market_dt(value: Any) -> Optional[datetime]:
+    return parse_dt_safe(value, naive_tz=_feed_timezone())
+
+
+def _event_dt(evt: Dict[str, Any]) -> Optional[datetime]:
+    if not isinstance(evt, dict):
+        return None
+    return parse_dt_safe(evt.get("ts_utc")) or _market_dt(evt.get("ts"))
 
 
 def get_trade_key(pos: Dict[str, Any]) -> Optional[str]:
@@ -164,13 +260,30 @@ def get_trade_key(pos: Dict[str, Any]) -> Optional[str]:
 
 def choose_analysis_cutoff(pos: Dict[str, Any]) -> Dict[str, Any]:
     data_gaps = []
+    source_tz = _feed_timezone()
     src_evt = pos.get("src_evt") if isinstance(pos, dict) else None
     if isinstance(src_evt, dict) and src_evt.get("ts"):
-        ts = src_evt.get("ts")
+        ts_norm = normalize_feed_ts(src_evt.get("ts"), source_tz)
+        if not ts_norm.get("ts_utc"):
+            data_gaps.append("invalid_src_evt_ts")
+            return {
+                "peak_ts": None,
+                "peak_ts_raw": src_evt.get("ts"),
+                "analysis_cutoff_ts": None,
+                "cutoff_source": "position.src_evt.ts",
+                "ts_source_timezone": source_tz,
+                "ts_normalized": False,
+                "timestamp_contract": "invalid_timestamp",
+                "data_gaps": data_gaps,
+            }
         return {
-            "peak_ts": ts,
-            "analysis_cutoff_ts": ts,
+            "peak_ts": ts_norm.get("ts_utc"),
+            "peak_ts_raw": ts_norm.get("ts_raw"),
+            "analysis_cutoff_ts": ts_norm.get("ts_utc"),
             "cutoff_source": "position.src_evt.ts",
+            "ts_source_timezone": ts_norm.get("ts_source_timezone"),
+            "ts_normalized": ts_norm.get("ts_normalized"),
+            "timestamp_contract": ts_norm.get("timestamp_contract"),
             "data_gaps": data_gaps,
         }
 
@@ -178,18 +291,30 @@ def choose_analysis_cutoff(pos: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(pos, dict):
         fallback_ts = pos.get("filled_at") or pos.get("opened_at")
     if fallback_ts:
+        dt = parse_dt_safe(fallback_ts)
+        ts_utc = isoformat_z(dt) if dt is not None else None
+        if ts_utc is None:
+            data_gaps.append("invalid_entry_fallback_ts")
         return {
             "peak_ts": None,
-            "analysis_cutoff_ts": fallback_ts,
+            "peak_ts_raw": None,
+            "analysis_cutoff_ts": ts_utc,
             "cutoff_source": "entry_ts_fallback",
+            "ts_source_timezone": None,
+            "ts_normalized": bool(ts_utc and ts_utc != str(fallback_ts)),
+            "timestamp_contract": "utc_iso8601" if ts_utc else "invalid_timestamp",
             "data_gaps": data_gaps,
         }
 
     data_gaps.append("missing_analysis_cutoff_ts")
     return {
         "peak_ts": None,
+        "peak_ts_raw": None,
         "analysis_cutoff_ts": None,
         "cutoff_source": "missing",
+        "ts_source_timezone": None,
+        "ts_normalized": False,
+        "timestamp_contract": "missing",
         "data_gaps": data_gaps,
     }
 
@@ -199,8 +324,10 @@ def read_deltascout_events_until_cutoff(
     cutoff_ts: Any,
     lookback_hours: Any,
     max_events: Any,
+    source_timezone: Optional[str] = None,
 ) -> Dict[str, Any]:
-    cutoff = parse_dt_safe(cutoff_ts)
+    source_tz = source_timezone or _feed_timezone()
+    cutoff = parse_dt_safe(cutoff_ts) or parse_dt_safe(cutoff_ts, naive_tz=source_tz)
     data_gaps: List[str] = []
     if cutoff is None:
         return {
@@ -237,12 +364,17 @@ def read_deltascout_events_until_cutoff(
                     continue
                 if not isinstance(evt, dict) or evt.get("action") != "PEAK":
                     continue
-                event_dt = parse_dt_safe(evt.get("ts"))
+                ts_norm = normalize_feed_ts(evt.get("ts"), source_tz)
+                event_dt = ts_norm.get("dt_utc")
                 if event_dt is None:
                     skipped_bad_ts += 1
                     continue
                 if start <= event_dt <= cutoff:
-                    events.append(_event_public_fields(evt))
+                    public_evt = dict(evt)
+                    public_evt["ts_raw"] = ts_norm.get("ts_raw")
+                    public_evt["ts_utc"] = ts_norm.get("ts_utc")
+                    public_evt["timestamp_contract"] = ts_norm.get("timestamp_contract")
+                    events.append(_event_public_fields(public_evt))
                     if len(events) > cap:
                         events.pop(0)
     except Exception as exc:
@@ -294,19 +426,19 @@ def build_peak_context_until_cutoff(
 ) -> Dict[str, Any]:
     data_gaps: List[str] = []
     safe_events = [e for e in (events or []) if isinstance(e, dict)]
-    safe_events.sort(key=lambda e: parse_dt_safe(e.get("ts")) or datetime.min.replace(tzinfo=timezone.utc))
+    safe_events.sort(key=lambda e: _event_dt(e) or datetime.min.replace(tzinfo=timezone.utc))
     longs = [e for e in safe_events if _kind_is_long(e.get("kind"))]
     shorts = [e for e in safe_events if _kind_is_short(e.get("kind"))]
     long_deltas = [d for d in (_to_float(e.get("delta")) for e in longs) if d is not None]
     short_deltas = [d for d in (_to_float(e.get("delta")) for e in shorts) if d is not None]
 
     current = current_peak if isinstance(current_peak, dict) else {}
-    current_dt = parse_dt_safe(current.get("ts")) or (parse_dt_safe(safe_events[-1].get("ts")) if safe_events else None)
+    current_dt = _event_dt(current) or (_event_dt(safe_events[-1]) if safe_events else None)
     direction = str(current_direction or "").strip().lower()
     recent_start = current_dt - timedelta(minutes=60) if current_dt is not None else None
     recent = []
     if recent_start is not None:
-        recent = [e for e in safe_events if (parse_dt_safe(e.get("ts")) or datetime.min.replace(tzinfo=timezone.utc)) >= recent_start]
+        recent = [e for e in safe_events if (_event_dt(e) or datetime.min.replace(tzinfo=timezone.utc)) >= recent_start]
     same_recent = [e for e in recent if str(e.get("kind") or "").strip().lower() == direction]
     opp_recent = [e for e in recent if str(e.get("kind") or "").strip().lower() in ("long", "short") and str(e.get("kind") or "").strip().lower() != direction]
 
@@ -354,8 +486,14 @@ def build_peak_context_until_cutoff(
 AGG_NUMERIC_FIELDS = ("Trades", "TotalQty", "AvgSize", "BuyQty", "SellQty", "AvgPrice", "ClosePrice", "HiPrice", "LowPrice")
 
 
-def read_agg_rows_until_cutoff(path: str, cutoff_ts: Any, lookback_hours: Any) -> Dict[str, Any]:
-    cutoff = parse_dt_safe(cutoff_ts)
+def read_agg_rows_until_cutoff(
+    path: str,
+    cutoff_ts: Any,
+    lookback_hours: Any,
+    source_timezone: Optional[str] = None,
+) -> Dict[str, Any]:
+    source_tz = source_timezone or _feed_timezone()
+    cutoff = parse_dt_safe(cutoff_ts) or parse_dt_safe(cutoff_ts, naive_tz=source_tz)
     data_gaps: List[str] = []
     if cutoff is None:
         return {"rows": [], "data_gaps": ["missing_or_invalid_cutoff_ts"], "source_path": path, "rows_used": 0}
@@ -368,13 +506,19 @@ def read_agg_rows_until_cutoff(path: str, cutoff_ts: Any, lookback_hours: Any) -
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
             for raw in reader:
-                row_dt = parse_dt_safe(raw.get("Timestamp"))
+                ts_norm = normalize_feed_ts(raw.get("Timestamp"), source_tz)
+                row_dt = ts_norm.get("dt_utc")
                 if row_dt is None:
                     malformed += 1
                     continue
                 if not (start <= row_dt <= cutoff):
                     continue
-                row: Dict[str, Any] = {"Timestamp": raw.get("Timestamp")}
+                row: Dict[str, Any] = {
+                    "Timestamp": raw.get("Timestamp"),
+                    "Timestamp_raw": ts_norm.get("ts_raw"),
+                    "Timestamp_utc": ts_norm.get("ts_utc"),
+                    "timestamp_contract": ts_norm.get("timestamp_contract"),
+                }
                 for key in AGG_NUMERIC_FIELDS:
                     row[key] = _to_float(raw.get(key))
                 rows.append(row)
@@ -382,7 +526,7 @@ def read_agg_rows_until_cutoff(path: str, cutoff_ts: Any, lookback_hours: Any) -
         return {"rows": [], "data_gaps": [f"agg_csv_read_error:{type(exc).__name__}"], "source_path": path, "rows_used": 0}
     if malformed:
         data_gaps.append(f"agg_csv_bad_rows:{malformed}")
-    rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp_utc")) or _market_dt(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
     return {"rows": rows, "data_gaps": data_gaps, "source_path": path, "rows_used": len(rows)}
 
 
@@ -393,14 +537,14 @@ def _row_close(row: Dict[str, Any]) -> Optional[float]:
 def _return_pct_for_window(rows: List[Dict[str, Any]], minutes: int) -> Optional[float]:
     if not rows:
         return None
-    last_dt = parse_dt_safe(rows[-1].get("Timestamp"))
+    last_dt = parse_dt_safe(rows[-1].get("Timestamp_utc")) or _market_dt(rows[-1].get("Timestamp"))
     last_close = _row_close(rows[-1])
     if last_dt is None or last_close in (None, 0):
         return None
     target = last_dt - timedelta(minutes=minutes)
     base = None
     for row in rows:
-        row_dt = parse_dt_safe(row.get("Timestamp"))
+        row_dt = parse_dt_safe(row.get("Timestamp_utc")) or _market_dt(row.get("Timestamp"))
         if row_dt is not None and row_dt <= target:
             base = row
         elif row_dt is not None and row_dt > target:
@@ -416,11 +560,11 @@ def _return_pct_for_window(rows: List[Dict[str, Any]], minutes: int) -> Optional
 def _rows_since(rows: List[Dict[str, Any]], minutes: int) -> List[Dict[str, Any]]:
     if not rows:
         return []
-    last_dt = parse_dt_safe(rows[-1].get("Timestamp"))
+    last_dt = parse_dt_safe(rows[-1].get("Timestamp_utc")) or _market_dt(rows[-1].get("Timestamp"))
     if last_dt is None:
         return rows
     start = last_dt - timedelta(minutes=minutes)
-    return [r for r in rows if (parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc)) >= start]
+    return [r for r in rows if (parse_dt_safe(r.get("Timestamp_utc")) or _market_dt(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc)) >= start]
 
 
 def _volatility_60m(rows: List[Dict[str, Any]]) -> Optional[float]:
@@ -444,7 +588,7 @@ def _volatility_60m(rows: List[Dict[str, Any]]) -> Optional[float]:
 def build_agg_context_until_cutoff(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     data_gaps: List[str] = []
     safe_rows = [r for r in (rows or []) if isinstance(r, dict)]
-    safe_rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    safe_rows.sort(key=lambda r: parse_dt_safe(r.get("Timestamp_utc")) or _market_dt(r.get("Timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
     if not safe_rows:
         return {"rows_used": 0, "data_gaps": ["agg_no_rows_until_cutoff"]}
     last_close = _row_close(safe_rows[-1])
@@ -488,6 +632,7 @@ def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Option
         return {"enabled": False, "data_gaps": ["context_disabled"]}
 
     cutoff_ts = evidence_pack.get("analysis_cutoff_ts")
+    source_tz = _feed_timezone(cfg)
     lookback_hours = cfg.get("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", 24)
     max_events = cfg.get("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", 5000)
     deltascout_path = (
@@ -514,14 +659,14 @@ def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Option
     )
 
     data_gaps: List[str] = []
-    delta_result = read_deltascout_events_until_cutoff(deltascout_path, cutoff_ts, lookback_hours, max_events)
+    delta_result = read_deltascout_events_until_cutoff(deltascout_path, cutoff_ts, lookback_hours, max_events, source_tz)
     peak_context = build_peak_context_until_cutoff(
         delta_result.get("events") or [],
         evidence_pack.get("direction"),
         current_price,
         current_peak=src_evt,
     )
-    agg_result = read_agg_rows_until_cutoff(agg_path, cutoff_ts, lookback_hours)
+    agg_result = read_agg_rows_until_cutoff(agg_path, cutoff_ts, lookback_hours, source_tz)
     agg_context = build_agg_context_until_cutoff(agg_result.get("rows") or [])
 
     for part in (delta_result, peak_context, agg_result, agg_context):
@@ -533,6 +678,8 @@ def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Option
         "enabled": True,
         "cutoff_ts": cutoff_ts,
         "lookback_hours": _as_float(lookback_hours, 24.0),
+        "ts_source_timezone": source_tz,
+        "timestamp_contract": evidence_pack.get("timestamp_contract"),
         "deltascout": {
             "source_path": delta_result.get("source_path"),
             "events_total_read": delta_result.get("events_total_read"),
@@ -591,8 +738,12 @@ def build_pretrade_evidence_pack(pos: Dict[str, Any], st: Dict[str, Any], trigge
         "opened_at": pos.get("opened_at"),
         "filled_at": pos.get("filled_at"),
         "peak_ts": cutoff.get("peak_ts"),
+        "peak_ts_raw": cutoff.get("peak_ts_raw"),
         "analysis_cutoff_ts": cutoff.get("analysis_cutoff_ts"),
         "cutoff_source": cutoff.get("cutoff_source"),
+        "ts_source_timezone": cutoff.get("ts_source_timezone"),
+        "ts_normalized": cutoff.get("ts_normalized"),
+        "timestamp_contract": cutoff.get("timestamp_contract"),
         "data_gaps": list(cutoff.get("data_gaps") or []),
     }
 
@@ -751,7 +902,8 @@ def build_llm_trade_judge_prompt(evidence_pack: Dict[str, Any]) -> str:
     return (
         "You are LLM Trade Judge for an automated Binance execution engine.\n"
         "Judge only the trade signal quality at entry time.\n"
-        "You only see information available until analysis_cutoff_ts.\n"
+        "You only see information available until analysis_cutoff_ts, which is normalized UTC.\n"
+        "peak_ts_raw may be legacy feed local time. Do not use raw timestamps for filtering; use analysis_cutoff_ts.\n"
         "The evidence pack includes src_evt/current PEAK, market_context.deltascout, and market_context.aggregated.\n"
         "All market_context records are intended to be pre-cutoff only; do not use or infer data after analysis_cutoff_ts.\n"
         "Do not infer future outcome. Do not mention whether the trade won or lost.\n"

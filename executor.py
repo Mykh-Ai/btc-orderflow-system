@@ -109,6 +109,7 @@ ENV: Dict[str, Any] = {
 "LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": _get_int("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", 5000),
 "LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
 "LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
+"LLM_TRADE_JUDGE_FEED_TIMEZONE": os.getenv("LLM_TRADE_JUDGE_FEED_TIMEZONE", os.getenv("FEED_SOURCE_TIMEZONE", "Europe/Bratislava")),
 
 # safety / log reader
 "TAIL_LINES": _get_int("TAIL_LINES", 80),
