@@ -369,6 +369,64 @@ def open_orders(symbol: str) -> List[Dict[str, Any]]:
     return list(j) if isinstance(j, list) else []
 
 
+def _validate_margin_history_window(start_time: Optional[Any], end_time: Optional[Any]) -> None:
+    if start_time is None or end_time is None:
+        return
+    start_ms = int(start_time)
+    end_ms = int(end_time)
+    if end_ms - start_ms >= 24 * 60 * 60 * 1000:
+        raise ValueError("Binance margin history window must be less than 24h")
+
+
+def _bounded_limit(limit: Any, *, default: int, max_value: int) -> int:
+    with suppress(Exception):
+        n = int(limit)
+        if n > 0:
+            return min(n, max_value)
+    return default
+
+
+def margin_my_trades(
+    symbol: str,
+    order_id: Optional[Any] = None,
+    start_time: Optional[Any] = None,
+    end_time: Optional[Any] = None,
+    from_id: Optional[Any] = None,
+    limit: int = 1000,
+    is_isolated: bool = False,
+) -> List[Dict[str, Any]]:
+    """Return raw margin trade fills for a symbol/order.
+
+    Endpoint: GET /sapi/v1/margin/myTrades
+    Notes:
+    - fromId is a trade id, not an order id.
+    - Binance requires any startTime/endTime window to be less than 24h.
+    """
+    env = _env()
+    if str(env.get("TRADE_MODE", "spot")).strip().lower() != "margin":
+        raise RuntimeError("margin_my_trades() called while TRADE_MODE is not 'margin'")
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        raise RuntimeError("margin_my_trades(): symbol is required")
+    _validate_margin_history_window(start_time, end_time)
+
+    p: Dict[str, Any] = {
+        "symbol": sym,
+        "isIsolated": _tf(is_isolated),
+        "limit": _bounded_limit(limit, default=1000, max_value=1000),
+    }
+    if order_id is not None:
+        p["orderId"] = int(order_id)
+    if start_time is not None:
+        p["startTime"] = int(start_time)
+    if end_time is not None:
+        p["endTime"] = int(end_time)
+    if from_id is not None:
+        p["fromId"] = int(from_id)
+    j = _binance_signed_request("GET", "/sapi/v1/margin/myTrades", p)
+    return list(j) if isinstance(j, list) else []
+
+
 def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
     """Place an order in current TRADE_MODE.
 
@@ -428,6 +486,79 @@ def margin_account(*, is_isolated: Optional[bool] = None, symbols: Optional[str]
         return _binance_signed_request("GET", "/sapi/v1/margin/isolated/account", p)
 
     return _binance_signed_request("GET", "/sapi/v1/margin/account", {})
+
+
+def margin_borrow_repay_records(
+    *,
+    asset: Optional[str] = None,
+    record_type: Optional[str] = None,
+    type: Optional[str] = None,
+    tx_id: Optional[Any] = None,
+    start_time: Optional[Any] = None,
+    end_time: Optional[Any] = None,
+    current: Optional[Any] = None,
+    size: int = 100,
+    isolated_symbol: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return raw margin borrow/repay records.
+
+    Endpoint: GET /sapi/v1/margin/borrow-repay
+    record_type/type must be BORROW or REPAY.
+    """
+    env = _env()
+    if str(env.get("TRADE_MODE", "spot")).strip().lower() != "margin":
+        raise RuntimeError("margin_borrow_repay_records() called while TRADE_MODE is not 'margin'")
+    rt = str(record_type or type or "").strip().upper()
+    if rt not in ("BORROW", "REPAY"):
+        raise RuntimeError("margin_borrow_repay_records(): record_type must be BORROW or REPAY")
+    _validate_margin_history_window(start_time, end_time)
+
+    p: Dict[str, Any] = {"type": rt, "size": _bounded_limit(size, default=100, max_value=100)}
+    if asset:
+        p["asset"] = str(asset).strip().upper()
+    if tx_id is not None:
+        p["txId"] = int(tx_id)
+    if start_time is not None:
+        p["startTime"] = int(start_time)
+    if end_time is not None:
+        p["endTime"] = int(end_time)
+    if current is not None:
+        p["current"] = int(current)
+    if isolated_symbol:
+        p["isolatedSymbol"] = str(isolated_symbol).strip().upper()
+    return _binance_signed_request("GET", "/sapi/v1/margin/borrow-repay", p)
+
+
+def margin_interest_history(
+    *,
+    asset: Optional[str] = None,
+    isolated_symbol: Optional[str] = None,
+    start_time: Optional[Any] = None,
+    end_time: Optional[Any] = None,
+    current: Optional[Any] = None,
+    size: int = 100,
+) -> Dict[str, Any]:
+    """Return raw margin interest history.
+
+    Endpoint: GET /sapi/v1/margin/interestHistory
+    """
+    env = _env()
+    if str(env.get("TRADE_MODE", "spot")).strip().lower() != "margin":
+        raise RuntimeError("margin_interest_history() called while TRADE_MODE is not 'margin'")
+    _validate_margin_history_window(start_time, end_time)
+
+    p: Dict[str, Any] = {"size": _bounded_limit(size, default=100, max_value=100)}
+    if asset:
+        p["asset"] = str(asset).strip().upper()
+    if isolated_symbol:
+        p["isolatedSymbol"] = str(isolated_symbol).strip().upper()
+    if start_time is not None:
+        p["startTime"] = int(start_time)
+    if end_time is not None:
+        p["endTime"] = int(end_time)
+    if current is not None:
+        p["current"] = int(current)
+    return _binance_signed_request("GET", "/sapi/v1/margin/interestHistory", p)
 
 
 def get_margin_debt_snapshot(*, symbol: Optional[str] = None, is_isolated: Optional[bool] = None) -> Dict[str, Any]:

@@ -122,6 +122,71 @@ class TestBinanceApiSmoke(unittest.TestCase):
             self.assertEqual(params["symbol"], "BTCUSDC")
             self.assertIn("isIsolated", params)
 
+    def test_margin_my_trades_params(self):
+        env = _margin_env()
+        binance_api.configure(env)
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = [{"id": 1}]
+            res = binance_api.margin_my_trades(
+                "BTCUSDC",
+                order_id=123,
+                start_time=1000,
+                end_time=2000,
+                from_id=5,
+                is_isolated=True,
+            )
+            self.assertEqual(res, [{"id": 1}])
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/myTrades"))
+            self.assertEqual(params["symbol"], "BTCUSDC")
+            self.assertEqual(params["orderId"], 123)
+            self.assertEqual(params["startTime"], 1000)
+            self.assertEqual(params["endTime"], 2000)
+            self.assertEqual(params["fromId"], 5)
+            self.assertEqual(params["isIsolated"], "TRUE")
+            self.assertEqual(params["limit"], 1000)
+
+    def test_margin_my_trades_window_guard(self):
+        binance_api.configure(_margin_env())
+        with self.assertRaises(ValueError):
+            binance_api.margin_my_trades("BTCUSDC", start_time=0, end_time=24 * 60 * 60 * 1000)
+
+    def test_margin_borrow_repay_records_params(self):
+        binance_api.configure(_margin_env())
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = {"rows": []}
+            res = binance_api.margin_borrow_repay_records(
+                asset="USDC",
+                record_type="REPAY",
+                tx_id=99,
+                start_time=1000,
+                end_time=2000,
+                isolated_symbol="BTCUSDC",
+            )
+            self.assertEqual(res, {"rows": []})
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/borrow-repay"))
+            self.assertEqual(params["asset"], "USDC")
+            self.assertEqual(params["type"], "REPAY")
+            self.assertEqual(params["txId"], 99)
+            self.assertEqual(params["isolatedSymbol"], "BTCUSDC")
+
+    def test_margin_interest_history_params(self):
+        binance_api.configure(_margin_env())
+        with patch.object(binance_api, "_binance_signed_request") as signed:
+            signed.return_value = {"rows": []}
+            res = binance_api.margin_interest_history(
+                asset="USDC",
+                start_time=1000,
+                end_time=2000,
+                isolated_symbol="BTCUSDC",
+            )
+            self.assertEqual(res, {"rows": []})
+            method, endpoint, params = signed.call_args[0]
+            self.assertEqual((method, endpoint), ("GET", "/sapi/v1/margin/interestHistory"))
+            self.assertEqual(params["asset"], "USDC")
+            self.assertEqual(params["isolatedSymbol"], "BTCUSDC")
+
     def test_check_and_cancel_order_endpoints(self):
         binance_api.configure(_spot_env())
         with patch.object(binance_api, "_binance_signed_request") as signed:

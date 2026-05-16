@@ -41,6 +41,7 @@ import executor_mod.binance_api as binance_api
 import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
 import executor_mod.trade_outcome_archive as trade_outcome_archive
+import executor_mod.trade_execution_snapshot as trade_execution_snapshot
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 import executor_mod.llm_trade_judge as llm_trade_judge
@@ -99,6 +100,8 @@ ENV: Dict[str, Any] = {
 "LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 5000),
 "LLM_TRADE_JUDGE_ENABLED": _get_bool("LLM_TRADE_JUDGE_ENABLED", False),
 "LLM_TRADE_JUDGE_VERDICTS_FN": os.getenv("LLM_TRADE_JUDGE_VERDICTS_FN", "/data/state/llm_trade_verdicts.jsonl"),
+"TRADE_EXECUTION_SNAPSHOTS_FN": os.getenv("TRADE_EXECUTION_SNAPSHOTS_FN", "/data/state/trade_execution_snapshots.jsonl"),
+"LLM_TRADE_JUDGE_SCORE_EXCLUDE_KEYS": _get_str("LLM_TRADE_JUDGE_SCORE_EXCLUDE_KEYS", "EX_EN_1778689753"),
 "LLM_TRADE_JUDGE_MODE": _get_str("LLM_TRADE_JUDGE_MODE", "stub"),
 "LLM_TRADE_JUDGE_MODEL": _get_str("LLM_TRADE_JUDGE_MODEL", "gpt-5.5"),
 "LLM_TRADE_JUDGE_TIMEOUT_SEC": _get_float("LLM_TRADE_JUDGE_TIMEOUT_SEC", 20.0),
@@ -453,6 +456,19 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
 # Backward-compatible name (kept for any leftover uses)
 
 
+def _record_trade_execution_snapshot(st: Dict[str, Any], source: str, *, enrich_exchange: bool = False) -> None:
+    """Best-effort execution snapshot; must never affect trading cleanup."""
+    try:
+        trade_execution_snapshot.record_final_execution_snapshot(
+            st,
+            source=source,
+            binance_api=binance_api if enrich_exchange else None,
+        )
+    except Exception as exc:
+        with suppress(Exception):
+            log_event("TRADE_EXECUTION_SNAPSHOT_ERROR", source=source, error=str(exc))
+
+
 # Wire runtime dependencies for binance_api (keeps call sites unchanged).
 
 risk_math.configure(ENV)
@@ -642,6 +658,7 @@ def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None
         "prices": _p.get("prices"),
         **fields,  # caller-supplied overrides — preserve existing semantics
     }
+    _record_trade_execution_snapshot(st, "_clear_position_slot", enrich_exchange=False)
     st["position"] = None
 
     # unlock; avoid blocking next PEAK for no reason
@@ -964,6 +981,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             "trail_sl_price": pos.get("trail_sl_price"),
             "prices": pos.get("prices"),
         }
+        _record_trade_execution_snapshot(st, "_close_slot", enrich_exchange=True)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
@@ -1559,6 +1577,7 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                             "entry_actual": pos.get("entry_actual"),
                             "opened_at": pos.get("opened_at"),
                         }
+                        _record_trade_execution_snapshot(st, "sync_exchange_clear", enrich_exchange=False)
                         st["position"] = None
                         st["lock_until"] = 0.0
                         save_state(st)
@@ -1610,6 +1629,7 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                 "opened_at": pos.get("opened_at"),
                 "order_status": st_o,
             }
+            _record_trade_execution_snapshot(st, "sync_confirmed_canceled", enrich_exchange=False)
             # trade_key for hook: prefer pos, then active margin state.
             # Never fall back to stale st["last_closed"] — that is the bug this patch fixes.
             _p4_tk = (

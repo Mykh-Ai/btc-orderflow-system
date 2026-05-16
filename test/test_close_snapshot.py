@@ -259,6 +259,41 @@ class TestCloseSlotSnapshot(unittest.TestCase):
         self.assertIs(lc["tp2_done"], False)
         self.assertIs(lc["sl_done"], True)
 
+    def test_execution_snapshot_recorded_before_position_clear(self):
+        st = self._sl_filled_st()
+        calls = []
+
+        def fake_status(_sym, oid):
+            oid = int(oid)
+            if oid == 333333:
+                return {"status": "FILLED"}
+            return {"status": "NEW"}
+
+        def fake_record(st_arg, source, binance_api=None):
+            calls.append({
+                "source": source,
+                "position_present": st_arg.get("position") is not None,
+                "has_last_closed": bool(st_arg.get("last_closed")),
+                "binance_api_passed": binance_api is executor.binance_api,
+            })
+
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+             patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+             patch.object(executor.binance_api, "cancel_order", return_value={"status": "CANCELED"}), \
+             patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", side_effect=fake_record), \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor, "_now_s", return_value=9000.0), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *a, **k: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["source"], "_close_slot")
+        self.assertTrue(calls[0]["has_last_closed"])
+        self.assertTrue(calls[0]["position_present"])
+        self.assertTrue(calls[0]["binance_api_passed"])
+
     def test_trail_fields_at_sl_close(self):
         st = self._sl_filled_st(trail_active=True, trail_sl_price=93800.0)
         self._run_manage(st)
