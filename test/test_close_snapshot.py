@@ -294,6 +294,79 @@ class TestCloseSlotSnapshot(unittest.TestCase):
         self.assertTrue(calls[0]["position_present"])
         self.assertTrue(calls[0]["binance_api_passed"])
 
+    def test_trade_closed_summary_payload_emitted_after_snapshot(self):
+        st = self._sl_filled_st(tp1_done=True, tp2_done=True, trail_active=True)
+        sent = []
+        snapshot = {
+            "trade_key": "EX_EN_1000",
+            "symbol": "BTCUSDC",
+            "snapshot_status": "complete",
+            "lifecycle_class": "tp1_tp2_trailing_stop",
+            "local_last_closed": {"side": "LONG", "reason": "SL", "trade_key": "EX_EN_1000"},
+            "fill_summaries": {
+                "entry": {"avg_price": "100", "total_qty": "1", "total_quote_qty": "100"},
+                "tp1": {"avg_price": "110", "total_qty": "0.4", "total_quote_qty": "44"},
+                "tp2": {"avg_price": "120", "total_qty": "0.3", "total_quote_qty": "36"},
+                "final_sl": {"avg_price": "90", "total_qty": "0.3", "total_quote_qty": "27"},
+            },
+            "fees": {"commission_by_asset": {"USDC": "0.20"}},
+            "orders": {"tp1": {"order_id": 1}, "tp2": {"order_id": 2}, "final_sl": {"order_id": 3}},
+        }
+
+        def fake_status(_sym, oid):
+            return {"status": "FILLED"} if int(oid) == 333333 else {"status": "NEW"}
+
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+             patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+             patch.object(executor.binance_api, "cancel_order", return_value={"status": "CANCELED"}), \
+             patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", return_value=snapshot), \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor, "send_webhook", lambda payload: sent.append(payload)), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor, "_now_s", return_value=9000.0), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *a, **k: None):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        payloads = [p for p in sent if p.get("event") == "TRADE_CLOSED_SUMMARY"]
+        self.assertEqual(len(payloads), 1)
+        payload = payloads[0]
+        self.assertEqual(payload["type"], "TRADE_CLOSED_SUMMARY")
+        self.assertEqual(payload["message"], payload["text"])
+        self.assertEqual(payload["telegram_text"], payload["text"])
+        self.assertTrue(payload["text"].strip())
+        self.assertIn("Trade closed", payload["text"])
+        self.assertIn("Gross PnL", payload["text"])
+
+    def test_trade_closed_summary_failure_does_not_block_cleanup(self):
+        st = self._sl_filled_st()
+        saved = []
+        outcomes = []
+        margin_calls = []
+
+        def fake_status(_sym, oid):
+            return {"status": "FILLED"} if int(oid) == 333333 else {"status": "NEW"}
+
+        def boom(payload):
+            if payload.get("event") == "TRADE_CLOSED_SUMMARY":
+                raise RuntimeError("webhook down")
+
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+             patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+             patch.object(executor.binance_api, "cancel_order", return_value={"status": "CANCELED"}), \
+             patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", return_value=None), \
+             patch.object(executor.trade_outcome_archive, "record_outcome", lambda *a, **k: outcomes.append(True)), \
+             patch.object(executor, "save_state", lambda *_: saved.append(deepcopy(st))), \
+             patch.object(executor, "send_webhook", boom), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor, "_now_s", return_value=9000.0), \
+             patch.object(executor.margin_guard, "on_after_position_closed", lambda *a, **k: margin_calls.append(True)):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        self.assertTrue(saved)
+        self.assertTrue(outcomes)
+        self.assertTrue(margin_calls)
+
     def test_trail_fields_at_sl_close(self):
         st = self._sl_filled_st(trail_active=True, trail_sl_price=93800.0)
         self._run_manage(st)

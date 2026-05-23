@@ -42,6 +42,7 @@ import executor_mod.event_dedup as event_dedup
 import executor_mod.risk_math as risk_math
 import executor_mod.trade_outcome_archive as trade_outcome_archive
 import executor_mod.trade_execution_snapshot as trade_execution_snapshot
+import executor_mod.trade_close_summary as trade_close_summary
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 import executor_mod.llm_trade_judge as llm_trade_judge
@@ -456,10 +457,10 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
 # Backward-compatible name (kept for any leftover uses)
 
 
-def _record_trade_execution_snapshot(st: Dict[str, Any], source: str, *, enrich_exchange: bool = False) -> None:
+def _record_trade_execution_snapshot(st: Dict[str, Any], source: str, *, enrich_exchange: bool = False) -> Optional[Dict[str, Any]]:
     """Best-effort execution snapshot; must never affect trading cleanup."""
     try:
-        trade_execution_snapshot.record_final_execution_snapshot(
+        return trade_execution_snapshot.record_final_execution_snapshot(
             st,
             source=source,
             binance_api=binance_api if enrich_exchange else None,
@@ -467,6 +468,80 @@ def _record_trade_execution_snapshot(st: Dict[str, Any], source: str, *, enrich_
     except Exception as exc:
         with suppress(Exception):
             log_event("TRADE_EXECUTION_SNAPSHOT_ERROR", source=source, error=str(exc))
+    return None
+
+
+def _quote_asset(symbol: str) -> str:
+    symbol = str(symbol or "").upper()
+    for quote in ("USDC", "USDT", "FDUSD", "BUSD", "USD"):
+        if symbol.endswith(quote):
+            return quote
+    return ""
+
+
+def _commission_usdc_valuation(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort current-price commission valuation for Telegram UX only."""
+    commissions = ((snapshot or {}).get("fees") or {}).get("commission_by_asset") or {}
+    if not commissions:
+        return {}
+
+    symbol = str((snapshot or {}).get("symbol") or "")
+    quote = _quote_asset(symbol)
+    if quote != "USDC":
+        return {}
+
+    total = Decimal("0")
+    used_symbol = None
+    for asset, raw_amount in commissions.items():
+        amount = Decimal(str(raw_amount or "0"))
+        asset = str(asset or "").upper()
+        if not amount:
+            continue
+        if asset == "USDC":
+            total += amount
+        elif asset == "BNB":
+            used_symbol = "BNBUSDC"
+            px = Decimal(str(binance_api.get_mid_price(used_symbol)))
+            total += amount * px
+        else:
+            return {}
+
+    if total <= 0:
+        return {}
+    return {
+        "commission_usdc_approx": format(total, "f"),
+        "commission_valuation_source": "binance_public_mid_at_notification",
+        "commission_valuation_symbol": used_symbol or "USDC",
+    }
+
+
+def _send_trade_closed_summary(st: Dict[str, Any], snapshot: Optional[Dict[str, Any]]) -> None:
+    """Best-effort close summary notification; must never affect cleanup."""
+    try:
+        if not isinstance(snapshot, dict) or not snapshot:
+            last_closed = (st or {}).get("last_closed")
+            if not isinstance(last_closed, dict) or not last_closed:
+                return
+            snapshot = trade_execution_snapshot.build_local_snapshot(st or {}, last_closed, "_close_slot")
+
+        valuation: Dict[str, Any] = {}
+        with suppress(Exception):
+            valuation = _commission_usdc_valuation(snapshot)
+        payload = trade_close_summary.build_trade_closed_summary_payload(snapshot, **valuation)
+        if not payload:
+            return
+        send_webhook(payload)
+        with suppress(Exception):
+            log_event(
+                "TRADE_CLOSED_SUMMARY_SENT",
+                trade_key=payload.get("trade_key"),
+                gross_pnl_usdc=payload.get("gross_pnl_usdc"),
+                net_pnl_approx_usdc=payload.get("net_pnl_approx_usdc"),
+                commission_usdc_approx=payload.get("commission_usdc_approx"),
+            )
+    except Exception as exc:
+        with suppress(Exception):
+            log_event("TRADE_CLOSED_SUMMARY_ERROR", error=str(exc))
 
 
 # Wire runtime dependencies for binance_api (keeps call sites unchanged).
@@ -981,7 +1056,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             "trail_sl_price": pos.get("trail_sl_price"),
             "prices": pos.get("prices"),
         }
-        _record_trade_execution_snapshot(st, "_close_slot", enrich_exchange=True)
+        execution_snapshot = _record_trade_execution_snapshot(st, "_close_slot", enrich_exchange=True)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
@@ -990,6 +1065,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             trade_outcome_archive.record_outcome(st, "_close_slot", ENV.get("SYMBOL", ""))
         with suppress(Exception):
             margin_guard.on_after_position_closed(st)
+        _send_trade_closed_summary(st, execution_snapshot)
 
     tp1_id = int(pos["orders"].get("tp1") or 0)
     tp2_id = int(pos["orders"].get("tp2") or 0)
