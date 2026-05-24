@@ -60,6 +60,7 @@ from executor_mod.risk_math import (
     fmt_qty,
     round_qty,
 )
+from executor_mod import order_utils, open_filled_retry
 import pandas as pd
 
 
@@ -342,23 +343,10 @@ with suppress(Exception):
 # ===================== Rounding / sizing =====================
 
 def _oid_int(v: Any) -> Optional[int]:
-    try:
-        if v is None:
-            return None
-        return int(v)
-    except Exception:
-        return None
+    return order_utils.oid_int(v)
 
 def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
-    """Average fill price from an order payload when possible."""
-    try:
-        exq = float(order.get("executedQty") or 0.0)
-        cq = float(order.get("cummulativeQuoteQty") or order.get("cumulativeQuoteQty") or 0.0)
-        if exq > 0 and cq > 0:
-            return cq / exq
-    except Exception:
-        return None
-    return None
+    return order_utils.avg_fill_price(order)
 
 # Backward-compatible name (kept for any leftover uses)
 
@@ -1085,38 +1073,17 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
 
 # ===================== Main loop =====================
 def handle_open_filled_exits_retry(st: dict) -> None:
-    """Retry exits placement for a live position stuck in OPEN_FILLED without exits."""
-    pos = st.get("position") or {}
-    if pos.get("mode") != "live" or pos.get("status") != "OPEN_FILLED":
-        return
-    if pos.get("orders") or not pos.get("prices"):
-        return
+    open_filled_retry.handle_open_filled_exits_retry(
+        st,
+        env=ENV,
+        save_state_fn=save_state,
+        ensure_exits_fn=exits_flow.ensure_exits,
+        flatten_market_fn=binance_api.flatten_market,
+        clear_position_slot_fn=_clear_position_slot,
+        now_fn=_now_s,
+        time_fn=time.time,
+    )
 
-    now = _now_s()
-    next_try = float(pos.get("exits_next_try_s") or 0.0)
-    if next_try and now < next_try:
-        return
-
-    tries = int(pos.get("exits_tries") or 0) + 1
-    pos["exits_tries"] = tries
-    pos.setdefault("exits_first_fail_s", now)
-    pos["exits_next_try_s"] = now + float(ENV["EXITS_RETRY_EVERY_SEC"])
-    st["position"] = pos
-    save_state(st)
-
-    if exits_flow.ensure_exits(st, pos, reason="retry", best_effort=True, attempt=tries):
-        return
-
-
-    if not ENV.get("FAILSAFE_FLATTEN", False):
-        return
-    max_tries = int(ENV.get("FAILSAFE_EXITS_MAX_TRIES") or 0)
-    grace = float(ENV.get("FAILSAFE_EXITS_GRACE_SEC") or 0.0)
-    first_fail_s = float(pos.get("exits_first_fail_s") or now)
-    if max_tries and tries >= max_tries and (now - first_fail_s) >= grace:
-        with suppress(Exception):
-            binance_api.flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
-        _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
 def main() -> None:
     _validate_trade_mode()
     st = load_state()
