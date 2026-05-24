@@ -49,6 +49,7 @@ import executor_mod.llm_trade_judge as llm_trade_judge
 import executor_mod.position_finalization as position_finalization
 import executor_mod.entry_math as entry_math
 import executor_mod.close_reporting as close_reporting
+import executor_mod.exit_orders as exit_orders
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -59,6 +60,7 @@ from executor_mod.risk_math import (
     round_qty,
 )
 import pandas as pd
+
 
 
 # ===================== ENV =====================
@@ -567,228 +569,45 @@ def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None
 
 
 def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
-    """Validate exits inputs before placing orders.
-
-    Goals:
-      - Fail fast with a clear message BEFORE we hit Binance errors
-      - Prevent silent rounding/formatting surprises
-      - Guarantee qty split does not round to zero
-    """
-    if not isinstance(prices, dict):
-        raise RuntimeError(f"prices must be dict, got {type(prices).__name__}")
-
-    required = ("entry", "sl", "tp1", "tp2")
-    missing = [k for k in required if k not in prices or prices.get(k) is None]
-    if missing:
-        raise RuntimeError(f"Missing price keys: {missing}")
-
-    # Normalize to floats
-    p: Dict[str, float] = {}
-    for k in required:
-        try:
-            p[k] = float(prices[k])
-        except Exception:
-            raise RuntimeError(f"Invalid price for {k}: {prices.get(k)!r}")
-
-    # Basic sanity
-    for k, v in p.items():
-        if not math.isfinite(v) or v <= 0:
-            raise RuntimeError(f"Invalid price {k}={v}")
-
-    side_u = str(side).upper()
-    if side_u not in ("LONG", "SHORT"):
-        raise RuntimeError(f"Invalid side={side!r} (expected LONG/SHORT)")
-
-    # Enforce directional ordering (best-effort safety)
-    if side_u == "LONG":
-        if not (p["sl"] < p["entry"] < p["tp1"] <= p["tp2"]):
-            raise RuntimeError(f"Bad LONG price ordering: sl<{p['sl']}, entry<{p['entry']}, tp1<{p['tp1']}, tp2<{p['tp2']}")
-    else:  # SHORT
-        if not (p["sl"] > p["entry"] > p["tp1"] >= p["tp2"]):
-            raise RuntimeError(f"Bad SHORT price ordering: sl>{p['sl']}, entry>{p['entry']}, tp1>{p['tp1']}, tp2>{p['tp2']}")
-
-    # Tick alignment check (Decimal, tolerant) + normalize to exact tick
-    tick_s = str(ENV.get("TICK_SIZE", "0.01"))
-    tick = Decimal(tick_s)
-
-    # tolerance = tiny fraction of tick to ignore float noise
-    # (you can tighten/loosen; 1e-6 tick is usually safe)
-    tol = tick / Decimal("1000000")
-
-    def D(x) -> Decimal:
-        # IMPORTANT: never Decimal(float) directly
-        return Decimal(str(x))
-
-    def align_to_tick(v: Decimal) -> Decimal:
-        # nearest tick (HALF_UP is fine for validation stage)
-        steps = (v / tick).to_integral_value(rounding=ROUND_HALF_UP)
-        return steps * tick
-
-    for k, v in p.items():
-        vd = D(v)
-        aligned = align_to_tick(vd)
-
-        # if truly off-tick -> fail fast
-        if abs(aligned - vd) > tol:
-            raise RuntimeError(
-                f"Price not aligned to tick: {k}={v} tick={tick_s} (aligned={float(aligned)})"
-           )
-
-        # normalize to exact aligned value to avoid later precision surprises
-        p[k] = float(aligned)
-
-
-    # Qty checks & split checks (mirrors place_exits_v15 but gives clearer errors)
-    try:
-        qt = float(qty_total)
-    except Exception:
-        raise RuntimeError(f"Invalid qty_total: {qty_total!r}")
-    if not math.isfinite(qt) or qt <= 0:
-        raise RuntimeError(f"Invalid qty_total={qt}")
-
-    qty_total_r = round_qty(qt)
-    min_qty = float(ENV.get("MIN_QTY", 0.0))
-    if qty_total_r < min_qty:
-        raise RuntimeError(f"qty_total too small after rounding: qty_total={qt} -> {qty_total_r} (min_qty={min_qty})")
-    # Split strictly in integer 'step units' to avoid float floor artefacts
-    qty1, qty2, qty3 = risk_math.split_qty_3legs_validate(qty_total_r)
-    # Min notional safety (optional but helpful)
-    min_notional = float(ENV.get("MIN_NOTIONAL", 0.0))
-    if min_notional > 0:
-        worst_price = min(p.values())
-        notional = worst_price * qty_total_r
-        if notional < min_notional:
-            raise RuntimeError(f"MinNotional fail (worst-case): price={worst_price} qty={qty_total_r} notional={notional} < {min_notional}")
-
-    return {
-        "qty_total_r": qty_total_r,
-        "qty1": qty1,
-        "qty2": qty2,
-        "qty3": qty3,
-        "prices": p,
-    }
+    return exit_orders.validate_exit_plan(
+        symbol,
+        side,
+        qty_total,
+        prices,
+        env=ENV,
+        round_qty_fn=round_qty,
+        split_qty_3legs_validate_fn=risk_math.split_qty_3legs_validate,
+    )
 
 # === FIX 1: Helpers for safer Plan B and LIMIT_MAKER fallback ===
 
 def _is_limit_maker_reject(exc: Exception) -> bool:
-    """Detect Binance LIMIT_MAKER rejection (would immediately match)."""
-    msg = str(exc).lower()
-    return (
-        "would immediately match" in msg
-        or "immediately match and take" in msg
-        or '"code":-2010' in msg
-        or "code: -2010" in msg
-    )
+    return exit_orders.is_limit_maker_reject(exc)
 
 
 def _place_limit_maker_then_limit(payload: dict) -> dict:
-    """Try LIMIT_MAKER first; if rejected, retry as LIMIT GTC."""
-    try:
-        return binance_api.place_order_raw(payload)
-    except Exception as e:
-        if not _is_limit_maker_reject(e):
-            raise
-        # fallback
-        payload2 = dict(payload)
-        payload2["type"] = "LIMIT"
-        payload2["timeInForce"] = "GTC"
-        cid = str(payload.get("newClientOrderId") or "")
-        if cid:
-            payload2["newClientOrderId"] = (cid + "_GTC")[:36]
-        log_event("LIMIT_MAKER_REJECT", reason=str(e))
-        return binance_api.place_order_raw(payload2)
+    return exit_orders.place_limit_maker_then_limit(
+        payload,
+        place_order_raw_fn=binance_api.place_order_raw,
+        log_event_fn=log_event,
+    )
 
 def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
-    """Place TP1 + TP2 + SL for V1.5 (no OCO).
-
-    side: "LONG" | "SHORT"
-    prices: {entry, sl, tp1, tp2} in *USDC* terms (already rounded)
-
-    Order of placement: SL first, then TP1, TP2.
-    Reason: on cross margin with NO_SIDE_EFFECT, Binance locks base asset
-    for each SELL order independently. SL (full qty) + TP1 + TP2 > entry qty,
-    so if TPs are placed first they lock part of the balance and SL is rejected
-    with insufficient balance. Placing SL first locks full qty, then TPs are
-    accepted as LIMIT_MAKER on cross margin even if total exceeds balance.
-
-    Rollback: if any order after SL fails, cancel already placed orders
-    before raising, to prevent duplicate exits on retry.
-    """
-    # Ensure qty is aligned to lot step before splitting
-    qty_total_r = round_qty(qty_total)
-
-    # Split strictly in integer 'step units' to avoid float floor artefacts
-    qty1, qty2, qty3 = risk_math.split_qty_3legs_place(qty_total_r)
-    # Binance expects strings for precise formatting
-    qty_total_s = fmt_qty(qty_total_r)
-    qty1_s = fmt_qty(qty1)
-    qty2_s = fmt_qty(qty2)
-
-    tp1_s = fmt_price(float(prices["tp1"]))
-    tp2_s = fmt_price(float(prices["tp2"]))
-
-    exit_side = "SELL" if side == "LONG" else "BUY"
-
-    # --- SL first (locks full qty, avoids insufficient balance for LONG exits) ---
-    stop_p = float(prices["sl"])
-    tick = float(ENV["TICK_SIZE"])
-    gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
-    gap = tick * float(gap_ticks)
-    limit_p = (stop_p - gap) if exit_side == "SELL" else (stop_p + gap)
-    sl_stop_s = fmt_price(stop_p)
-    sl_price_s = fmt_price(limit_p)
-    if sl_price_s == sl_stop_s:
-        sl_price_s = fmt_price((stop_p - tick) if exit_side == "SELL" else (stop_p + tick))
-
-    placed: Dict[str, int] = {}
-    try:
-        sl = binance_api.place_order_raw({
-            "symbol": symbol,
-            "side": exit_side,
-            "type": "STOP_LOSS_LIMIT",
-            "quantity": qty_total_s,
-            "stopPrice": sl_stop_s,
-            "price": sl_price_s,
-            "timeInForce": "GTC",
-            "newClientOrderId": f"EX_SL_{int(time.time())}",
-        })
-        placed["sl"] = sl["orderId"]
-
-        tp1 = _place_limit_maker_then_limit({
-            "symbol": symbol,
-            "side": exit_side,
-            "type": "LIMIT_MAKER",
-            "quantity": qty1_s,
-            "price": tp1_s,
-            "newClientOrderId": f"EX_TP1_{int(time.time())}",
-        })
-        placed["tp1"] = tp1["orderId"]
-
-        tp2 = _place_limit_maker_then_limit({
-            "symbol": symbol,
-            "side": exit_side,
-            "type": "LIMIT_MAKER",
-            "quantity": qty2_s,
-            "price": tp2_s,
-            "newClientOrderId": f"EX_TP2_{int(time.time())}",
-        })
-        placed["tp2"] = tp2["orderId"]
-
-    except Exception:
-        # Rollback: cancel any already placed orders to prevent orphans/duplicates on retry
-        for oid in placed.values():
-            with suppress(Exception):
-                binance_api.cancel_order(symbol, oid)
-        raise
-
-    return {
-        "tp1": tp1["orderId"],
-        "tp2": tp2["orderId"],
-        "sl": sl["orderId"],
-        "qty1": qty1,
-        "qty2": qty2,
-        "qty3": qty3,
-    }
+    return exit_orders.place_exits_v15(
+        symbol,
+        side,
+        qty_total,
+        prices,
+        env=ENV,
+        place_order_raw_fn=binance_api.place_order_raw,
+        cancel_order_fn=binance_api.cancel_order,
+        log_event_fn=log_event,
+        round_qty_fn=round_qty,
+        split_qty_3legs_place_fn=risk_math.split_qty_3legs_place,
+        fmt_qty_fn=fmt_qty,
+        fmt_price_fn=fmt_price,
+        time_fn=time.time,
+    )
 # Wire runtime dependencies for exits placement flow (keeps call sites unchanged).
 exits_flow.configure(
     ENV,
