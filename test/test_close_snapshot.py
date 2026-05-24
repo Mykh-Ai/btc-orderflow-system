@@ -177,6 +177,41 @@ class TestClearPositionSlotSnapshot(unittest.TestCase):
         st = self._call(pos)
         self.assertIsNone(st["position"])
 
+    def test_snapshot_archive_and_margin_hook_ordering(self):
+        pos = _make_full_pos(trade_key="TK_CURRENT", client_id="CL_FALLBACK")
+        st = {"position": pos, "last_closed": {"trade_key": "STALE"}, "lock_until": 1.0}
+        observed = []
+
+        def fake_record(st_arg, source, binance_api=None):
+            observed.append((
+                "snapshot",
+                source,
+                bool(st_arg.get("last_closed")),
+                st_arg.get("position") is not None,
+                st_arg["last_closed"]["trade_key"],
+            ))
+
+        def fake_archive(st_arg, source, symbol):
+            observed.append((
+                "archive",
+                source,
+                st_arg.get("position") is None,
+                st_arg["last_closed"]["trade_key"],
+            ))
+
+        def fake_hook(st_arg, trade_key=None):
+            observed.append(("hook", st_arg.get("position") is None, trade_key))
+
+        with patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", side_effect=fake_record), \
+             patch.object(executor.trade_outcome_archive, "record_outcome", side_effect=fake_archive), \
+             patch.object(executor, "save_state", lambda *_: None), \
+             patch.object(executor.margin_guard, "on_after_position_closed", side_effect=fake_hook):
+            executor._clear_position_slot(st, "ENTRY_TIMEOUT", order_id=999)
+
+        self.assertEqual(observed[0], ("snapshot", "_clear_position_slot", True, True, "TK_CURRENT"))
+        self.assertEqual(observed[1], ("archive", "_clear_position_slot", True, "TK_CURRENT"))
+        self.assertEqual(observed[2], ("hook", True, "TK_CURRENT"))
+
 
 # ---------------------------------------------------------------------------
 # manage_v15_position -> _close_slot (via SL FILLED path)
@@ -598,6 +633,55 @@ class TestSyncFromBinanceP4ConfirmedCanceled(unittest.TestCase):
         self.assertIsNotNone(st["position"])
         self.assertEqual(st["last_closed"], original_lc)
 
+    def test_snapshot_and_archive_ordering_use_fresh_last_closed(self):
+        st = self._make_st()
+        observed = []
+
+        saved_mode = executor.ENV.get("TRADE_MODE")
+        saved_i13 = executor.ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = False
+
+            def fake_record(st_arg, source, binance_api=None):
+                observed.append((
+                    "snapshot",
+                    source,
+                    st_arg.get("position") is not None,
+                    st_arg["last_closed"]["trade_key"],
+                ))
+
+            def fake_archive(st_arg, source, symbol):
+                observed.append((
+                    "archive",
+                    source,
+                    st_arg.get("position") is None,
+                    st_arg["last_closed"]["trade_key"],
+                ))
+
+            with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+                 patch.object(executor.binance_api, "check_order_status", return_value={"status": "CANCELED", "executedQty": "0"}), \
+                 patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", side_effect=fake_record), \
+                 patch.object(executor.trade_outcome_archive, "record_outcome", side_effect=fake_archive), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_, **__: None), \
+                 patch.object(executor.margin_guard, "on_after_position_closed",
+                              lambda *a, **k: observed.append(("hook", k.get("trade_key")))):
+                executor.sync_from_binance(st)
+        finally:
+            if saved_mode is None:
+                executor.ENV.pop("TRADE_MODE", None)
+            else:
+                executor.ENV["TRADE_MODE"] = saved_mode
+            if saved_i13 is None:
+                executor.ENV.pop("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", None)
+            else:
+                executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = saved_i13
+
+        self.assertEqual(observed[0], ("snapshot", "sync_confirmed_canceled", True, self._CURRENT_TRADE_KEY))
+        self.assertEqual(observed[1], ("archive", "sync_confirmed_canceled", True, self._CURRENT_TRADE_KEY))
+        self.assertEqual(observed[2], ("hook", self._CURRENT_TRADE_KEY))
+
 
 # ---------------------------------------------------------------------------
 # sync_from_binance -> P5 exchange-truth forced clear (snapshot fix only)
@@ -763,6 +847,60 @@ class TestSyncFromBinanceP5ExchangeClearSnapshot(unittest.TestCase):
                 executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = saved_i13
         self.assertIsNotNone(st["position"], "Position must NOT be cleared when flag is off")
         self.assertEqual(st["last_closed"], stale_snapshot, "last_closed must not change when flag is off")
+
+    def test_snapshot_archive_and_margin_hook_ordering_use_current_pos(self):
+        st = self._make_st()
+        st["margin"] = {
+            "borrowed_assets": {"BTC": 0.08},
+            "borrowed_by_trade": {},
+            "active_trade_key": "MG_ACTIVE_SHOULD_NOT_WIN",
+        }
+        observed = []
+        saved_mode = executor.ENV.get("TRADE_MODE")
+        saved_i13 = executor.ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR")
+        try:
+            executor.ENV["TRADE_MODE"] = "margin"
+            executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = True
+
+            def fake_record(st_arg, source, binance_api=None):
+                observed.append((
+                    "snapshot",
+                    source,
+                    st_arg.get("position") is not None,
+                    st_arg["last_closed"]["trade_key"],
+                ))
+
+            def fake_archive(st_arg, source, symbol):
+                observed.append((
+                    "archive",
+                    source,
+                    st_arg.get("position") is None,
+                    st_arg["last_closed"]["trade_key"],
+                ))
+
+            with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+                 patch.object(executor, "_exchange_position_exists", return_value=False), \
+                 patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", side_effect=fake_record), \
+                 patch.object(executor.trade_outcome_archive, "record_outcome", side_effect=fake_archive), \
+                 patch.object(executor, "save_state", lambda *_: None), \
+                 patch.object(executor, "log_event", lambda *_, **__: None), \
+                 patch.object(executor, "send_webhook", lambda *_: None), \
+                 patch.object(executor.margin_guard, "on_after_position_closed",
+                              lambda *a, **k: observed.append(("hook", k.get("trade_key")))):
+                executor.sync_from_binance(st)
+        finally:
+            if saved_mode is None:
+                executor.ENV.pop("TRADE_MODE", None)
+            else:
+                executor.ENV["TRADE_MODE"] = saved_mode
+            if saved_i13 is None:
+                executor.ENV.pop("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", None)
+            else:
+                executor.ENV["I13_CLEAR_STATE_ON_EXCHANGE_CLEAR"] = saved_i13
+
+        self.assertEqual(observed[0], ("hook", self._CURRENT_TRADE_KEY))
+        self.assertEqual(observed[1], ("snapshot", "sync_exchange_clear", True, self._CURRENT_TRADE_KEY))
+        self.assertEqual(observed[2], ("archive", "sync_exchange_clear", True, self._CURRENT_TRADE_KEY))
 
 
 # ---------------------------------------------------------------------------

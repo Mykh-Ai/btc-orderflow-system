@@ -46,6 +46,8 @@ import executor_mod.trade_close_summary as trade_close_summary
 import executor_mod.market_data as market_data
 import executor_mod.exits_flow as exits_flow
 import executor_mod.llm_trade_judge as llm_trade_judge
+import executor_mod.position_finalization as position_finalization
+import executor_mod.entry_math as entry_math
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -559,45 +561,19 @@ def _send_trade_closed_summary(st: Dict[str, Any], snapshot: Optional[Dict[str, 
 # Wire runtime dependencies for binance_api (keeps call sites unchanged).
 
 risk_math.configure(ENV)
+entry_math.configure(ENV)
 binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
 
 
 def build_entry_price(kind: str, close_price: float) -> float:
-    """Entry price builder used for live.
-
-    For breakout-style entries:
-      - long  -> above close
-      - short -> below close
-
-    Rounding is *directional* so we don't accidentally make the trigger harder by rounding.
-    """
-    raw = close_price + ENV["ENTRY_OFFSET_USD"] if kind == "long" else close_price - ENV["ENTRY_OFFSET_USD"]
-
-    if kind == "long":
-        # keep it above close by at least 1 tick
-        raw = max(raw, close_price + float(ENV["TICK_SIZE"]))
-        return floor_to_step(raw, ENV["TICK_SIZE"])
-    else:
-        # keep it below close by at least 1 tick
-        raw = min(raw, close_price - float(ENV["TICK_SIZE"]))
-        return ceil_to_step(raw, ENV["TICK_SIZE"])
+    return entry_math.build_entry_price(kind, close_price)
 
 def notional_to_qty(entry: float, usd: float) -> float:
-    if entry <= 0:
-        return 0.0
-    qty = usd / entry
-    qty = floor_to_step(qty, ENV["QTY_STEP"])
-    return qty
+    return entry_math.notional_to_qty(entry, usd)
 
 
 def validate_qty(qty: float, entry: float) -> bool:
-    if qty <= 0:
-        return False
-    if Decimal(str(qty)) < ENV["MIN_QTY"]:
-        return False
-    if qty * entry < ENV["MIN_NOTIONAL"]:
-        return False
-    return True
+    return entry_math.validate_qty(qty, entry)
 
 # ===================== Market context =====================
 
@@ -614,137 +590,24 @@ def latest_price(df: pd.DataFrame) -> float:
 # ===================== Stop / TP ("far" stop logic) =====================
 
 def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
-    """Return a stop that is FARTHER from entry (vs near).
-
-    side: BUY for long, SELL for short
-
-    - BUY: choose min(pct_sl, swing_low)
-    - SELL: choose max(pct_sl, swing_high)
-    - swings are based on LowPrice/HiPrice when available (v2), else fall back to price.
-    """
-    pct_sl = entry * (1 - ENV["SL_PCT"]) if side == "BUY" else entry * (1 + ENV["SL_PCT"])
-
-    if i < 0 or i >= len(df):
-        sl = pct_sl
-    else:
-        lookback = df.iloc[max(0, i - ENV["SWING_MINS"]): i + 1]
-        if side == "BUY":
-            swing_col = "LowPrice" if "LowPrice" in lookback.columns else "price"
-            s = lookback[swing_col].dropna()
-            if s.empty:
-                s = lookback["price"].dropna()
-            swing = pct_sl if s.empty else float(s.min())
-            sl = min(pct_sl, swing)
-        else:
-            swing_col = "HiPrice" if "HiPrice" in lookback.columns else "price"
-            s = lookback[swing_col].dropna()
-            if s.empty:
-                s = lookback["price"].dropna()
-            swing = pct_sl if s.empty else float(s.max())
-            sl = max(pct_sl, swing)
-
-    # Safety: enforce correct side and rounding
-    if side == "BUY":
-        sl = min(sl, entry - float(ENV["TICK_SIZE"]))
-    else:
-        sl = max(sl, entry + float(ENV["TICK_SIZE"]))
-
-    return floor_to_step(sl, ENV["TICK_SIZE"]) if side == "BUY" else ceil_to_step(sl, ENV["TICK_SIZE"])
+    return entry_math.swing_stop_far(df, i, side, entry)
 
 
 def compute_tps(entry: float, sl: float, side: str) -> List[float]:
-    """TP list based on the *real* risk (entry <-> SL).
-
-    Rounding is directional:
-      - BUY (long): TP rounded down (slightly easier to hit)
-      - SELL (short): TP rounded up (slightly easier to hit)
-    """
-    risk = abs(entry - sl)
-    if risk <= 0:
-        return []
-
-    tps: List[float] = []
-    for rmult in ENV["TP_R_LIST"]:
-        if side == "BUY":
-            tp_raw = entry + rmult * risk
-            tp = floor_to_step(tp_raw, ENV["TICK_SIZE"])
-        else:
-            tp_raw = entry - rmult * risk
-            tp = ceil_to_step(tp_raw, ENV["TICK_SIZE"])
-        tps.append(tp)
-    return tps
+    return entry_math.compute_tps(entry, sl, side)
 
 # ===================== Binance adapter =====================
 
 def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, str, Dict[str, Any]]:
-    """Guard against chasing far away from planned entry.
-    Returns (allowed, reason, info).
-    """
-    try:
-        prices = posi.get("prices") or {}
-        entry = float(prices.get("entry"))
-        sl = float(prices.get("sl"))
-        tp1 = float(prices.get("tp1"))
-    except Exception:
-        return False, "bad_prices", {}
-    if not (math.isfinite(entry) and math.isfinite(sl) and entry > 0 and sl > 0):
-        return False, "bad_prices", {"entry": entry, "sl": sl}
-
-    risk = abs(entry - sl)
-    r_mult = float(ENV.get("PLANB_MAX_DEV_R_MULT") or 0.0)
-    max_usd = float(ENV.get("PLANB_MAX_DEV_USD") or 0.0)
-    max_dev = max(risk * r_mult, max_usd) if max_usd > 0 else risk * r_mult
-
-    dev = abs(px_exec - entry)
-    info = {"px_exec": px_exec, "entry": entry, "sl": sl, "risk": risk, "dev": dev, "max_dev": max_dev}
-
-    if max_dev > 0 and dev > max_dev:
-        return False, "deviation_too_large", info
-
-    if ENV.get("PLANB_ABORT_IF_PAST_TP1", True):
-        side_txt = str(posi.get("side") or "").upper()
-        if math.isfinite(tp1) and tp1 > 0:
-            if side_txt == "LONG" and px_exec >= tp1:
-                info["tp1"] = tp1
-                return False, "past_tp1", info
-            if side_txt == "SHORT" and px_exec <= tp1:
-                info["tp1"] = tp1
-                return False, "past_tp1", info
-
-    return True, "ok", info
+    return entry_math._planb_market_allowed(posi, px_exec)
 
 
 def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None:
     """Fail-safe cleanup: free position slot so new PEAKs can be handled."""
     pos = st.get("position")
-    _p = pos or {}
-    _orders = _p.get("orders") or {}
-    st["last_closed"] = {
-        "ts": iso_utc(),
-        "mode": _p.get("mode"),
-        "reason": reason,
-        "pos_status": _p.get("status"),
-        # close snapshot — additive whitelist enrichment (no API calls, no logic change)
-        "opened_at": _p.get("opened_at"),
-        "trade_key": _p.get("trade_key") or _p.get("client_id"),
-        "order_id": _p.get("order_id"),
-        "qty": _p.get("qty"),
-        "entry_ref": (_p.get("prices") or {}).get("entry"),
-        "entry_actual": _p.get("entry_actual"),
-        "order_id_sl": _orders.get("sl"),
-        "order_id_tp1": _orders.get("tp1"),
-        "order_id_tp2": _orders.get("tp2"),
-        "qty1": _orders.get("qty1"),
-        "qty2": _orders.get("qty2"),
-        "qty3": _orders.get("qty3"),
-        "tp1_done": bool(_p.get("tp1_done")),
-        "tp2_done": bool(_p.get("tp2_done")),
-        "sl_done": bool(_p.get("sl_done")),
-        "trail_active": bool(_p.get("trail_active")),
-        "trail_sl_price": _p.get("trail_sl_price"),
-        "prices": _p.get("prices"),
-        **fields,  # caller-supplied overrides — preserve existing semantics
-    }
+    st["last_closed"] = position_finalization.build_clear_position_last_closed(
+        pos or {}, reason, iso_utc(), fields
+    )
     _record_trade_execution_snapshot(st, "_clear_position_slot", enrich_exchange=False)
     st["position"] = None
 
@@ -1041,33 +904,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             return False
 
     def _close_slot(reason: str) -> None:
-        _orders = pos.get("orders") or {}
-        st["last_closed"] = {
-            "ts": iso_utc(),
-            "mode": "live",
-            "reason": reason,
-            "side": pos.get("side"),
-            "entry": (pos.get("prices") or {}).get("entry"),
-            # close snapshot — additive whitelist enrichment (no API calls, no logic change)
-            "opened_at": pos.get("opened_at"),
-            "trade_key": pos.get("trade_key") or pos.get("client_id"),
-            "order_id": pos.get("order_id"),
-            "qty": pos.get("qty"),
-            "entry_ref": (pos.get("prices") or {}).get("entry"),
-            "entry_actual": pos.get("entry_actual"),
-            "order_id_sl": _orders.get("sl"),
-            "order_id_tp1": _orders.get("tp1"),
-            "order_id_tp2": _orders.get("tp2"),
-            "qty1": _orders.get("qty1"),
-            "qty2": _orders.get("qty2"),
-            "qty3": _orders.get("qty3"),
-            "tp1_done": bool(pos.get("tp1_done")),
-            "tp2_done": bool(pos.get("tp2_done")),
-            "sl_done": bool(pos.get("sl_done")),
-            "trail_active": bool(pos.get("trail_active")),
-            "trail_sl_price": pos.get("trail_sl_price"),
-            "prices": pos.get("prices"),
-        }
+        st["last_closed"] = position_finalization.build_live_close_last_closed(pos, reason, iso_utc())
         execution_snapshot = _record_trade_execution_snapshot(st, "_close_slot", enrich_exchange=True)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
@@ -1652,19 +1489,9 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                                     margin_guard.on_after_position_closed(st, trade_key=tk)
                         # P5 fix: write fresh last_closed from current pos before clearing slot.
                         # Without this, consumers see the stale last_closed from the previous trade.
-                        st["last_closed"] = {
-                            "ts": iso_utc(),
-                            "mode": pos.get("mode"),
-                            "reason": "SYNC_EXCHANGE_CLEAR",
-                            "pos_status": pos.get("status"),
-                            "trade_key": pos.get("trade_key") or pos.get("client_id"),
-                            "order_id": pos.get("order_id"),
-                            "side": pos.get("side"),
-                            "qty": pos.get("qty"),
-                            "entry_ref": (pos.get("prices") or {}).get("entry"),
-                            "entry_actual": pos.get("entry_actual"),
-                            "opened_at": pos.get("opened_at"),
-                        }
+                        st["last_closed"] = position_finalization.build_sync_last_closed(
+                            pos, "SYNC_EXCHANGE_CLEAR", iso_utc()
+                        )
                         _record_trade_execution_snapshot(st, "sync_exchange_clear", enrich_exchange=False)
                         st["position"] = None
                         st["lock_until"] = 0.0
@@ -1703,20 +1530,9 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
             # P4 fix: write fresh last_closed and call margin hook before clearing slot.
             # Mirrors _clear_position_slot() contract: snapshot → clear → save → hook.
             # Must happen while pos is still the live dict (before position=None).
-            st["last_closed"] = {
-                "ts": iso_utc(),
-                "mode": pos.get("mode"),
-                "reason": "SYNC_CONFIRMED_CANCELED",
-                "pos_status": pos.get("status"),
-                "trade_key": pos.get("trade_key") or pos.get("client_id"),
-                "order_id": pos.get("order_id"),
-                "side": pos.get("side"),
-                "qty": pos.get("qty"),
-                "entry_ref": (pos.get("prices") or {}).get("entry"),
-                "entry_actual": pos.get("entry_actual"),
-                "opened_at": pos.get("opened_at"),
-                "order_status": st_o,
-            }
+            st["last_closed"] = position_finalization.build_sync_last_closed(
+                pos, "SYNC_CONFIRMED_CANCELED", iso_utc(), order_status=st_o
+            )
             _record_trade_execution_snapshot(st, "sync_confirmed_canceled", enrich_exchange=False)
             # trade_key for hook: prefer pos, then active margin state.
             # Never fall back to stale st["last_closed"] — that is the bug this patch fixes.
