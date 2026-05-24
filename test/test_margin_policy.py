@@ -9,6 +9,7 @@ import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from executor_mod.margin_policy import (
+    cleanup_post_close_margin_debt,
     ensure_borrow_if_needed,
     repay_if_any,
     _split_symbol_assets,
@@ -51,6 +52,47 @@ class MockApi:
 
     def log_event(self, *args, **kwargs):
         pass
+
+
+class CleanupApi:
+    def __init__(self, free=None, borrowed=None, interest=None, env=None, repay_error_assets=None):
+        self.free = {k: Decimal(str(v)) for k, v in (free or {}).items()}
+        self.borrowed = {k: Decimal(str(v)) for k, v in (borrowed or {}).items()}
+        self.interest = {k: Decimal(str(v)) for k, v in (interest or {}).items()}
+        self._env_data = env if env is not None else dict(REAL_ENV)
+        self.repays = []
+        self.account_calls = 0
+        self.repay_error_assets = set(repay_error_assets or [])
+
+    def _env(self):
+        return self._env_data
+
+    def margin_account(self, is_isolated=False, symbols=None):
+        self.account_calls += 1
+        assets = []
+        keys = set(self.free) | set(self.borrowed) | set(self.interest)
+        for asset in sorted(keys):
+            assets.append(
+                {
+                    "asset": asset,
+                    "free": str(self.free.get(asset, Decimal("0"))),
+                    "borrowed": str(self.borrowed.get(asset, Decimal("0"))),
+                    "interest": str(self.interest.get(asset, Decimal("0"))),
+                }
+            )
+        return {"userAssets": assets}
+
+    def margin_repay(self, asset, amount, is_isolated=False, symbol=None):
+        if asset in self.repay_error_assets:
+            raise RuntimeError(f"repay failed for {asset}")
+        amt = Decimal(str(amount))
+        self.repays.append({"asset": asset, "amount": str(amount)})
+        self.free[asset] = max(Decimal("0"), self.free.get(asset, Decimal("0")) - amt)
+        interest = self.interest.get(asset, Decimal("0"))
+        interest_paid = min(interest, amt)
+        self.interest[asset] = interest - interest_paid
+        remaining = amt - interest_paid
+        self.borrowed[asset] = max(Decimal("0"), self.borrowed.get(asset, Decimal("0")) - remaining)
 
 
 # =====================================================================
@@ -253,6 +295,122 @@ def test_state_tracks_borrowed_amount():
     assert "USDC" in m["borrowed_assets"]
     assert "USDC" in m["borrowed_by_trade"]["t1"]
     assert m["borrowed_assets"]["USDC"] == float(Decimal("61.05392600"))  # 59.8567902 + 2% buffer
+
+
+# =====================================================================
+# 8. Post-close account-level debt cleanup
+# =====================================================================
+
+def test_post_close_cleanup_full_repayment_success():
+    api = CleanupApi(
+        free={"BTC": "0.01", "USDC": "2", "BNB": "0.03"},
+        borrowed={"BTC": "0.01", "USDC": "2", "BNB": "0.02"},
+        interest={"BNB": "0.01"},
+    )
+    st = {"margin": {"active_trade_key": "t-clean"}}
+
+    result = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-clean", ttl_sec=300)
+
+    assert result["cleanup_status"] == "clean"
+    assert result["attempted_assets"] == ["BTC", "USDC", "BNB"]
+    assert result["repaid_amounts"] == {"BTC": "0.01", "USDC": "2", "BNB": "0.03"}
+    assert result["residual_debt"] == []
+    assert st["margin"]["post_close_debt_cleanup"]["by_trade"]["t-clean"]["cleanup_status"] == "clean"
+
+
+def test_post_close_cleanup_residual_debt_remains_after_partial_repay():
+    api = CleanupApi(free={"USDC": "0.5"}, borrowed={"USDC": "2"})
+    st = {"margin": {"active_trade_key": "t-residual"}}
+
+    result = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-residual", ttl_sec=300)
+
+    assert result["cleanup_status"] == "residual_debt"
+    assert result["repaid_amounts"] == {"USDC": "0.5"}
+    assert result["residual_debt"] == [
+        {"asset": "USDC", "borrowed": "1.5", "interest": "0", "liability": "1.5", "free": "0"}
+    ]
+
+
+def test_post_close_cleanup_insufficient_free_balance_does_not_repay():
+    api = CleanupApi(free={"BNB": "0"}, borrowed={"BNB": "0.02"})
+    st = {"margin": {"active_trade_key": "t-no-free"}}
+
+    result = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-no-free", ttl_sec=300)
+
+    assert result["cleanup_status"] == "residual_debt"
+    assert api.repays == []
+    assert result["failed_assets"] == [
+        {"asset": "BNB", "reason": "insufficient_free_balance", "liability": "0.02", "free": "0"}
+    ]
+
+
+def test_post_close_cleanup_binance_api_error_is_persisted():
+    api = CleanupApi(free={"BNB": "0.02"}, borrowed={"BNB": "0.02"}, repay_error_assets={"BNB"})
+    st = {"margin": {"active_trade_key": "t-api-error"}}
+
+    result = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-api-error", ttl_sec=300)
+
+    assert result["cleanup_status"] == "residual_debt"
+    assert result["failed_assets"][0]["asset"] == "BNB"
+    assert result["failed_assets"][0]["stage"] == "margin_repay"
+    assert "repay failed for BNB" in result["binance_errors"][0]["error"]
+    assert st["margin"]["post_close_debt_cleanup"]["by_trade"]["t-api-error"]["binance_errors"]
+
+
+def test_post_close_cleanup_restart_idempotency_skips_clean_trade():
+    api = CleanupApi(free={"BTC": "0.01"}, borrowed={"BTC": "0.01"})
+    st = {"margin": {"active_trade_key": "t-idem"}}
+
+    first = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-idem", ttl_sec=300)
+    second = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-idem", ttl_sec=300)
+
+    assert first["cleanup_status"] == "clean"
+    assert second["cleanup_status"] == "skipped_clean"
+    assert second["dedup"] is True
+    assert api.repays == [{"asset": "BTC", "amount": "0.01"}]
+
+
+def test_post_close_cleanup_no_duplicate_repayment_inside_ttl():
+    api = CleanupApi(free={"USDC": "0.5"}, borrowed={"USDC": "2"})
+    st = {"margin": {"active_trade_key": "t-ttl"}}
+
+    first = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-ttl", ttl_sec=300)
+    api.free["USDC"] = Decimal("1.5")
+    second = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-ttl", ttl_sec=300)
+
+    assert first["cleanup_status"] == "residual_debt"
+    assert second["cleanup_status"] == "skipped_recent"
+    assert second["dedup"] is True
+    assert api.repays == [{"asset": "USDC", "amount": "0.5"}]
+
+
+def test_post_close_cleanup_after_ttl_refetches_and_repays_remaining_debt():
+    api = CleanupApi(free={"USDC": "0.5"}, borrowed={"USDC": "2"})
+    st = {"margin": {"active_trade_key": "t-retry"}}
+
+    first = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-retry", ttl_sec=300)
+    assert first["cleanup_status"] == "residual_debt"
+    assert first["residual_debt"][0]["liability"] == "1.5"
+
+    api.free["USDC"] = Decimal("1.0")
+    api.borrowed["USDC"] = Decimal("1.0")
+    inside_ttl = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-retry", ttl_sec=300)
+    assert inside_ttl["cleanup_status"] == "skipped_recent"
+    assert api.repays == [{"asset": "USDC", "amount": "0.5"}]
+
+    st["margin"]["post_close_debt_cleanup"]["by_trade"]["t-retry"]["started_at_s"] = 0
+    api.free["USDC"] = Decimal("0.75")
+    api.borrowed["USDC"] = Decimal("0.75")
+    after_ttl = cleanup_post_close_margin_debt(st, api, "BTCUSDC", trade_key="t-retry", ttl_sec=1)
+
+    assert after_ttl["cleanup_status"] == "clean"
+    assert after_ttl["pre_cleanup_debt"][0]["liability"] == "0.75"
+    assert after_ttl["repaid_amounts"] == {"USDC": "0.75"}
+    assert api.repays == [
+        {"asset": "USDC", "amount": "0.5"},
+        {"asset": "USDC", "amount": "0.75"},
+    ]
+    assert st["margin"]["post_close_debt_cleanup"]["by_trade"]["t-retry"]["cleanup_status"] == "clean"
 
 
 # =====================================================================

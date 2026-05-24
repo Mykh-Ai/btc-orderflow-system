@@ -412,7 +412,13 @@ def read_tail_lines(path: str, n: int) -> List[str]:
 # Configure trail helper module (inject ENV and file tail reader)
 # Configure margin guard hooks (future margin support; safe no-op by default)
 with suppress(Exception):
-    margin_guard.configure(ENV, log_event, api=binance_api)
+    margin_guard.configure(
+        ENV,
+        log_event,
+        api=binance_api,
+        save_state_fn=save_state,
+        send_webhook_fn=send_webhook,
+    )
 trail.configure(ENV, read_tail_lines, log_event)
 
 def _now_s() -> float:
@@ -428,7 +434,13 @@ with suppress(Exception):
         save_state_fn=save_state,
     )
 with suppress(Exception):
-    margin_guard.configure(ENV, log_event, api=binance_api)
+    margin_guard.configure(
+        ENV,
+        log_event,
+        api=binance_api,
+        save_state_fn=save_state,
+        send_webhook_fn=send_webhook,
+    )
 
 # ===================== DeltaScout event normalization / dedup =====================
 # (moved to executor_mod.event_dedup)

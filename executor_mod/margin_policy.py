@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from decimal import Decimal, ROUND_UP
 from typing import Any, Dict, Optional
+
+
+DEFAULT_POST_CLOSE_CLEANUP_ASSETS = ("BTC", "USDC", "BNB")
 
 
 def _ensure_margin_state(st: Dict[str, Any]) -> Dict[str, Any]:
@@ -81,6 +85,61 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
         return Decimal(str(value))
     except Exception:
         return None
+
+
+def _dec_str(value: Decimal) -> str:
+    return format(value, "f")
+
+
+def _positive_decimal(value: Any) -> Decimal:
+    dec = _to_decimal(value)
+    if dec is None or dec <= 0:
+        return Decimal("0")
+    return dec
+
+
+def _asset_free(snapshot: Dict[str, Any]) -> Decimal:
+    for key in ("free", "available", "availableBalance"):
+        if key in snapshot:
+            return _positive_decimal(snapshot.get(key))
+    return Decimal("0")
+
+
+def _asset_liability(snapshot: Dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
+    borrowed = _positive_decimal(snapshot.get("borrowed"))
+    interest = _positive_decimal(snapshot.get("interest"))
+    return borrowed, interest, borrowed + interest
+
+
+def _cleanup_state(margin: Dict[str, Any]) -> Dict[str, Any]:
+    cleanup = margin.get("post_close_debt_cleanup")
+    if not isinstance(cleanup, dict):
+        cleanup = {}
+        margin["post_close_debt_cleanup"] = cleanup
+    by_trade = cleanup.get("by_trade")
+    if not isinstance(by_trade, dict):
+        by_trade = {}
+        cleanup["by_trade"] = by_trade
+    cleanup.setdefault("version", 1)
+    return cleanup
+
+
+def _cleanup_assets_from_env(api: Any, allowlist: Optional[list[str]] = None) -> list[str]:
+    if allowlist is not None:
+        raw = allowlist
+    else:
+        env = _get_env(api)
+        configured = env.get("MARGIN_POST_CLOSE_CLEANUP_ASSETS")
+        if isinstance(configured, str) and configured.strip():
+            raw = [part.strip() for part in configured.split(",")]
+        else:
+            raw = list(DEFAULT_POST_CLOSE_CLEANUP_ASSETS)
+    assets: list[str] = []
+    for asset in raw:
+        asset_s = str(asset or "").strip().upper()
+        if asset_s and asset_s not in assets:
+            assets.append(asset_s)
+    return assets
 
 
 def _get_env(api: Any) -> Dict[str, Any]:
@@ -277,3 +336,145 @@ def repay_if_any(st: Dict[str, Any], api: Any, symbol: str) -> None:
         # cleanup per-trade borrow map to prevent state growth
         if trade_key in margin.get("borrowed_by_trade", {}):
             margin["borrowed_by_trade"].pop(trade_key, None)
+
+
+def cleanup_post_close_margin_debt(
+    st: Dict[str, Any],
+    api: Any,
+    symbol: str,
+    *,
+    trade_key: Optional[str] = None,
+    allowlist: Optional[list[str]] = None,
+    ttl_sec: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Account-level allowlist debt cleanup after tracked trade repayment.
+
+    This is intentionally separate from repay_if_any(): the tracked trade repay
+    stays unchanged, then this audited layer checks bot-owned margin debt for a
+    small asset allowlist and repays only amounts covered by free balance.
+    """
+    margin = _ensure_margin_state(st)
+    cleanup = _cleanup_state(margin)
+    by_trade = cleanup["by_trade"]
+    tk = str(trade_key or margin.get("active_trade_key") or "trade-unknown")
+    now_s = time.time()
+    env = _get_env(api)
+    if ttl_sec is None:
+        ttl_sec = float(env.get("MARGIN_POST_CLOSE_CLEANUP_TTL_SEC", 300) or 300)
+
+    prev = by_trade.get(tk)
+    if isinstance(prev, dict):
+        prev_status = str(prev.get("cleanup_status") or "")
+        prev_started = _to_decimal(prev.get("started_at_s")) or Decimal("0")
+        age = Decimal(str(now_s)) - prev_started
+        if prev_status == "clean":
+            result = dict(prev)
+            result["dedup"] = True
+            result["cleanup_status"] = "skipped_clean"
+            cleanup["last_result"] = result
+            return result
+        if ttl_sec > 0 and age >= 0 and age < Decimal(str(ttl_sec)):
+            result = dict(prev)
+            result["dedup"] = True
+            result["cleanup_status"] = "skipped_recent"
+            result["ttl_sec"] = ttl_sec
+            cleanup["last_result"] = result
+            return result
+
+    assets = _cleanup_assets_from_env(api, allowlist)
+    is_isolated = _is_true(margin.get("is_isolated", env.get("MARGIN_ISOLATED")))
+    result: Dict[str, Any] = {
+        "version": 1,
+        "trade_key": tk,
+        "symbol": symbol,
+        "is_isolated": is_isolated,
+        "allowlist": assets,
+        "started_at_s": now_s,
+        "checked_assets": list(assets),
+        "attempted_assets": [],
+        "repaid_amounts": {},
+        "failed_assets": [],
+        "residual_debt": [],
+        "binance_errors": [],
+        "cleanup_status": "started",
+    }
+    by_trade[tk] = result
+    cleanup["last_result"] = result
+
+    try:
+        account = api.margin_account(is_isolated=is_isolated, symbols=symbol)
+    except Exception as exc:
+        result["cleanup_status"] = "error"
+        result["binance_errors"].append({"stage": "pre_margin_account", "error": str(exc)})
+        return result
+
+    pre_debts = []
+    for asset in assets:
+        snap = _asset_snapshot(account, asset)
+        borrowed, interest, liability = _asset_liability(snap)
+        free = _asset_free(snap)
+        if liability <= 0:
+            continue
+        repayable = min(liability, free)
+        pre_debts.append(
+            {
+                "asset": asset,
+                "borrowed": _dec_str(borrowed),
+                "interest": _dec_str(interest),
+                "liability": _dec_str(liability),
+                "free": _dec_str(free),
+                "repayable": _dec_str(repayable),
+            }
+        )
+        if repayable <= 0:
+            result["failed_assets"].append(
+                {
+                    "asset": asset,
+                    "reason": "insufficient_free_balance",
+                    "liability": _dec_str(liability),
+                    "free": _dec_str(free),
+                }
+            )
+            continue
+        result["attempted_assets"].append(asset)
+        try:
+            api.margin_repay(asset, _dec_str(repayable), is_isolated=is_isolated, symbol=symbol)
+            result["repaid_amounts"][asset] = _dec_str(repayable)
+        except Exception as exc:
+            err = {"asset": asset, "stage": "margin_repay", "error": str(exc)}
+            result["failed_assets"].append(err)
+            result["binance_errors"].append(err)
+    result["pre_cleanup_debt"] = pre_debts
+
+    try:
+        post_account = api.margin_account(is_isolated=is_isolated, symbols=symbol)
+    except Exception as exc:
+        result["cleanup_status"] = "error"
+        result["binance_errors"].append({"stage": "post_margin_account", "error": str(exc)})
+        return result
+
+    residual = []
+    for asset in assets:
+        snap = _asset_snapshot(post_account, asset)
+        borrowed, interest, liability = _asset_liability(snap)
+        free = _asset_free(snap)
+        if liability > 0:
+            residual.append(
+                {
+                    "asset": asset,
+                    "borrowed": _dec_str(borrowed),
+                    "interest": _dec_str(interest),
+                    "liability": _dec_str(liability),
+                    "free": _dec_str(free),
+                }
+            )
+    result["residual_debt"] = residual
+    if residual:
+        result["cleanup_status"] = "residual_debt"
+    elif result["binance_errors"]:
+        result["cleanup_status"] = "error"
+    else:
+        result["cleanup_status"] = "clean"
+    result["finished_at_s"] = time.time()
+    cleanup["last_result"] = result
+    return result

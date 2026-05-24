@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional, Callable
 ENV: Dict[str, Any] = {}
 log_event: Optional[Callable[..., None]] = None
 api_client: Optional[Any] = None
+save_state_fn: Optional[Callable[[Dict[str, Any]], None]] = None
+send_webhook_fn: Optional[Callable[[Dict[str, Any]], None]] = None
 
 # Optional dependency: якщо margin_policy ще не готовий/нема — модуль не впаде.
 try:
@@ -15,11 +17,13 @@ except Exception:
     margin_policy = None  # type: ignore
 
 
-def configure(env: Dict[str, Any], log_event_fn: Callable[..., None], api: Optional[Any] = None, **_kwargs) -> None:
-    global ENV, log_event, api_client
+def configure(env: Dict[str, Any], log_event_fn: Callable[..., None], api: Optional[Any] = None, **kwargs) -> None:
+    global ENV, log_event, api_client, save_state_fn, send_webhook_fn
     ENV = env
     log_event = log_event_fn
     api_client = api
+    save_state_fn = kwargs.get("save_state_fn")
+    send_webhook_fn = kwargs.get("send_webhook_fn")
 
 
 def is_margin_mode() -> bool:
@@ -250,16 +254,59 @@ def on_after_position_closed(state: Dict[str, Any], trade_key: Optional[str] = N
     if tk in repay_done or tk in repay_started:
         if log_event:
             log_event("MARGIN_HOOK_AFTER_CLOSE", trade_key=tk, dedup=True)
-        return
-    repay_started[tk] = time.time()
-    try:
-        margin_policy.repay_if_any(state, api_client, ENV.get("SYMBOL", ""))  # type: ignore[attr-defined]
-        repay_done[tk] = time.time()
-        if log_event:
-            log_event("MARGIN_HOOK_AFTER_CLOSE", trade_key=tk, repaid=True)
-    except Exception as exc:
-        if log_event:
-            log_event("MARGIN_HOOK_AFTER_CLOSE_ERROR", trade_key=tk, error=str(exc))
+    else:
+        repay_started[tk] = time.time()
+        try:
+            margin_policy.repay_if_any(state, api_client, ENV.get("SYMBOL", ""))  # type: ignore[attr-defined]
+            repay_done[tk] = time.time()
+            if log_event:
+                log_event("MARGIN_HOOK_AFTER_CLOSE", trade_key=tk, repaid=True)
+        except Exception as exc:
+            if log_event:
+                log_event("MARGIN_HOOK_AFTER_CLOSE_ERROR", trade_key=tk, error=str(exc))
+
+    cleanup_result = None
+    cleanup_fn = getattr(margin_policy, "cleanup_post_close_margin_debt", None)
+    if callable(cleanup_fn):
+        try:
+            cleanup_result = cleanup_fn(state, api_client, ENV.get("SYMBOL", ""), trade_key=tk)
+            status = str((cleanup_result or {}).get("cleanup_status") or "unknown")
+            log_payload = {
+                "trade_key": tk,
+                "cleanup_status": status,
+                "attempted_assets": (cleanup_result or {}).get("attempted_assets"),
+                "repaid_amounts": (cleanup_result or {}).get("repaid_amounts"),
+                "failed_assets": (cleanup_result or {}).get("failed_assets"),
+                "residual_debt": (cleanup_result or {}).get("residual_debt"),
+                "binance_errors": (cleanup_result or {}).get("binance_errors"),
+                "dedup": bool((cleanup_result or {}).get("dedup")),
+            }
+            if log_event:
+                log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP", **log_payload)
+            if status in ("residual_debt", "error"):
+                alert = {"event": "POST_CLOSE_MARGIN_DEBT_CLEANUP_FAIL", **log_payload}
+                if log_event:
+                    log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_FAIL", **log_payload)
+                if send_webhook_fn:
+                    try:
+                        send_webhook_fn(alert)
+                    except Exception as exc:
+                        if log_event:
+                            log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_ALERT_ERROR", trade_key=tk, error=str(exc))
+            if save_state_fn:
+                try:
+                    save_state_fn(state)
+                except Exception as exc:
+                    if log_event:
+                        log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_SAVE_ERROR", trade_key=tk, error=str(exc))
+        except Exception as exc:
+            if log_event:
+                log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_ERROR", trade_key=tk, error=str(exc))
+            if send_webhook_fn:
+                try:
+                    send_webhook_fn({"event": "POST_CLOSE_MARGIN_DEBT_CLEANUP_ERROR", "trade_key": tk, "error": str(exc)})
+                except Exception:
+                    pass
     rt["borrow_started"] = {}
     rt["borrow_done"] = {}
     rt["after_open_done"] = {}

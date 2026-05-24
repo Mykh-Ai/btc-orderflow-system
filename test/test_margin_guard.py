@@ -9,6 +9,16 @@ class FakeMarginPolicy:
     def __init__(self):
         self.borrow_calls = []
         self.repay_calls = []
+        self.cleanup_calls = []
+        self.cleanup_result = {
+            "cleanup_status": "clean",
+            "attempted_assets": [],
+            "repaid_amounts": {},
+            "failed_assets": [],
+            "residual_debt": [],
+            "binance_errors": [],
+        }
+        self.cleanup_error = None
 
     def ensure_borrow_if_needed(self, state, api, symbol, side, qty, plan):
         # record the plan passed from margin_guard
@@ -31,6 +41,22 @@ class FakeMarginPolicy:
                 "symbol": symbol,
             }
         )
+
+    def cleanup_post_close_margin_debt(self, state, api, symbol, trade_key=None):
+        self.cleanup_calls.append(
+            {
+                "state": state,
+                "api": api,
+                "symbol": symbol,
+                "trade_key": trade_key,
+            }
+        )
+        if self.cleanup_error:
+            raise self.cleanup_error
+        result = dict(self.cleanup_result)
+        result["trade_key"] = trade_key
+        state.setdefault("margin", {}).setdefault("post_close_debt_cleanup", {})["last_result"] = result
+        return result
 
 
 class FakeApi:
@@ -173,6 +199,8 @@ class TestMarginGuard(unittest.TestCase):
         # repay should be called once
         self.assertEqual(len(self.policy.repay_calls), 1)
         self.assertEqual(self.policy.repay_calls[0]["symbol"], symbol)
+        self.assertEqual(len(self.policy.cleanup_calls), 1)
+        self.assertEqual(self.policy.cleanup_calls[0]["trade_key"], "T20")
 
         # and logs should contain our trade_key at least once
         logged_trade_keys = []
@@ -196,6 +224,51 @@ class TestMarginGuard(unittest.TestCase):
 
         self.assertEqual(len(self.policy.borrow_calls), 0)
         self.assertEqual(len(self.policy.repay_calls), 0)
+        self.assertEqual(len(self.policy.cleanup_calls), 0)
+
+    def test_post_close_cleanup_residual_alerts_and_saves_state(self):
+        saved = []
+        alerts = []
+        self.policy.cleanup_result = {
+            "cleanup_status": "residual_debt",
+            "attempted_assets": ["USDC"],
+            "repaid_amounts": {"USDC": "0.5"},
+            "failed_assets": [],
+            "residual_debt": [{"asset": "USDC", "liability": "1.5", "free": "0"}],
+            "binance_errors": [],
+        }
+        mg.configure(
+            _base_env(),
+            self.log,
+            api=self.api,
+            save_state_fn=lambda st: saved.append(st),
+            send_webhook_fn=lambda payload: alerts.append(payload),
+        )
+        mg.margin_policy = self.policy
+        state = {"margin": {"active_trade_key": "T30"}}
+
+        with patch.object(mg, "_borrow_mode", return_value="manual"):
+            with patch.object(mg, "is_margin_mode", return_value=True):
+                mg.on_after_position_closed(state, trade_key="T30")
+
+        self.assertEqual(len(self.policy.repay_calls), 1)
+        self.assertEqual(len(self.policy.cleanup_calls), 1)
+        self.assertTrue(saved)
+        self.assertEqual(alerts[0]["event"], "POST_CLOSE_MARGIN_DEBT_CLEANUP_FAIL")
+        self.assertEqual(alerts[0]["cleanup_status"], "residual_debt")
+
+    def test_post_close_cleanup_failure_does_not_escape_hook(self):
+        self.policy.cleanup_error = RuntimeError("cleanup boom")
+        state = {"margin": {"active_trade_key": "T40"}}
+
+        with patch.object(mg, "_borrow_mode", return_value="manual"):
+            with patch.object(mg, "is_margin_mode", return_value=True):
+                mg.on_after_position_closed(state, trade_key="T40")
+
+        self.assertEqual(len(self.policy.repay_calls), 1)
+        self.assertEqual(len(self.policy.cleanup_calls), 1)
+        event_names = [c.args[0] for c in self.log.call_args_list if c.args]
+        self.assertIn("POST_CLOSE_MARGIN_DEBT_CLEANUP_ERROR", event_names)
 
 
 if __name__ == "__main__":

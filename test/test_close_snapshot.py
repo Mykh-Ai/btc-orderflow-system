@@ -367,6 +367,30 @@ class TestCloseSlotSnapshot(unittest.TestCase):
         self.assertTrue(outcomes)
         self.assertTrue(margin_calls)
 
+    def test_margin_cleanup_failure_does_not_block_close_finalization(self):
+        st = self._sl_filled_st()
+        saved = []
+        outcomes = []
+
+        def fake_status(_sym, oid):
+            return {"status": "FILLED"} if int(oid) == 333333 else {"status": "NEW"}
+
+        with patch.object(executor.binance_api, "open_orders", return_value=[]), \
+             patch.object(executor.binance_api, "check_order_status", side_effect=fake_status), \
+             patch.object(executor.binance_api, "cancel_order", return_value={"status": "CANCELED"}), \
+             patch.object(executor.trade_execution_snapshot, "record_final_execution_snapshot", return_value=None), \
+             patch.object(executor.trade_outcome_archive, "record_outcome", lambda *a, **k: outcomes.append(True)), \
+             patch.object(executor, "save_state", lambda *_: saved.append(deepcopy(st))), \
+             patch.object(executor, "send_webhook", lambda *_: None), \
+             patch.object(executor, "log_event", lambda *_, **__: None), \
+             patch.object(executor, "_now_s", return_value=9000.0), \
+             patch.object(executor.margin_guard, "on_after_position_closed", side_effect=RuntimeError("cleanup boom")):
+            executor.manage_v15_position(executor.ENV["SYMBOL"], st)
+
+        self.assertIsNone(st["position"])
+        self.assertTrue(saved)
+        self.assertTrue(outcomes)
+
     def test_trail_fields_at_sl_close(self):
         st = self._sl_filled_st(trail_active=True, trail_sl_price=93800.0)
         self._run_manage(st)
