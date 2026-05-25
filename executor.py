@@ -60,7 +60,7 @@ from executor_mod.risk_math import (
     fmt_qty,
     round_qty,
 )
-from executor_mod import order_utils, open_filled_retry, live_position_manager, pending_entry_flow
+from executor_mod import order_utils, open_filled_retry, live_position_manager, pending_entry_flow, open_entry_flow
 import pandas as pd
 
 
@@ -756,206 +756,43 @@ def main() -> None:
 
         # 3) Process new PEAK events
         for _, evt in new_events:
-            # Safety: ignore very old PEAKs (e.g., after restarts / log replays)
-            max_age = float(ENV.get("MAX_PEAK_AGE_SEC") or 0)
-            if max_age > 0:
-                dt_evt = event_dedup._dt_utc(evt.get("ts"))
-                if dt_evt is not None:
-                    age = _now_s() - float(dt_evt.timestamp())
-                    if age > max_age:
-                        log_event("SKIP_PEAK", reason="stale_peak", age_sec=round(age, 3), evt_ts=str(evt.get("ts")))
-                        continue
-            with suppress(Exception):
-                sync_from_binance(st)
+            open_entry_flow.handle_open_entry_event(
+                st,
+                evt,
+                env=ENV,
+                binance_api=binance_api,
+                save_state_fn=save_state,
+                log_event_fn=log_event,
+                send_webhook_fn=send_webhook,
+                sync_from_binance_fn=sync_from_binance,
+                locked_fn=locked,
+                in_cooldown_fn=in_cooldown,
+                has_open_position_fn=has_open_position,
+                now_fn=_now_s,
+                iso_utc_fn=iso_utc,
+                time_fn=time.time,
+                dt_utc_fn=event_dedup._dt_utc,
+                to_datetime_fn=pd.to_datetime,
+                load_df_sorted_fn=load_df_sorted,
+                locate_index_by_ts_fn=locate_index_by_ts,
+                build_entry_price_fn=build_entry_price,
+                swing_stop_far_fn=swing_stop_far,
+                compute_tps_fn=compute_tps,
+                get_usdt_usdc_k_fn=get_usdt_usdc_k,
+                floor_to_step_fn=floor_to_step,
+                ceil_to_step_fn=ceil_to_step,
+                notional_to_qty_fn=notional_to_qty,
+                validate_qty_fn=validate_qty,
+                fmt_price_fn=fmt_price,
+                avg_fill_price_fn=_avg_fill_price,
+                oid_int_fn=_oid_int,
+                margin_before_entry_fn=margin_guard.on_before_entry,
+                margin_after_entry_opened_fn=margin_guard.on_after_entry_opened,
+                baseline_take_snapshot_fn=baseline_policy.take_snapshot,
+                ensure_exits_fn=exits_flow.ensure_exits,
+                llm_pretrade_fn=llm_trade_judge.maybe_record_llm_pretrade_judge,
+            )
 
-            if locked(st):
-                log_event("SKIP_PEAK", reason="position_lock")
-                continue
-            if in_cooldown(st):
-                log_event("SKIP_PEAK", reason="cooldown")
-                continue
-            if has_open_position(st):
-                log_event("SKIP_PEAK", reason="position_already_open")
-                continue
-
-            # Minimal live scaffold: open a LIMIT order and store as PENDING.
-            # (Exit logic / SL/TP placement is added in the next step.)
-            try:
-                # lock immediately
-                st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
-                save_state(st)
-
-                kind = str(evt.get("kind"))
-                close_price_usdt = float(evt.get("price"))
-                entry_usdt = build_entry_price(kind, close_price_usdt)
-                side = "BUY" if kind == "long" else "SELL"
-                side_txt = "LONG" if side == "BUY" else "SHORT"                    # aggregated.csv is used ONLY here (to compute swing stop from the USDT feed)
-                df_local = load_df_sorted()
-                if df_local.empty:
-                    log_event("SKIP_OPEN", reason="agg_unavailable")
-                    continue
-
-                # locate candle index by event timestamp (in USDT feed)
-                ts = evt.get("ts")
-                i = len(df_local) - 1
-                try:
-                    if ts:
-                        _ts = ts
-                        if isinstance(_ts, str) and _ts.endswith("Z"):
-                            _ts = _ts[:-1] + "+00:00"
-                        i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
-                except Exception:
-                    i = len(df_local) - 1
-
-                sl_usdt = swing_stop_far(df_local, i, side, entry_usdt)
-                tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
-                if len(tps_usdt) < 2:
-                    log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
-                    continue
-                tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
-
-                # --- USDT -> USDC conversion (k_entry fixed once per position) ---
-                k_entry = get_usdt_usdc_k()
-
-                # Convert prices, then apply *directional* rounding to keep logic stable.
-                tick = ENV["TICK_SIZE"]
-                close_usdc = float(close_price_usdt) * float(k_entry)
-
-                raw_entry = float(entry_usdt) * float(k_entry)
-                raw_sl = float(sl_usdt) * float(k_entry)
-                raw_tp1 = float(tp1_usdt) * float(k_entry)
-                raw_tp2 = float(tp2_usdt) * float(k_entry)
-
-                if kind == "long":
-                    # entry must be >= close_usdc + 1 tick
-                    entry = floor_to_step(raw_entry, tick)
-                    min_entry = close_usdc + float(tick)
-                    if entry < min_entry:
-                        entry = ceil_to_step(min_entry, tick)
-
-                    sl = floor_to_step(raw_sl, tick)
-                    tp1 = floor_to_step(raw_tp1, tick)
-                    tp2 = floor_to_step(raw_tp2, tick)
-                else:
-                    # entry must be <= close_usdc - 1 tick
-                    entry = ceil_to_step(raw_entry, tick)
-                    max_entry = close_usdc - float(tick)
-                    if entry > max_entry:
-                        entry = floor_to_step(max_entry, tick)
-
-                    sl = ceil_to_step(raw_sl, tick)
-                    tp1 = ceil_to_step(raw_tp1, tick)
-                    tp2 = ceil_to_step(raw_tp2, tick)
-
-                qty = notional_to_qty(entry, ENV["QTY_USD"])
-
-                if not validate_qty(qty, entry):
-                    log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
-                    continue
-
-                client_id = f"EX_EN_{int(time.time())}"
-                entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
-                if entry_mode == "MARKET_ONLY":
-                    with suppress(Exception):
-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
-                            "trade_key": client_id,
-                            "entry_price": entry,
-                        })
-                    order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
-                    exq0 = float(order.get("executedQty") or 0.0)
-                    status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
-                    avgp0 = _avg_fill_price(order)
-                    entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
-                else:
-                    with suppress(Exception):
-                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
-                            "trade_key": client_id,
-                            "entry_price": entry,
-                        })
-                    order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
-                    status0 = "PENDING"
-                    entry_actual0 = None
-                st["position"] = {
-                    "status": status0,
-                    "mode": "live",
-                    "opened_at": iso_utc(),
-                    "opened_s": _now_s(),
-                    "side": side_txt,
-                    "qty": qty,
-                    "entry": entry,
-                    "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
-                    "client_id": client_id,
-                    "trade_key": client_id,
-                    "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
-                    "entry_actual": entry_actual0,
-                    "k_entry": k_entry,
-                    "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
-                    "src_evt": {
-                        "ts": evt.get("ts"),
-                        "kind": kind,
-                        "source": evt.get("source"),
-                        "action": evt.get("action"),
-                        "delta": evt.get("delta"),
-                        "vol": evt.get("vol"),
-                        "imb": evt.get("imb"),
-                        "price": evt.get("price"),
-                        "vwap": evt.get("vwap"),
-                        "poc": evt.get("poc"),
-                        "price_usdt": close_price_usdt,
-                        "entry_usdt": entry_usdt,
-                        "sl_usdt": sl_usdt,
-                        "tp1_usdt": tp1_usdt,
-                        "tp2_usdt": tp2_usdt,
-                    },
-                }
-                baseline_log = None
-                baseline = st.get("baseline")
-                if not isinstance(baseline, dict):
-                    baseline = {}
-                active_snap = baseline.get("active")
-                active_key = active_snap.get("trade_key") if isinstance(active_snap, dict) else None
-                trade_key = st["position"].get("trade_key") or st["position"].get("client_id")
-                if active_snap is None or active_key != trade_key:
-                    try:
-                        snap = baseline_policy.take_snapshot(
-                            binance_api,
-                            ENV,
-                            ENV["SYMBOL"],
-                            trade_key,
-                            "pre_trade",
-                        )
-                        baseline["active"] = snap
-                        if baseline.get("truth") is not None and not isinstance(baseline.get("truth"), dict):
-                            baseline["truth"] = None
-                        baseline.setdefault("truth", None)
-                        st["baseline"] = baseline
-                        baseline_log = {
-                            "which": "active",
-                            "trade_key": trade_key,
-                            "symbol": snap.get("symbol"),
-                            "trade_mode": snap.get("trade_mode"),
-                        }
-                    except Exception as e:
-                        log_event("BASELINE_ERROR", which="active", trade_key=trade_key, error=str(e))
-                if status0 == "OPEN_FILLED":
-                    pos0 = st.get("position") or {}
-                    with suppress(Exception):
-                        margin_guard.on_after_entry_opened(st, trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
-                    exits_placed_open_filled = False
-                    if (not pos0.get("orders")) and pos0.get("prices"):
-                        exits_placed_open_filled = exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
-                save_state(st)
-                if status0 == "OPEN_FILLED" and exits_placed_open_filled:
-                    with suppress(Exception):
-                        llm_trade_judge.maybe_record_llm_pretrade_judge(st, st.get("position") or {}, trigger="EXITS_PLACED_V15")
-                if baseline_log is not None:
-                    log_event("BASELINE_TAKEN", **baseline_log)
-
-                log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
-                send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
-            except Exception as e:
-                log_event("LIVE_OPEN_ERROR", error=str(e))
-                    
 if __name__ == "__main__":
     try:
         main()
