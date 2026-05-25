@@ -60,7 +60,7 @@ from executor_mod.risk_math import (
     fmt_qty,
     round_qty,
 )
-from executor_mod import order_utils, open_filled_retry, live_position_manager
+from executor_mod import order_utils, open_filled_retry, live_position_manager, pending_entry_flow
 import pandas as pd
 
 
@@ -667,205 +667,27 @@ def main() -> None:
             log_event("ENTRY_SLOT_CLEARED", prev_status=posi.get("status"))
             continue
         if posi.get("mode") == "live" and posi.get("status") == "PENDING":
-            try:
-                last_poll = float(posi.get("last_poll_s", 0.0))
-                now_s = _now_s()
-                if now_s - last_poll >= float(ENV["LIVE_STATUS_POLL_EVERY"]):
-                    oid = int(posi.get("order_id") or 0)
-                    if oid:
-                        od = binance_api.check_order_status(ENV["SYMBOL"], oid)
-                        posi["last_poll_s"] = now_s
-                        st["position"] = posi
-                        save_state(st)
-
-                        stt = str(od.get("status", "")).upper()
-                        if stt in ("FILLED",):
-                            # ENTRY filled -> place exits V1.5 once
-                            posi["status"] = "OPEN_FILLED"
-                            posi["filled_at"] = iso_utc()
-                            posi["executedQty"] = od.get("executedQty")
-                            exq = float(od.get("executedQty") or 0.0)
-                            if exq > 0.0:
-                                posi["qty"] = float(round_qty(exq))
-                            avgp = _avg_fill_price(od)
-                            if avgp:
-                                posi["entry_actual"] = float(fmt_price(avgp))
-
-                            posi["cummulativeQuoteQty"] = od.get("cummulativeQuoteQty")
-                            st["position"] = posi
-                            save_state(st)
-                            log_event("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
-                            send_webhook({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
-                            with suppress(Exception):
-                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
-                            # Place TP1/TP2/SL (no OCO) right after fill confirmation
-                            if not posi.get("orders") and posi.get("prices"):
-                                exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
-
-                        elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
-                            _clear_position_slot(st, f"ENTRY_{stt}", order_id=oid, status=stt)
-                            log_event("ENTRY_DONE", mode="live", status=stt, order_id=oid)
-                            continue
-                # Timeout cancel
-                opened_s = float(posi.get("opened_s") or 0.0)
-                if not opened_s:
-                    opened_s = now_s
-                    posi["opened_s"] = opened_s
-                    st["position"] = posi
-                    save_state(st)   
-                else:
-                    posi["opened_s"] = opened_s
-                now = _now_s()
-                if now - opened_s >= float(ENV["LIVE_ENTRY_TIMEOUT_SEC"]):
-                # throttle timeout actions to avoid spamming Binance API
-                    next_act_s = float(posi.get("planb_next_action_s") or 0.0)
-                    if next_act_s and now < next_act_s:
-                        continue
-                    oid = int(posi.get("order_id") or 0)
-
-                    if oid and posi.get("status") == "PENDING":
-                        # Plan B: timeout -> cancel LIMIT and fall back to MARKET (unless ENTRY_MODE=LIMIT_ONLY).
-                        od_t = binance_api.check_order_status(ENV["SYMBOL"], oid)
-                        exq_t = float(od_t.get("executedQty") or 0.0)
-
-                        def _try_place_exits_now() -> None:
-                            # Best-effort immediate exits placement (reduces naked exposure window).
-                            if posi.get("orders") or not posi.get("prices"):
-                                return
-                            exits_flow.ensure_exits(st, posi, reason="try_now", best_effort=True, save_on_fail=True)
-
-                        if exq_t > 0.0:
-                            # Order partially/fully filled: keep the filled part and proceed to exits.
-                            with suppress(Exception):
-                                binance_api.cancel_order(ENV["SYMBOL"], oid)
-                            posi["status"] = "OPEN_FILLED"
-                            posi["filled_at"] = iso_utc()
-                            posi["executedQty"] = od_t.get("executedQty")
-                            posi["cummulativeQuoteQty"] = od_t.get("cummulativeQuoteQty") or od_t.get("cumulativeQuoteQty")
-                            posi["qty"] = float(round_qty(exq_t))
-                            avgp_t = _avg_fill_price(od_t)
-                            if avgp_t:
-                                posi["entry_actual"] = float(fmt_price(avgp_t))
-                            st["position"] = posi
-                            save_state(st)
-                            log_event("ENTRY_TIMEOUT_PARTIAL_FILLED", mode="live", order_id=oid, executedQty=exq_t)
-                            send_webhook({"event": "ENTRY_TIMEOUT_PARTIAL_FILLED", "mode": "live", "order_id": oid, "executedQty": exq_t})
-                            with suppress(Exception):
-                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
-                            _try_place_exits_now()
-                        else:
-                            # Cancel LIMIT (best-effort)
-                            with suppress(Exception):
-                                binance_api.cancel_order(ENV["SYMBOL"], oid)
-
-                            # Re-check once after cancel to catch a late fill (avoid double-entry).
-                            od_after = None
-                            with suppress(Exception):
-                                od_after = binance_api.check_order_status(ENV["SYMBOL"], oid)
-                            if od_after:
-                                exq_after = float(od_after.get("executedQty") or 0.0)
-                                st_after = str(od_after.get("status", "")).upper()
-                                if st_after == "FILLED" or exq_after > 0.0:
-                                    posi["status"] = "OPEN_FILLED"
-                                    posi["filled_at"] = iso_utc()
-                                    posi["executedQty"] = od_after.get("executedQty")
-                                    posi["cummulativeQuoteQty"] = od_after.get("cummulativeQuoteQty") or od_after.get("cumulativeQuoteQty")
-                                    posi["qty"] = float(round_qty(exq_after))
-                                    avgp_a = _avg_fill_price(od_after)
-                                    if avgp_a:
-                                        posi["entry_actual"] = float(fmt_price(avgp_a))
-                                    st["position"] = posi
-                                    save_state(st)
-                                    log_event("ENTRY_TIMEOUT_LATE_FILL", mode="live", order_id=oid, executedQty=exq_after, status=st_after)
-                                    send_webhook({"event": "ENTRY_TIMEOUT_LATE_FILL", "mode": "live", "order_id": oid, "executedQty": exq_after, "status": st_after})
-                                    with suppress(Exception):
-                                        margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
-                                    _try_place_exits_now()
-                                    continue
-                            # Only place MARKET when LIMIT is confirmed canceled/expired/rejected; otherwise wait.
-                            st_after = str((od_after or {}).get("status", "")).upper()
-                            if st_after not in ("CANCELED", "EXPIRED", "REJECTED"):
-                                posi["planb_next_action_s"] = now + float(ENV["LIVE_STATUS_POLL_EVERY"])
-                                st["position"] = posi
-                                save_state(st)
-                                log_event("ENTRY_TIMEOUT_WAIT_CANCEL", mode="live", order_id=oid, status=st_after or "UNKNOWN")
-                                continue
-
-                            entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
-                            if entry_mode == "LIMIT_ONLY":
-                                log_event("ENTRY_TIMEOUT", mode="live", order_id=oid, fallback="NONE")
-                                send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": "NONE"})
-                                _clear_position_slot(st, "ENTRY_TIMEOUT", order_id=oid, fallback="NONE")
-                            else:
-                                entry_side = "BUY" if posi.get("side") == "LONG" else "SELL"
-
-                                px_exec = None
-                                try:
-                                    px_exec = binance_api._planb_exec_price(ENV["SYMBOL"], entry_side)
-                                except Exception as ee:
-                                    log_event("PLANB_PRICE_ERROR", error=str(ee), order_id=oid)
-
-                                if px_exec is None:
-                                    if ENV.get("PLANB_REQUIRE_PRICE", True):
-                                        log_event("ENTRY_TIMEOUT", mode="live", order_id=oid, fallback="ABORT_NO_PRICE")
-                                        send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": "ABORT_NO_PRICE"})
-                                        _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback="ABORT_NO_PRICE")
-                                        continue
-
-                                if px_exec is not None:
-                                    ok, why, info = _planb_market_allowed(posi, float(px_exec))
-                                    if not ok:
-                                        log_event("ENTRY_TIMEOUT", mode="live", order_id=oid, fallback=f"ABORT_{why}", **info)
-                                        send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": f"ABORT_{why}", "info": info})
-                                        _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
-                                        continue
-                                with suppress(Exception):
-                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
-                                        "trade_key": posi.get("trade_key") or posi.get("client_id") or posi.get("order_id"),
-                                    })
-                                try:
-                                    mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
-                                except Exception as ee:
-                                    log_event("ENTRY_TIMEOUT_MARKET_ERROR", error=str(ee), order_id=oid)
-                                    send_webhook({"event": "ENTRY_TIMEOUT_MARKET_ERROR", "order_id": oid, "error": str(ee)})
-                                    _clear_position_slot(st, "ENTRY_TIMEOUT_MARKET_ERROR", order_id=oid, error=str(ee))
-                                else:
-                                    oid2 = _oid_int(mkt.get("orderId"))
-                                    if not oid2:
-                                        log_event("ENTRY_TIMEOUT_MARKET_NO_OID", order_id=oid)
-                                        send_webhook({"event": "ENTRY_TIMEOUT_MARKET_NO_OID", "order_id": oid})
-                                        _clear_position_slot(st, "ENTRY_TIMEOUT_MARKET_NO_OID", order_id=oid)
-                                    else:
-                                        # Market should fill immediately, but confirm once.
-                                        od2 = binance_api.check_order_status(ENV["SYMBOL"], int(oid2))
-                                        exq2 = float(od2.get("executedQty") or 0.0)
-                                        posi["order_id"] = int(oid2)
-                                        posi["client_id"] = f"EX_EN_MKT_{int(time.time())}"
-                                        posi["opened_s"] = now
-                                        posi["opened_at"] = iso_utc()
-                                        posi["planb_next_action_s"] = now + float(ENV["LIVE_STATUS_POLL_EVERY"])
-                                        if exq2 > 0.0:
-                                            posi["status"] = "OPEN_FILLED"
-                                            posi["filled_at"] = iso_utc()
-                                            posi["qty"] = float(round_qty(exq2))
-                                            avgp2 = _avg_fill_price(od2) or _avg_fill_price(mkt)
-                                            if avgp2:
-                                                posi["entry_actual"] = float(fmt_price(avgp2))
-                                            st["position"] = posi
-                                            save_state(st)
-                                            with suppress(Exception):
-                                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid2))
-                                            _try_place_exits_now()
-                                        else:
-                                            # Unexpected: market not filled. Keep pending and let poll loop handle it.
-                                            posi["status"] = "PENDING"
-                                            st["position"] = posi
-                                            save_state(st)
-
-                                        log_event("ENTRY_TIMEOUT", mode="live", order_id=oid, fallback="MARKET", new_order_id=oid2)
-                                        send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": "MARKET", "new_order_id": oid2})
-            except Exception as e:
-                log_event("LIVE_POLL_ERROR", error=str(e))
+            if pending_entry_flow.handle_pending_position(
+                st,
+                env=ENV,
+                binance_api=binance_api,
+                save_state_fn=save_state,
+                log_event_fn=log_event,
+                send_webhook_fn=send_webhook,
+                clear_position_slot_fn=_clear_position_slot,
+                now_fn=_now_s,
+                iso_utc_fn=iso_utc,
+                time_fn=time.time,
+                round_qty_fn=round_qty,
+                fmt_price_fn=fmt_price,
+                avg_fill_price_fn=_avg_fill_price,
+                oid_int_fn=_oid_int,
+                planb_market_allowed_fn=_planb_market_allowed,
+                margin_before_entry_fn=margin_guard.on_before_entry,
+                margin_after_entry_opened_fn=margin_guard.on_after_entry_opened,
+                ensure_exits_fn=exits_flow.ensure_exits,
+            ):
+                continue
         # 1) Always ingest new DeltaScout lines (so seen_keys advances even if other parts fail)
         tail = read_tail_lines(ENV["DELTASCOUT_LOG"], n=ENV["TAIL_LINES"])
 
