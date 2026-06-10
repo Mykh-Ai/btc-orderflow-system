@@ -1,6 +1,7 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file is the single canonical agent guidance file for this repository.
+It replaces the former split between `CLAUDE.md`, `AGENT.md`, and `agend.md`.
 
 ## Repository Overview
 
@@ -247,3 +248,123 @@ Validated at startup via `_validate_trade_mode()` - raises `RuntimeError` if inv
 5. **Dedup key changes**: Update `dedup_fingerprint()` if modifying `stable_event_key()` logic
 6. **Invariant actions**: Invariants should ONLY log/alert, never modify state or place orders
 7. **Binance string types**: Use `_tf()` helper in `binance_api.py` to normalize bools to "TRUE"/"FALSE" strings
+
+## LLM Trade Judge Game Curation
+
+These rules apply when maintaining `LOG.md`, ADRs, evidence audit reports,
+durable journal summaries, or request backlog classification for the LLM Trade
+Judge Game. This curation role does not authorize execution changes.
+
+### Read Before Curation Work
+
+Before writing or updating game documentation, read the available evidence in
+this order:
+
+1. `AGENTS.md`
+2. `LOG.md`
+3. `ADR-LLM-Trade-Judge-Game.md`
+4. Local Git state: `git status --short`, `git log --oneline -n 30`
+5. Code integration search:
+   `rg -n "LLM_TRADE_JUDGE|llm_trade|trade_outcomes|last_closed|_close_slot|trade_execution_snapshot|EXITS_PLACED_V15|EmitPeak" .`
+6. Server durable journals when available:
+   - `/root/volume-alert/data/logs/executor.log`
+   - `/root/volume-alert/data/state/trade_outcomes.jsonl`
+   - `/root/volume-alert/data/state/executor_state.json`
+   - `/root/volume-alert/data/state/llm_trade_verdicts.jsonl`
+   - `/root/volume-alert/data/state/invariants_state.json`
+   - `/root/volume-alert/data/state/trade_execution_snapshots.jsonl`
+7. Container-visible equivalents under `/data/...` when checking deployed
+   runtime state.
+
+### Curation Prohibitions
+
+Do not:
+
+- Change execution logic from a curation task.
+- Change SL, TP, margin, reconciliation, finalization, order placement, or
+  Binance/API behavior without a separate explicit implementation task.
+- Add Binance endpoints or external data collection from documentation work.
+- Implement post-trade LLM review runtime from curation work.
+- Invent files, line numbers, commits, journal records, trade states, LLM
+  reviews, LLM requests, or backlog items.
+- Treat a planned protocol as current runtime behavior.
+- Treat absent `trade_execution_snapshots.jsonl` as a hook failure before an
+  eligible post-patch closed trade has occurred.
+
+### LOG.md Rules
+
+`LOG.md` is a research/game journal, not `executor.log`.
+
+Each trade entry must include:
+
+- `datetime_utc`
+- `trade_key`
+- `source_files`
+- `pre_trade_verdict`
+- `post_trade_review`
+- `llm_data_requests`
+- `request_backlog_items_created`
+- `lifecycle_class`
+- `scoring_interpretation`
+- `excluded_from_scoring`
+- `code_changes_commits`
+- `incidents_errors`
+- `conclusions`
+- `next_actions`
+
+If no post-trade LLM review or request exists, write exactly:
+
+- `post_trade_review: not_available`
+- `llm_data_requests: none_recorded`
+- `request_backlog_items_created: none`
+
+For durable journal checks, record only observed facts: path checked, present or
+absent, size and timestamp when available, line count when available, last
+relevant records when available, and command used. Prefer durable JSONL and
+state files over log text.
+
+Actual LLM requests must only be recorded when they exist in durable records,
+explicit post-trade review output, or an explicit architect directive. Do not
+infer recurring data needs such as order book, ETF data, funding rates, macro
+context, or news.
+
+Use current readiness labels:
+
+- Game v0 basic research logging: ready to document from existing verdict and
+  outcome journals.
+- Snapshot-enriched analysis: runtime validation pending when
+  `trade_execution_snapshots.jsonl` is absent and no post-patch closed trade has
+  occurred yet.
+- Post-trade LLM self-review loop: not ready when no durable review artifact
+  exists.
+- LLM data-request loop: protocol defined, not active, no requests recorded.
+
+## Agent Permission Guidance
+
+Agents should avoid asking for routine permissions that are safe and local to
+this repository.
+
+Allowed without asking first:
+
+- Read-only inspection: `git status`, `git diff`, `git log`, `rg`, file reads,
+  line counts, and similar audit commands.
+- Local workspace edits requested by the user, including creating or modifying
+  project files with a clear task scope.
+- Staging requested files when the user explicitly asks for it.
+- Running local validation commands such as tests, linters, compile checks, and
+  formatting checks.
+
+Ask for explicit permission before:
+
+- Deleting files, directories, branches, worktrees, or remote refs.
+- Running destructive git commands such as reset, clean, restore, rebase, force
+  push, or history rewrite.
+- Pushing, opening pull requests, creating commits, or merging unless the user
+  explicitly requested that exact action.
+- Deploying, restarting services, changing production/server state, or running
+  commands on a remote server.
+- Installing dependencies, changing credentials/secrets, or performing network
+  actions with side effects.
+
+When unsure, prefer doing safe local read/edit/test work directly, and ask only
+for actions that can lose data, affect remote systems, or change shared history.

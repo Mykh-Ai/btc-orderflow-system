@@ -31,6 +31,10 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
     "LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
     "LLM_TRADE_JUDGE_FEED_TIMEZONE": os.getenv("LLM_TRADE_JUDGE_FEED_TIMEZONE", os.getenv("FEED_SOURCE_TIMEZONE", "Europe/Bratislava")),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", "false"),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED", ""),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED", ""),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES", "5"),
 }
 
 save_state: Optional[Callable[[dict], None]] = None
@@ -695,6 +699,113 @@ def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Option
     }
 
 
+def _current_price_for_context(evidence_pack: Dict[str, Any]) -> Any:
+    src_evt = evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {}
+    if src_evt.get("price") is not None:
+        return src_evt.get("price")
+    if src_evt.get("price_usdt") is not None:
+        return src_evt.get("price_usdt")
+    if evidence_pack.get("entry_actual") is not None:
+        return evidence_pack.get("entry_actual")
+    return evidence_pack.get("entry")
+
+
+def _resolve_market_monitor_current_feed_path(path: str, cutoff_ts: Any) -> str:
+    if not path:
+        return ""
+    if os.path.isdir(path):
+        cutoff_dt = parse_dt_safe(cutoff_ts)
+        if cutoff_dt is None:
+            return path
+        return os.path.join(path, f"{cutoff_dt.date().isoformat()}.csv")
+    return path
+
+
+def build_market_monitor_snapshot_until_cutoff(evidence_pack: Dict[str, Any], env: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cfg = env if isinstance(env, dict) else ENV
+    if not _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False):
+        return {"enabled": False, "data_gaps": ["market_monitor_snapshot_disabled"]}
+
+    cutoff_ts = evidence_pack.get("analysis_cutoff_ts")
+    current_feed_path = str(
+        cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED")
+        or cfg.get("MARKET_MONITOR_CURRENT_FEED")
+        or ""
+    ).strip()
+    context_feed_path = str(
+        cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED")
+        or cfg.get("MARKET_MONITOR_CONTEXT_FEED")
+        or ""
+    ).strip()
+    resolved_current_feed_path = _resolve_market_monitor_current_feed_path(current_feed_path, cutoff_ts)
+
+    data_gaps: List[str] = []
+    if not cutoff_ts:
+        data_gaps.append("market_monitor_snapshot_missing_cutoff_ts")
+    if not current_feed_path:
+        data_gaps.append("market_monitor_snapshot_current_feed_missing")
+    elif not os.path.exists(resolved_current_feed_path):
+        data_gaps.append("market_monitor_snapshot_current_feed_not_found")
+    if context_feed_path and not os.path.exists(context_feed_path):
+        data_gaps.append("market_monitor_snapshot_context_feed_not_found")
+
+    if data_gaps:
+        return {
+            "enabled": True,
+            "schema_version": "market_monitor_snapshot_error_v1",
+            "cutoff_ts": cutoff_ts,
+            "symbol": evidence_pack.get("symbol") or "",
+            "source_paths": {
+                "current_feed": current_feed_path,
+                "resolved_current_feed": resolved_current_feed_path,
+                "context_feed": context_feed_path,
+            },
+            "data_gaps": data_gaps,
+            "boundary": "descriptive market-state snapshot only",
+        }
+
+    try:
+        from market_monitor.feed_adapter import load_feed
+        from market_monitor.snapshot_builder import build_market_monitor_snapshot
+
+        current_feed = load_feed(resolved_current_feed_path)
+        context_feed = load_feed(context_feed_path) if context_feed_path else None
+        snapshot = build_market_monitor_snapshot(
+            current_feed,
+            context_feed=context_feed,
+            cutoff_ts=cutoff_ts,
+            current_price=_to_float(_current_price_for_context(evidence_pack)),
+            src_event=evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {},
+            symbol=str(evidence_pack.get("symbol") or ""),
+            max_zones=max(1, _as_int(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES"), 5)),
+        )
+        if isinstance(snapshot, dict):
+            snapshot["enabled"] = True
+            return snapshot
+        return {
+            "enabled": True,
+            "schema_version": "market_monitor_snapshot_error_v1",
+            "cutoff_ts": cutoff_ts,
+            "symbol": evidence_pack.get("symbol") or "",
+            "data_gaps": ["market_monitor_snapshot_invalid_result"],
+            "boundary": "descriptive market-state snapshot only",
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "schema_version": "market_monitor_snapshot_error_v1",
+            "cutoff_ts": cutoff_ts,
+            "symbol": evidence_pack.get("symbol") or "",
+            "source_paths": {
+                "current_feed": current_feed_path,
+                "resolved_current_feed": resolved_current_feed_path,
+                "context_feed": context_feed_path,
+            },
+            "data_gaps": [f"market_monitor_snapshot_error:{type(exc).__name__}"],
+            "boundary": "descriptive market-state snapshot only",
+        }
+
+
 def _direction(side: Any, src_evt: Dict[str, Any]) -> Optional[str]:
     kind = str(src_evt.get("kind") or "").strip().lower()
     if kind in ("long", "short"):
@@ -764,6 +875,12 @@ def build_pretrade_evidence_pack(pos: Dict[str, Any], st: Dict[str, Any], trigge
             "enabled": True,
             "data_gaps": [f"market_context_error:{type(exc).__name__}"],
         }
+    if _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False):
+        snapshot = build_market_monitor_snapshot_until_cutoff(pack)
+        pack["market_monitor_snapshot"] = snapshot
+        for gap in snapshot.get("data_gaps") or []:
+            if gap not in pack["data_gaps"]:
+                pack["data_gaps"].append(gap)
     return pack
 
 
@@ -905,7 +1022,11 @@ def build_llm_trade_judge_prompt(evidence_pack: Dict[str, Any]) -> str:
         "You only see information available until analysis_cutoff_ts, which is normalized UTC.\n"
         "peak_ts_raw may be legacy feed local time. Do not use raw timestamps for filtering; use analysis_cutoff_ts.\n"
         "The evidence pack includes src_evt/current PEAK, market_context.deltascout, and market_context.aggregated.\n"
-        "All market_context records are intended to be pre-cutoff only; do not use or infer data after analysis_cutoff_ts.\n"
+        "The evidence pack may include market_monitor_snapshot: a descriptive pre-cutoff Market Monitor snapshot "
+        "with local 15m/60m/240m context, broad 1d/3d/7d/30d context, market state, zones, liquidity zones, "
+        "data-quality flags, and context conflicts. It is not a trading instruction and must not modify live orders.\n"
+        "All market_context and market_monitor_snapshot records are intended to be pre-cutoff only; "
+        "do not use or infer data after analysis_cutoff_ts.\n"
         "Do not infer future outcome. Do not mention whether the trade won or lost.\n"
         "The LLM is advisory only and must not suggest changing live orders.\n"
         "Return only JSON, no markdown.\n"

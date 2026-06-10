@@ -108,6 +108,21 @@ class TestCutoffAndEvidence(unittest.TestCase):
         self.assertIn("baseline", pack)
         self.assertEqual(pack["market_context"]["enabled"], False)
         self.assertIn("context_disabled", pack["market_context"]["data_gaps"])
+        self.assertNotIn("market_monitor_snapshot", pack)
+
+    def test_build_pretrade_evidence_pack_can_attach_market_monitor_snapshot_gap(self):
+        judge.configure({
+            "SYMBOL": "BTCUSDC",
+            "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": "missing-market-monitor-feed.csv",
+        })
+        pack = judge.build_pretrade_evidence_pack(_pos(), {}, "EXITS_PLACED_V15")
+        snapshot = pack["market_monitor_snapshot"]
+        self.assertTrue(snapshot["enabled"])
+        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v1")
+        self.assertIn("market_monitor_snapshot_current_feed_not_found", snapshot["data_gaps"])
+        self.assertIn("market_monitor_snapshot_current_feed_not_found", pack["data_gaps"])
 
     def test_build_pretrade_evidence_pack_preserves_raw_peak_fields(self):
         src_evt = {
@@ -318,9 +333,42 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertIn("agg_csv_missing", ctx["data_gaps"])
         self.assertTrue(ctx["enabled"])
 
+    def test_build_market_monitor_snapshot_disabled_and_missing_feed(self):
+        disabled = judge.build_market_monitor_snapshot_until_cutoff(
+            {"analysis_cutoff_ts": "2026-01-01T00:00:00Z"},
+            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": False},
+        )
+        self.assertFalse(disabled["enabled"])
+        self.assertIn("market_monitor_snapshot_disabled", disabled["data_gaps"])
+
+        missing = judge.build_market_monitor_snapshot_until_cutoff(
+            {"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "symbol": "BTCUSDC"},
+            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True},
+        )
+        self.assertTrue(missing["enabled"])
+        self.assertIn("market_monitor_snapshot_current_feed_missing", missing["data_gaps"])
+
+    def test_build_market_monitor_snapshot_resolves_current_feed_dir_from_cutoff(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = judge.build_market_monitor_snapshot_until_cutoff(
+                {"analysis_cutoff_ts": "2026-06-07T19:17:00Z", "symbol": "BTCUSDC"},
+                {
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": td,
+                },
+            )
+            self.assertTrue(missing["enabled"])
+            self.assertIn("market_monitor_snapshot_current_feed_not_found", missing["data_gaps"])
+            self.assertEqual(
+                missing["source_paths"]["resolved_current_feed"],
+                os.path.join(td, "2026-06-07.csv"),
+            )
+
     def test_prompt_mentions_market_context_and_no_hindsight(self):
         prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
         self.assertIn("market_context.deltascout", prompt)
+        self.assertIn("market_monitor_snapshot", prompt)
+        self.assertIn("descriptive pre-cutoff Market Monitor snapshot", prompt)
         self.assertIn("Do not infer future outcome", prompt)
         self.assertIn("normalized UTC", prompt)
         self.assertIn("Do not use raw timestamps for filtering", prompt)
