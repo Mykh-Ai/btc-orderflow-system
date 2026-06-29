@@ -3,7 +3,10 @@ import os
 import tempfile
 import unittest
 
+import pandas as pd
+
 from executor_mod import llm_trade_judge as judge
+from market_monitor import snapshot_builder
 
 
 def _pos(**overrides):
@@ -364,15 +367,81 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
                 os.path.join(td, "2026-06-07.csv"),
             )
 
+    def test_market_structure_state_marks_seller_dominance_above_support_not_range(self):
+        feed = pd.DataFrame(
+            [
+                {
+                    "Timestamp": pd.Timestamp("2026-06-01T00:00:00Z"),
+                    "OpenPrice": 81000.0,
+                    "HiPrice": 81200.0,
+                    "LowPrice": 80600.0,
+                    "ClosePrice": 80950.0,
+                    "TotalQty": 1000.0,
+                    "BuyQty": 420.0,
+                    "SellQty": 580.0,
+                    "OpenInterest": 100000.0,
+                },
+                {
+                    "Timestamp": pd.Timestamp("2026-06-01T23:59:00Z"),
+                    "OpenPrice": 80950.0,
+                    "HiPrice": 81150.0,
+                    "LowPrice": 78500.0,
+                    "ClosePrice": 78800.0,
+                    "TotalQty": 3000.0,
+                    "BuyQty": 900.0,
+                    "SellQty": 2100.0,
+                    "OpenInterest": 101500.0,
+                },
+            ]
+        )
+        zones = pd.DataFrame(
+            [
+                {
+                    "zone_id": "support_1",
+                    "price_lower": 77000.0,
+                    "price_upper": 78000.0,
+                    "significance_score": 92.0,
+                    "confidence_tier": "HIGH",
+                    "status": "ACTIVE",
+                },
+                {
+                    "zone_id": "resistance_1",
+                    "price_lower": 82000.0,
+                    "price_upper": 83000.0,
+                    "significance_score": 75.0,
+                    "confidence_tier": "HIGH",
+                    "status": "ACTIVE",
+                },
+            ]
+        )
+
+        state = snapshot_builder._market_structure_state(
+            current=feed,
+            significant_market_zones=zones,
+        )
+
+        self.assertIn(state["market_state"], {"MARKDOWN_ABOVE_SUPPORT", "EXPANSION_DOWN"})
+        self.assertNotIn("RANGE", state["market_state"])
+        self.assertEqual(state["candidate_bias"], "DOWN")
+        self.assertIn("dominant_side=SELLER", state["evidence_summary"])
+        self.assertIn("range_quality=BIASED", state["evidence_summary"])
+        self.assertLessEqual(state["metrics"]["close_position"], 0.35)
+
     def test_prompt_mentions_market_context_and_no_hindsight(self):
         prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
         self.assertIn("market_context.deltascout", prompt)
         self.assertIn("market_monitor_snapshot", prompt)
         self.assertIn("descriptive pre-cutoff Market Monitor snapshot", prompt)
+        self.assertIn("market_structure_state", prompt)
+        self.assertIn("avoid misreading bearish expansion as range/support", prompt)
         self.assertIn("Do not infer future outcome", prompt)
         self.assertIn("normalized UTC", prompt)
         self.assertIn("Do not use raw timestamps for filtering", prompt)
         self.assertIn("use REJECT", prompt)
+        self.assertIn("Calibrate verdict strictly", prompt)
+        self.assertIn("late chase", prompt)
+        self.assertIn("local 60m/240m extreme", prompt)
+        self.assertIn("Prefer UNCLEAR when broad 1d/3d/7d context", prompt)
 
 
 class TestVerdictJournal(unittest.TestCase):

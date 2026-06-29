@@ -9,6 +9,9 @@ import pandas as pd
 from market_monitor.accumulation_zones import build_accumulation_zones
 from market_monitor.context_windows import build_market_context_windows
 from market_monitor.liquidity_zones import build_liquidity_map
+from market_monitor.market_structure_state import _classify_state as classify_market_structure_state
+from market_monitor.market_structure_state import _oi_context as market_structure_oi_context
+from market_monitor.market_structure_state import _window_metrics as market_structure_window_metrics
 from market_monitor.outputs import build_market_state_timeline, build_volume_delta_state
 from market_monitor.significant_market_zones import build_significant_market_zones
 from market_monitor.structure import build_structure_levels
@@ -37,6 +40,8 @@ def build_market_monitor_snapshot(
     volume_delta_state = build_volume_delta_state(current)
     context_volume_delta_state = build_volume_delta_state(context)
     market_context_windows = build_market_context_windows(context, end_timestamp=cutoff)
+    local_context = _local_context(current)
+    broad_context = _broad_context(market_context_windows)
 
     structure_levels = build_structure_levels(current)
     liquidity_map = build_liquidity_map(structure_levels, latest_price)
@@ -57,6 +62,10 @@ def build_market_monitor_snapshot(
         market_context_windows=market_context_windows,
         significant_market_zones=significant_market_zones,
     )
+    market_structure_state = _market_structure_state(
+        current=current,
+        significant_market_zones=significant_market_zones,
+    )
 
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -64,9 +73,10 @@ def build_market_monitor_snapshot(
         "symbol": symbol or "",
         "data_quality": _snapshot_quality(current=current, context=context),
         "src_event": src_event or {},
-        "local_context": _local_context(current),
-        "broad_context": _broad_context(market_context_windows),
+        "local_context": local_context,
+        "broad_context": broad_context,
         "market_state": _market_state(market_state),
+        "market_structure_state": market_structure_state,
         "significant_market_zones": _zone_buckets(
             significant_market_zones,
             latest_price=latest_price,
@@ -79,8 +89,8 @@ def build_market_monitor_snapshot(
         ),
         "context_conflicts": _context_conflicts(
             src_event=src_event or {},
-            local_context=_local_context(current),
-            broad_context=_broad_context(market_context_windows),
+            local_context=local_context,
+            broad_context=broad_context,
         ),
         "monitor_artifacts": {
             "market_context_windows_csv": "",
@@ -240,6 +250,124 @@ def _market_state(market_state: pd.DataFrame) -> dict[str, Any]:
         "evidence": _parse_json(row["evidence_json"]),
     }
 
+
+def _market_structure_state(
+    *,
+    current: pd.DataFrame,
+    significant_market_zones: pd.DataFrame,
+) -> dict[str, Any]:
+    if current.empty:
+        return {
+            "schema_version": "market_structure_state_snapshot_v1",
+            "status": "unavailable",
+            "data_gaps": ["market_structure_state_current_feed_empty"],
+        }
+    try:
+        metrics = market_structure_window_metrics(current)
+    except Exception as exc:
+        return {
+            "schema_version": "market_structure_state_snapshot_v1",
+            "status": "unavailable",
+            "data_gaps": [f"market_structure_state_metrics_error:{type(exc).__name__}"],
+        }
+
+    close = float(metrics.get("close", 0.0) or 0.0)
+    support = _nearest_market_structure_zone(significant_market_zones, close, role="SUPPORT")
+    resistance = _nearest_market_structure_zone(significant_market_zones, close, role="RESISTANCE")
+    try:
+        state, confidence, bias, candidate_strength, evidence = classify_market_structure_state(
+            metrics=metrics,
+            support=support,
+            resistance=resistance,
+            previous_states=[],
+        )
+    except Exception as exc:
+        return {
+            "schema_version": "market_structure_state_snapshot_v1",
+            "status": "unavailable",
+            "data_gaps": [f"market_structure_state_classifier_error:{type(exc).__name__}"],
+            "metrics": _market_structure_metrics(metrics),
+            "support": _market_structure_zone_item(support),
+            "resistance": _market_structure_zone_item(resistance),
+        }
+
+    data_gaps = []
+    if support.empty:
+        data_gaps.append("market_structure_state_support_zone_missing")
+    if resistance.empty:
+        data_gaps.append("market_structure_state_resistance_zone_missing")
+    return {
+        "schema_version": "market_structure_state_snapshot_v1",
+        "status": "partial" if data_gaps else "ok",
+        "state_version": "SHI_RESET_37E_ONLINE_MARKET_STRUCTURE_STATE_MEMORY_V0",
+        "classification_scope": "pre_cutoff_current_feed_window_with_snapshot_zones",
+        "market_state": state,
+        "confidence_tier": confidence,
+        "candidate_bias": bias,
+        "candidate_strength": candidate_strength,
+        "metrics": _market_structure_metrics(metrics),
+        "oi_context": market_structure_oi_context(metrics),
+        "support": _market_structure_zone_item(support),
+        "resistance": _market_structure_zone_item(resistance),
+        "evidence_summary": evidence,
+        "data_gaps": data_gaps,
+    }
+
+
+def _market_structure_metrics(metrics: dict[str, float]) -> dict[str, Any]:
+    return {
+        "price_open": _round(float(metrics.get("open", 0.0) or 0.0)),
+        "price_close": _round(float(metrics.get("close", 0.0) or 0.0)),
+        "price_high": _round(float(metrics.get("high", 0.0) or 0.0)),
+        "price_low": _round(float(metrics.get("low", 0.0) or 0.0)),
+        "price_change_pct": _round(float(metrics.get("price_change_pct", 0.0) or 0.0)),
+        "range_pct": _round(float(metrics.get("range_pct", 0.0) or 0.0)),
+        "close_position": _round(float(metrics.get("close_position", 0.0) or 0.0), digits=4),
+        "delta_pct": _round(float(metrics.get("delta_pct", 0.0) or 0.0)),
+        "open_interest_change": _round(float(metrics.get("open_interest_change", 0.0) or 0.0)),
+    }
+
+
+def _nearest_market_structure_zone(zones: pd.DataFrame, close: float, *, role: str) -> pd.Series:
+    if zones.empty or close <= 0:
+        return pd.Series(dtype=object)
+    required = {"price_lower", "price_upper", "significance_score"}
+    if not required.issubset(set(zones.columns)):
+        return pd.Series(dtype=object)
+    frame = zones.copy()
+    frame["price_lower"] = pd.to_numeric(frame["price_lower"], errors="coerce")
+    frame["price_upper"] = pd.to_numeric(frame["price_upper"], errors="coerce")
+    frame["strength_score"] = pd.to_numeric(frame["significance_score"], errors="coerce").fillna(0.0)
+    frame = frame.dropna(subset=["price_lower", "price_upper"])
+    if role == "SUPPORT":
+        candidates = frame[frame["price_upper"] < close].copy()
+        if candidates.empty:
+            return pd.Series(dtype=object)
+        candidates["_distance"] = close - candidates["price_upper"]
+        row = candidates.sort_values(["_distance", "strength_score"], ascending=[True, False], kind="mergesort").iloc[0].copy()
+    else:
+        candidates = frame[frame["price_lower"] > close].copy()
+        if candidates.empty:
+            return pd.Series(dtype=object)
+        candidates["_distance"] = candidates["price_lower"] - close
+        row = candidates.sort_values(["_distance", "strength_score"], ascending=[True, False], kind="mergesort").iloc[0].copy()
+    row["band_id"] = row.get("zone_id", "")
+    row["role"] = role
+    return row
+
+
+def _market_structure_zone_item(row: pd.Series) -> dict[str, Any]:
+    if row.empty:
+        return {}
+    return {
+        "zone_id": str(row.get("zone_id", row.get("band_id", ""))),
+        "role": str(row.get("role", "")),
+        "price_lower": _round(float(row.get("price_lower", 0.0) or 0.0)),
+        "price_upper": _round(float(row.get("price_upper", 0.0) or 0.0)),
+        "strength_score": _round(float(row.get("strength_score", row.get("significance_score", 0.0)) or 0.0)),
+        "confidence_tier": str(row.get("confidence_tier", "")),
+        "status": str(row.get("status", "")),
+    }
 
 def _zone_buckets(
     zones: pd.DataFrame,

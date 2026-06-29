@@ -453,3 +453,14 @@ next_actions:
 - On the next LLM verdict, verify durable
   `evidence_pack.market_monitor_snapshot.schema_version` is
   `market_monitor_snapshot_v1`.
+
+## 2026-06-29 - LLM Trade Judge Market Structure State Evidence
+
+- datetime_utc: 2026-06-29
+- scope: pre-trade LLM Trade Judge evidence quality
+- change: added AiTrader SHI_RESET_37E `market_structure_state` classifier into Executor Market Monitor snapshot as `market_structure_state` evidence.
+- rationale: deployed verdict journal showed the model often recognized late-chase, local-extreme, broad-context conflict, and zone-risk flags but still returned `SUPPORT`; AiTrader latest repair fixed range/support misclassification by using `range_pct`, `close_position`, seller/buyer pressure, `dominant_side`, and `range_quality`.
+- implementation: copied committed `market_monitor/market_structure_state.py`; `snapshot_builder.py` now computes a pre-cutoff in-memory market-structure summary from current feed plus significant zones and includes support/resistance, metrics, `oi_context`, candidate bias/strength, and evidence summary.
+- prompt_update: LLM prompt now describes `market_structure_state` as repaired 37E evidence and explicitly warns against misreading bearish expansion as range/support; verdict calibration also discourages `SUPPORT` on late-chase/extreme/zone-conflict setups.
+- tests: `python -m pytest test\test_llm_trade_judge.py` -> 47 passed; `python -m pytest test\` -> 262 passed.
+- production_status: local code only in this workspace at the time of this entry; server deployment/restart not performed in this step.
