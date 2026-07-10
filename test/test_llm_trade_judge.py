@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import tempfile
 import unittest
@@ -516,6 +516,7 @@ class TestRealOpenAIMode(unittest.TestCase):
                 "LLM_TRADE_JUDGE_MODEL": "gpt-5.5",
                 "LLM_TRADE_JUDGE_TIMEOUT_SEC": 20,
                 "LLM_TRADE_JUDGE_MAX_RETRIES": 1,
+                "LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": 2000,
                 "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": notify,
                 "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
             },
@@ -636,6 +637,35 @@ class TestRealOpenAIMode(unittest.TestCase):
                 record = self._records(journal)[0]
                 self.assertEqual(record["competitive_side"], "LLM_REJECT")
 
+    def test_invalid_json_retries_before_error_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            responses = [
+                "not-json",
+                json.dumps({
+                    "verdict": "UNCLEAR",
+                    "competitive_side": "BOT",
+                    "confidence": 0.42,
+                    "setup_class": "unknown",
+                    "reason_codes": ["retry_recovered_json"],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                }),
+            ]
+            calls = []
+
+            def flaky_client(**kwargs):
+                calls.append(kwargs)
+                return responses.pop(0)
+
+            self._configure(journal, client=flaky_client, notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(calls), 2)
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "success")
+            self.assertEqual(record["verdict"], "UNCLEAR")
+            self.assertEqual(record["competitive_side"], "LLM_REJECT")
     def test_invalid_json_appends_error_record_no_raise(self):
         with tempfile.TemporaryDirectory() as td:
             journal = os.path.join(td, "v.jsonl")

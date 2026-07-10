@@ -464,3 +464,12 @@ next_actions:
 - prompt_update: LLM prompt now describes `market_structure_state` as repaired 37E evidence and explicitly warns against misreading bearish expansion as range/support; verdict calibration also discourages `SUPPORT` on late-chase/extreme/zone-conflict setups.
 - tests: `python -m pytest test\test_llm_trade_judge.py` -> 47 passed; `python -m pytest test\` -> 262 passed.
 - production_status: local code only in this workspace at the time of this entry; server deployment/restart not performed in this step.
+
+## 2026-07-10 - LLM Trade Judge JSON Truncation Fix
+
+- datetime_utc: 2026-07-10
+- scope: deployed LLM Trade Judge missed usable verdicts for recent trades
+- observed_server_evidence: `/root/volume-alert/data/state/llm_trade_verdicts.jsonl` contained `LLM_TRADE_JUDGE_ERROR` records for `EX_EN_1783290071` and `EX_EN_1783671425`; both had `error_type=json_validation_error`, not a missing hook.
+- root_cause: the OpenAI Responses call used `max_output_tokens=800`; both model responses were truncated inside JSON strings (`Unterminated string` around char 690-770), so the validator wrote `ERROR_NOT_SCORED`.
+- fix: added `LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS` with default `2000`, passed it to the Responses payload and injected test client, and retried JSON validation failures once before recording an error.
+- tests: `python -m pytest test\test_llm_trade_judge.py` -> 48 passed; `python -m pytest test\` -> 263 passed.

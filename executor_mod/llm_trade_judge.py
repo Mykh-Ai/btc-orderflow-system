@@ -24,6 +24,7 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_MODEL": os.getenv("LLM_TRADE_JUDGE_MODEL", "gpt-5.5"),
     "LLM_TRADE_JUDGE_TIMEOUT_SEC": os.getenv("LLM_TRADE_JUDGE_TIMEOUT_SEC", "20"),
     "LLM_TRADE_JUDGE_MAX_RETRIES": os.getenv("LLM_TRADE_JUDGE_MAX_RETRIES", "1"),
+    "LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": os.getenv("LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS", "2000"),
     "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": os.getenv("LLM_TRADE_JUDGE_NOTIFY_TELEGRAM", "true"),
     "LLM_TRADE_JUDGE_CONTEXT_ENABLED": os.getenv("LLM_TRADE_JUDGE_CONTEXT_ENABLED", "true"),
     "LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS": os.getenv("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", "24"),
@@ -1082,6 +1083,7 @@ def call_openai_trade_judge(evidence_pack: Dict[str, Any]) -> str:
     model = _model_name()
     timeout_sec = _as_float(ENV.get("LLM_TRADE_JUDGE_TIMEOUT_SEC"), 20.0)
     max_retries = max(0, _as_int(ENV.get("LLM_TRADE_JUDGE_MAX_RETRIES"), 1))
+    max_output_tokens = max(800, _as_int(ENV.get("LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS"), 2000))
 
     if openai_client is not None:
         response = openai_client(
@@ -1089,6 +1091,7 @@ def call_openai_trade_judge(evidence_pack: Dict[str, Any]) -> str:
             evidence_pack=evidence_pack,
             model=model,
             timeout_sec=timeout_sec,
+            max_output_tokens=max_output_tokens,
             schema=_json_schema(),
         )
         return _extract_response_text(response)
@@ -1108,7 +1111,7 @@ def call_openai_trade_judge(evidence_pack: Dict[str, Any]) -> str:
                 "schema": _json_schema(),
             }
         },
-        "max_output_tokens": 800,
+        "max_output_tokens": max_output_tokens,
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -1351,8 +1354,16 @@ def maybe_record_llm_pretrade_judge(st: Dict[str, Any], pos: Dict[str, Any], tri
             result = append_stub_pretrade_verdict(journal_path, evidence_pack)
         elif mode == "openai":
             try:
-                raw_text = call_openai_trade_judge(evidence_pack)
-                validated, errors = validate_llm_verdict_json(raw_text)
+                validated = None
+                errors: List[str] = []
+                validation_retries = max(0, _as_int(ENV.get("LLM_TRADE_JUDGE_MAX_RETRIES"), 1))
+                for validation_attempt in range(validation_retries + 1):
+                    raw_text = call_openai_trade_judge(evidence_pack)
+                    validated, errors = validate_llm_verdict_json(raw_text)
+                    if validated is not None:
+                        break
+                    if validation_attempt < validation_retries:
+                        time.sleep(min(1.0, 0.25 * (validation_attempt + 1)))
                 if validated is None:
                     record = build_error_verdict_record(
                         evidence_pack,
