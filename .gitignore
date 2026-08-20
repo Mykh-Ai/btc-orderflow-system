@@ -38,6 +38,10 @@ deltascout/research_material/runbooks/*
 !deltascout/research_material/runbooks/*.example.md
 docs/private/
 
+# Local Codex worktrees and one-off workspace archives
+/.worktrees/
+/deltascout.zip
+
 #aggregator.py
 data/feed/.gitkeep
 data/logs/.gitkeep
