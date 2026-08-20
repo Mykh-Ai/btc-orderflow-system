@@ -26,6 +26,42 @@ Optional selection cap:
 python -m deltascout.research_bundle.build_bundle --input-root <local-reviews-root> --output-root <local-bundles-root> --raw-feed-root <local-raw-feed-root> --max-selected-cases 12
 ```
 
+Setup discovery surface:
+
+```bash
+python -m deltascout.research_bundle.build_setup_candidates --review-root <local-reviews-root> --minute-dataset-root <local-minute-datasets-root> --output-root <local-output-root>
+```
+
+Setup cluster review:
+
+```bash
+python -m deltascout.research_bundle.build_setup_cluster_review --setup-candidates <setup_candidates_SCOPE.csv> --output-root <local-output-root>
+```
+
+Top cluster quantitative pre-review:
+
+```bash
+python -m deltascout.research_bundle.build_top_cluster_manual_review --cluster-review <setup_cluster_review_SCOPE.csv> --setup-candidates <setup_candidates_SCOPE.csv> --accepted-ledger <accepted_outcome_ledger_SCOPE.csv> --minute-dataset-root <local-minute-datasets-root> --output-root <local-output-root>
+```
+
+Move-first research windows:
+
+```bash
+python -m deltascout.research_bundle.build_move_first_windows --review-root <local-reviews-root> --minute-dataset-root <local-minute-datasets-root> --output-root <local-output-root>
+```
+
+Fast-money pre-impulse event-study table:
+
+```bash
+python -m deltascout.research_bundle.build_fast_money_pre_impulse_table --review-root <local-reviews-root> --minute-dataset-root <local-minute-datasets-root> --output-root <local-output-root> --move-first <move_first_windows_SCOPE.csv>
+```
+
+Fast-money setup cases:
+
+```bash
+python -m deltascout.research_bundle.build_fast_money_setup_cases --pre-impulse-table <fast_money_pre_impulse_table_SCOPE.csv> --output-root <local-output-root>
+```
+
 ---
 
 ## Inputs
@@ -56,6 +92,21 @@ Current bundle outputs:
 - `selected_case_raw_feed_micro_<START>_to_<END>.csv`
 - `research_bundle_manifest.csv`
 
+Setup discovery outputs:
+
+- `setup_candidates_<START>_to_<END>.csv`
+- `setup_candidates_<START>_to_<END>_summary.md`
+- `setup_cluster_review_<START>_to_<END>.csv`
+- `setup_cluster_review_<START>_to_<END>.md`
+- `top_cluster_manual_review_<START>_to_<END>.csv`
+- `top_cluster_manual_review_<START>_to_<END>.md`
+- `move_first_windows_<START>_to_<END>.csv`
+- `move_first_windows_<START>_to_<END>.md`
+- `fast_money_pre_impulse_table_<START>_to_<END>.csv`
+- `fast_money_pre_impulse_table_<START>_to_<END>_summary.md`
+- `fast_money_setup_cases_<START>_to_<END>.csv`
+- `fast_money_setup_cases_<START>_to_<END>_summary.md`
+
 ---
 
 ## Current bundle stages
@@ -75,9 +126,21 @@ Current bundle outputs:
 
 - raw micro extract for selected cases
 
+### Setup Discovery
+
+- move-first research windows built from market movement before detector annotations
+- accepted PEAK lifecycle reference rows
+- M2.6 chain candidates with `$1000+` directional movement potential
+- rejected-family candidates with `$1000+` follow-through
+- lifecycle-aware comparison surface for future setup-class validation
+- cluster review that groups setup-candidate rows into time-local candidate setup clusters
+- first-pass quantitative pre-review of top clusters with entry proxy, favorable/adverse move, $1000 hit timing, and AI_EMIT lesson
+- fast-money pre-impulse table with earliest/best move-first proxies, M2.6 density/context, reject/PEAK proximity, stop survival, $500/$1000 hit timing, and candidate-family labels
+- fast-money setup cases that deduplicate proxy rows into one case per move cluster and assign quality class, repeatability family, review priority, and representative entry proxy
+
 Not implemented yet:
 
-- blocker breakdown / reconstruction layer
+- reconstruction layer
 - full review markdown builder in this package
 - annotation-heavy enrichment layer
 
