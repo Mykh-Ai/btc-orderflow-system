@@ -1,13 +1,35 @@
 # DeltaScout Local Runbooks
 
-This folder is for local-only operational runbooks used by agents working against private infrastructure.
+Use this folder through two normal entrypoints.
 
-Tracked contents in the public repository should stay limited to safe placeholders and examples.
-Real runbooks in this folder should be ignored and kept local.
+## Normal Entry Points
 
-Suggested local files:
+- `RUN_AGENT_RESEARCH_WORKFLOW.md`
+  - Use for sync, rebuild, covering missing days, dataset materialization, M2.6, bundle creation, and project log updates.
+- `RUN_LLM_RESEARCH_ANALYSIS.md`
+  - Use for interpretation after the package is ready.
 
-- `agent_analyze_materials_prompt.md`
-- `agent_rebuild_date_range_prompt.md`
+## Reference
+
 - `post_close_watcher.md`
-- other server-specific handoff or execution prompts
+  - Server watcher reference. Usually not a manual prompt.
+
+## Deprecated Stage Prompts
+
+Old stage prompts have been moved to `deprecated/`.
+
+They are kept for traceability, but the user should not need to decide between them manually.
+
+The old prompt family was:
+
+- latest sync
+- date-range rebuild
+- full handoff
+- final summary
+- bundle handoff
+- LLM analysis
+
+That routing is now collapsed into:
+
+1. run `RUN_AGENT_RESEARCH_WORKFLOW.md` to prepare materials;
+2. run `RUN_LLM_RESEARCH_ANALYSIS.md` to interpret materials.
