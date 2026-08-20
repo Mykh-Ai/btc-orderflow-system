@@ -165,3 +165,7 @@ This repository is a portfolio and technical showcase demonstrating system desig
 For the full research specification, see [DeltaScout_Research_Phase1_Spec.md](DeltaScout_Research_Phase1_Spec.md).
 
 For the implementation-ready offline candidate replay and Executor-lifecycle backtester contract, see [DeltaScout_Scout_Replay_Backtester_Spec_v0_1.md](DeltaScout_Scout_Replay_Backtester_Spec_v0_1.md).
+
+Operational instructions for local research runs are in [runbooks/SCOUT_REPLAY_BACKTESTER.md](runbooks/SCOUT_REPLAY_BACKTESTER.md).
+
+Implementation validation and the remaining live-promotion gate are documented in [DeltaScout_Scout_Replay_Backtester_Validation_v0_1.md](DeltaScout_Scout_Replay_Backtester_Validation_v0_1.md).
