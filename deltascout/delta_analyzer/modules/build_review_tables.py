@@ -757,17 +757,40 @@ def _build_accepted_join_row(
         "side": close_row.get("side", ""),
         "final_close_ts": final_close_ts,
         "final_close_reason": final_close_reason,
-        "lifecycle_tp1_done": close_row.get("lifecycle_tp1_done", ""),
-        "lifecycle_tp2_done": close_row.get("lifecycle_tp2_done", ""),
-        "lifecycle_sl_done": close_row.get("lifecycle_sl_done", ""),
-        "lifecycle_trail_active": close_row.get("lifecycle_trail_active", ""),
-        "lifecycle_trail_sl_price": close_row.get("lifecycle_trail_sl_price", ""),
-        "lifecycle_prices_entry": close_row.get("lifecycle_prices_entry", ""),
-        "lifecycle_prices_sl": close_row.get("lifecycle_prices_sl", ""),
-        "lifecycle_prices_tp1": close_row.get("lifecycle_prices_tp1", ""),
-        "lifecycle_prices_tp2": close_row.get("lifecycle_prices_tp2", ""),
+        "lifecycle_tp1_done": _close_row_value(
+            close_row, "lifecycle_tp1_done", "lc_tp1_done"
+        ),
+        "lifecycle_tp2_done": _close_row_value(
+            close_row, "lifecycle_tp2_done", "lc_tp2_done"
+        ),
+        "lifecycle_sl_done": _close_row_value(close_row, "lifecycle_sl_done", "lc_sl_done"),
+        "lifecycle_trail_active": _close_row_value(
+            close_row, "lifecycle_trail_active", "lc_trail_active"
+        ),
+        "lifecycle_trail_sl_price": _close_row_value(
+            close_row, "lifecycle_trail_sl_price", "lc_trail_sl_price"
+        ),
+        "lifecycle_prices_entry": _close_row_value(
+            close_row, "lifecycle_prices_entry", "lc_prices_entry"
+        ),
+        "lifecycle_prices_sl": _close_row_value(
+            close_row, "lifecycle_prices_sl", "lc_prices_sl"
+        ),
+        "lifecycle_prices_tp1": _close_row_value(
+            close_row, "lifecycle_prices_tp1", "lc_prices_tp1"
+        ),
+        "lifecycle_prices_tp2": _close_row_value(
+            close_row, "lifecycle_prices_tp2", "lc_prices_tp2"
+        ),
         "trade_lifecycle_state": close_row.get("trade_lifecycle_state", ""),
     }
+
+
+def _close_row_value(close_row: dict[str, str], primary_key: str, fallback_key: str) -> str:
+    value = close_row.get(primary_key, "")
+    if str(value).strip():
+        return value
+    return close_row.get(fallback_key, "")
 
 
 def _build_unresolved_accepted_join_row(linkage_status: str) -> dict[str, str]:

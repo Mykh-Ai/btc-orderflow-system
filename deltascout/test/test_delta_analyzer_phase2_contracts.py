@@ -91,6 +91,14 @@ def _base_row(ts: str) -> EventsBaseRow:
         matched_liq_sell_qty=None,
         source_file="synthetic_event.jsonl",
         terminal_decision_present=True,
+        prev_price=None,
+        prev_vol=None,
+        prev_vwap=None,
+        comparison_price_pass=None,
+        comparison_vol_pass=None,
+        comparison_vwap_pass=None,
+        comparison_3of3_pass_count=None,
+        comparison_3of3_failed_subconditions="",
     )
 
 

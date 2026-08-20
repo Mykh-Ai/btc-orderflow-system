@@ -33,6 +33,21 @@ def _top_pairs(counter: Counter[str], size: int) -> list[tuple[str, int]]:
     return counter.most_common(size) + [("", "")] * max(0, size - len(counter))
 
 
+def _accepted_outcome_surface(row: dict[str, str]) -> str:
+    close_reason = (row.get("close_reason") or "").strip()
+    lifecycle_state = (row.get("trade_lifecycle_state") or "").strip()
+    tp1_done = (row.get("lifecycle_tp1_done") or "").strip().lower() == "true"
+    trail_active = (row.get("lifecycle_trail_active") or "").strip().lower() == "true"
+
+    if close_reason == "SL" and trail_active:
+        return "SL_TRAILER"
+    if close_reason == "SL" and tp1_done:
+        return "SL_TP1"
+    if lifecycle_state:
+        return lifecycle_state
+    return close_reason
+
+
 def build_index_summary(scope: ScopeInfo) -> Path:
     scope.bundle_dir.mkdir(parents=True, exist_ok=True)
     out_path = scope.bundle_dir / f"reviews_{scope.scope_start}_to_{scope.scope_end}_index_summary.csv"
@@ -93,7 +108,7 @@ def build_index_summary(scope: ScopeInfo) -> Path:
             "has_close_outcome": _yes_no(bool(close_rows)),
             "accepted_case_ts": accepted_case.get("ts", ""),
             "accepted_case_kind": accepted_case.get("kind", ""),
-            "accepted_case_outcome_surface": accepted_case.get("trade_lifecycle_state", "") or accepted_case.get("close_reason", ""),
+            "accepted_case_outcome_surface": _accepted_outcome_surface(accepted_case),
             "accepted_case_close_reason": accepted_case.get("close_reason", ""),
             "dominant_side_reject_bias": reject_kind_counter.most_common(1)[0][0] if reject_kind_counter else "",
             "contains_vwap_side_rejects": _yes_no("vwap_side" in reason_counter),
