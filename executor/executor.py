@@ -6,9 +6,8 @@ Executor — execution engine for DeltaScout PEAK signals.
 Design goals
 - Reads DeltaScout JSONL events from a shared log file (DELTASCOUT_LOG)
 - Single-position mode: ignores new PEAK while a position is OPEN/PENDING
-- DRY=1 (paper) now, DRY=0 (Binance) later
 - Writes ONLY to its own state/log files (never appends to deltascout.log)
-- Keeps executor log capped to LOG_MAX_LINES (default: 200)
+- Keeps executor log capped to LOG_MAX_LINES (default: 5000)
 
 Hardening (this patch)
 - Strictly accepts only valid DeltaScout PEAK events
@@ -18,32 +17,47 @@ Hardening (this patch)
 - Keeps last_closed in state while freeing position slot (position=None)
 - Reads deltascout log by tail (TAIL_LINES) without loading full file
 
-Paper mode behavior (DRY=1)
-- On PEAK: compute entry/qty/sl/tps and open a virtual position
-- Continuously monitors latest price from AGG_CSV
-- Closes on SL or final TP (TP1/TP2 hits tracked)
-
 """
 from __future__ import annotations
-
 import os
-import sys
 import json
 import time
 import math
-import hmac
-import hashlib
-import inspect
-import csv
+import atexit
+import signal
 from collections import deque
 from contextlib import suppress
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
-
+from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
+from executor_mod import baseline_policy
+from executor_mod.notifications import log_event, send_webhook
+from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
+from executor_mod import margin_guard 
+import executor_mod.trail as trail
+import executor_mod.invariants as invariants
+import executor_mod.binance_api as binance_api
+import executor_mod.event_dedup as event_dedup
+import executor_mod.risk_math as risk_math
+import executor_mod.trade_outcome_archive as trade_outcome_archive
+import executor_mod.trade_execution_snapshot as trade_execution_snapshot
+import executor_mod.trade_close_summary as trade_close_summary
+import executor_mod.market_data as market_data
+import executor_mod.exits_flow as exits_flow
+import executor_mod.llm_trade_judge as llm_trade_judge
+from executor_mod.risk_math import (
+    floor_to_step,
+    ceil_to_step,
+    round_nearest_to_step,
+    _decimals_from_step,
+    fmt_price,
+    fmt_qty,
+    round_qty,
+)
 import pandas as pd
-import requests
-from urllib.parse import urlencode
+
 
 # ===================== ENV =====================
 
@@ -78,19 +92,34 @@ def _get_str(name: str, default: str) -> str:
 
 
 ENV: Dict[str, Any] = {
-# mode
-"DRY": _get_bool("DRY", True),
-
 # inputs
 "DELTASCOUT_LOG": os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log"),
-# Feed path: keep AGG_CSV override, but allow FEED_DIR default like other services
-"FEED_DIR": os.getenv("FEED_DIR", "/data/feed"),
-"AGG_CSV": os.getenv("AGG_CSV") or os.path.join(os.getenv("FEED_DIR", "/data/feed"), "aggregated.csv"),
+"AGG_CSV": os.getenv("AGG_CSV", "/data/feed/aggregated.csv"),
 
 # outputs
 "STATE_FN": os.getenv("STATE_FN", "/data/state/executor_state.json"),
 "EXEC_LOG": os.getenv("EXEC_LOG", "/data/logs/executor.log"),
-"LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 200),
+"LOG_MAX_LINES": _get_int("LOG_MAX_LINES", 5000),
+"LLM_TRADE_JUDGE_ENABLED": _get_bool("LLM_TRADE_JUDGE_ENABLED", False),
+"LLM_TRADE_JUDGE_VERDICTS_FN": os.getenv("LLM_TRADE_JUDGE_VERDICTS_FN", "/data/state/llm_trade_verdicts.jsonl"),
+"TRADE_EXECUTION_SNAPSHOTS_FN": os.getenv("TRADE_EXECUTION_SNAPSHOTS_FN", "/data/state/trade_execution_snapshots.jsonl"),
+"LLM_TRADE_JUDGE_SCORE_EXCLUDE_KEYS": _get_str("LLM_TRADE_JUDGE_SCORE_EXCLUDE_KEYS", "EX_EN_1778689753"),
+"LLM_TRADE_JUDGE_MODE": _get_str("LLM_TRADE_JUDGE_MODE", "stub"),
+"LLM_TRADE_JUDGE_MODEL": _get_str("LLM_TRADE_JUDGE_MODEL", "gpt-5.5"),
+"LLM_TRADE_JUDGE_TIMEOUT_SEC": _get_float("LLM_TRADE_JUDGE_TIMEOUT_SEC", 20.0),
+"LLM_TRADE_JUDGE_MAX_RETRIES": _get_int("LLM_TRADE_JUDGE_MAX_RETRIES", 1),
+"LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": _get_int("LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS", 2000),
+"LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": _get_bool("LLM_TRADE_JUDGE_NOTIFY_TELEGRAM", True),
+"LLM_TRADE_JUDGE_CONTEXT_ENABLED": _get_bool("LLM_TRADE_JUDGE_CONTEXT_ENABLED", True),
+"LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS": _get_float("LLM_TRADE_JUDGE_CONTEXT_LOOKBACK_HOURS", 24.0),
+"LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS": _get_int("LLM_TRADE_JUDGE_CONTEXT_MAX_EVENTS", 5000),
+"LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
+"LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
+"LLM_TRADE_JUDGE_FEED_TIMEZONE": os.getenv("LLM_TRADE_JUDGE_FEED_TIMEZONE", os.getenv("FEED_SOURCE_TIMEZONE", "Europe/Bratislava")),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": _get_bool("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": _get_str("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED", ""),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": _get_str("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED", ""),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES": _get_int("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES", 5),
 
 # safety / log reader
 "TAIL_LINES": _get_int("TAIL_LINES", 80),
@@ -116,6 +145,12 @@ ENV: Dict[str, Any] = {
 # risk model
 "SL_PCT": _get_float("SL_PCT", 0.002),
 "SWING_MINS": _get_int("SWING_MINS", 180),
+"INITIAL_STOP_POLICY": _get_str("INITIAL_STOP_POLICY", "VOLUME_SWING_24H_LR25"),
+"INITIAL_SWING_LOOKBACK": _get_int("INITIAL_SWING_LOOKBACK", 1440),
+"INITIAL_SWING_LR": _get_int("INITIAL_SWING_LR", 25),
+"INITIAL_SWING_BUFFER_USD": _get_float("INITIAL_SWING_BUFFER_USD", 50.0),
+"INITIAL_SWING_MAX_DISTANCE_USD": _get_float("INITIAL_SWING_MAX_DISTANCE_USD", 1200.0),
+"INITIAL_SWING_REQUIRE_FULL_WINDOW": _get_bool("INITIAL_SWING_REQUIRE_FULL_WINDOW", True),
 "TP_R_LIST": [float(x) for x in os.getenv("TP_R_LIST", "1,2").split(",") if x.strip()],
 
 # polling
@@ -126,7 +161,7 @@ ENV: Dict[str, Any] = {
 "N8N_BASIC_AUTH_USER": os.getenv("N8N_BASIC_AUTH_USER", ""),
 "N8N_BASIC_AUTH_PASSWORD": os.getenv("N8N_BASIC_AUTH_PASSWORD", ""),
 
-# Binance (used only when DRY=0)
+# Binance
 "BINANCE_BASE_URL": os.getenv("BINANCE_BASE_URL", "https://api.binance.com"),
 "BINANCE_API_KEY": os.getenv("BINANCE_API_KEY", ""),
 "BINANCE_API_SECRET": os.getenv("BINANCE_API_SECRET", ""),
@@ -139,6 +174,7 @@ ENV: Dict[str, Any] = {
 "MARGIN_ISOLATED": os.getenv("MARGIN_ISOLATED", "FALSE"),  # "TRUE" / "FALSE"
 "MARGIN_SIDE_EFFECT": os.getenv("MARGIN_SIDE_EFFECT", "AUTO_BORROW_REPAY"),
 "MARGIN_AUTO_REPAY_AT_CANCEL": _get_bool("MARGIN_AUTO_REPAY_AT_CANCEL", False),
+"MARGIN_BORROW_MODE": _get_str("MARGIN_BORROW_MODE", "manual"),  # manual | auto
 
 # Live mode helpers
 "LIVE_VALIDATE_ONLY": _get_bool("LIVE_VALIDATE_ONLY", False),
@@ -160,50 +196,34 @@ ENV: Dict[str, Any] = {
 "SL_LIMIT_GAP_TICKS": _get_int("SL_LIMIT_GAP_TICKS", 2),  # gap ticks for STOP_LOSS_LIMIT limit price vs stopPrice
 # trailing source: "AGG" (aggregated.csv) or "BINANCE" (bookTicker mid)
 "TRAIL_SOURCE": os.getenv("TRAIL_SOURCE", "AGG").strip().upper(),
-# swing detection on ClosePrice from aggregated.csv
+"TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
+# swing detection uses LowPrice (LONG) / HiPrice (SHORT) from aggregated.csv v2;
+# trail_wait_confirm uses bar ClosePrice for confirmation.
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
-"TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 50.0),
-"TRAIL_CONFIRM_BUFFER_USD": _get_float("TRAIL_CONFIRM_BUFFER_USD", 0.0),
+"TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
+"USDT_USDC_RATIO_MIN": _get_float("USDT_USDC_RATIO_MIN", 0.95),
+"USDT_USDC_RATIO_MAX": _get_float("USDT_USDC_RATIO_MAX", 1.05),
+# invariants (detector-only)
+"INVAR_ENABLED": _get_bool("INVAR_ENABLED", 1),
+"INVAR_EVERY_SEC": _get_int("INVAR_EVERY_SEC", 20),
+"INVAR_THROTTLE_SEC": _get_int("INVAR_THROTTLE_SEC", 600),
+"INVAR_GRACE_SEC": _get_int("INVAR_GRACE_SEC", 15),
+"INVAR_FEED_STALE_SEC": _get_int("INVAR_FEED_STALE_SEC", 180),
+"INVAR_KILL_ON_DEBT": _get_bool("INVAR_KILL_ON_DEBT", False),
+"INVAR_PERSIST": _get_bool("INVAR_PERSIST", False),
+"I13_GRACE_SEC": _get_int("I13_GRACE_SEC", 300),
+"I13_ESCALATE_SEC": _get_int("I13_ESCALATE_SEC", 180),
+"I13_EXCHANGE_CHECK": _get_bool("I13_EXCHANGE_CHECK", True),
+"I13_EXCHANGE_MIN_INTERVAL_SEC": _get_int("I13_EXCHANGE_MIN_INTERVAL_SEC", 60),
+"I13_CLEAR_STATE_ON_EXCHANGE_CLEAR": _get_bool("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR", False),
+"MARGIN_DEBT_EPS": _get_float("MARGIN_DEBT_EPS", 0.0),
+"PREFLIGHT_EXPECT_QUOTE": os.getenv("PREFLIGHT_EXPECT_QUOTE", "").strip().upper(),
+"ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
+"SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
+"RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
 }
 
-# ===== aggregated.csv strict schema (10 columns, ordered) =====
-EXPECTED_AGG_HEADER = [
-    "Timestamp",
-    "Trades",
-    "TotalQty",
-    "AvgSize",
-    "BuyQty",
-    "SellQty",
-    "AvgPrice",
-    "ClosePrice",
-    "HiPrice",
-    "LowPrice",
-]
-
-
-def _norm_col(c: str) -> str:
-    return (str(c) if c is not None else "").lstrip("\ufeff").strip()
-
-
-def _validate_agg_header(header: list[str] | None, path: str) -> None:
-    if not header:
-        print(f"[CSV HEADER ERROR] empty header in {path}", file=sys.stderr, flush=True)
-        raise SystemExit(2)
-    header_n = [_norm_col(h) for h in header]
-    if header_n != EXPECTED_AGG_HEADER:
-        print(
-            "[CSV HEADER ERROR] aggregated.csv schema mismatch.\n"
-            f"Expected: {EXPECTED_AGG_HEADER}\n"
-            f"Got:      {header_n}\n"
-            f"Path:     {path}",
-            file=sys.stderr,
-            flush=True,
-        )
-        raise SystemExit(2)
-
-# Binance server time offset (ms). Helps avoid timestamp drift / -1021 errors.
-BINANCE_TIME_OFFSET_MS = 0
 
 # ===================== Time/IO helpers =====================
 
@@ -214,37 +234,168 @@ def now_utc() -> datetime:
 def iso_utc(dt: Optional[datetime] = None) -> str:
     return (dt or now_utc()).isoformat()
 
+def _split_symbol_guess(symbol: str) -> Tuple[str, str]:
+    """
+    Best-effort split like BTCUSDC -> (BTC, USDC).
+    Uses PREFLIGHT_EXPECT_QUOTE if set, otherwise common quote suffixes.
+    """
+    s = (symbol or "").strip().upper()
+    if not s:
+        return ("", "")
+    exp = (ENV.get("PREFLIGHT_EXPECT_QUOTE") or "").strip().upper()
+    if exp and s.endswith(exp) and len(s) > len(exp):
+        return (s[:-len(exp)], exp)
+    for q in ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"):
+        if s.endswith(q) and len(s) > len(q):
+            return (s[:-len(q)], q)
+    # fallback: unknown quote
+    return (s, "")
 
-def _ensure_dir(path: str) -> None:
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
 
+def _validate_trade_mode() -> str:
+    mode = str(ENV.get("TRADE_MODE", "")).strip().lower()
+    if mode not in ("spot", "margin"):
+        raise RuntimeError("unsupported mode removed; use TRADE_MODE=spot or TRADE_MODE=margin")
+    ENV["TRADE_MODE"] = mode
+    return mode
 
-def append_line_with_cap(path: str, line: str, cap: int) -> None:
-    """Append a line and keep only the last `cap` lines."""
-    _ensure_dir(path)
-    # append new line (explicit \n)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(line.rstrip("\n") + "\n")
-
-    # File stays small by design; safe to read/trim each time.
+def _as_f(x: Any, default: float = 0.0) -> float:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        if len(lines) > cap:
-            lines = lines[-cap:]
-            with open(path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-    except FileNotFoundError:
-        pass
+        if x is None:
+            return default
+        if isinstance(x, (int, float)):
+            return float(x)
+        xs = str(x).strip()
+        if xs == "":
+            return default
+        return float(xs)
+    except Exception:
+        return default
 
+def _exchange_position_exists(symbol: str) -> Optional[bool]:
+    """
+    Return:
+      True  -> exchange shows a non-zero base exposure OR margin borrowed/interest
+      False -> exchange shows clearly no exposure and no debt
+      None  -> cannot determine (missing API function / unexpected payload)
+    """
+    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
+    base, _quote = _split_symbol_guess(symbol)
+    if not base:
+        return None
+    eps_qty = max(float(ENV.get("MIN_QTY", 0.0) or 0.0), 0.0)
+    # for safety, treat tiny dust as "no position"
+    eps_qty = max(eps_qty, 1e-12)
+    debt_eps = float(ENV.get("MARGIN_DEBT_EPS") or 0.0)
 
-def log_event(action: str, **fields: Any) -> None:
-    obj = {"ts": iso_utc(), "source": "executor", "action": action}
-    obj.update(fields)
-    append_line_with_cap(ENV["EXEC_LOG"], json.dumps(obj, ensure_ascii=False), ENV["LOG_MAX_LINES"])
+    def _asset_has_exposure_margin(a: Dict[str, Any]) -> bool:
+        # Binance margin payload often contains: free, locked, borrowed, interest, netAsset
+        free = _as_f(a.get("free"), 0.0)
+        locked = _as_f(a.get("locked"), 0.0)
+        borrowed = _as_f(a.get("borrowed"), 0.0)
+        interest = _as_f(a.get("interest"), 0.0)
+        net = _as_f(a.get("netAsset"), 0.0)
+        if abs(net) > eps_qty:
+            return True
+        if (free + locked) > eps_qty:
+            return True
+        if (borrowed + interest) > max(debt_eps, 0.0):
+            return True
+        return False
 
+    def _asset_has_exposure_spot(a: Dict[str, Any]) -> bool:
+        free = _as_f(a.get("free"), 0.0)
+        locked = _as_f(a.get("locked"), 0.0)
+        return (free + locked) > eps_qty
+
+    # --- margin mode ---
+    if mode == "margin":
+        # try common function names in our wrapper
+        for fn_name in ("margin_account", "get_margin_account", "get_margin_account_info", "get_margin_account_details"):
+            fn = getattr(binance_api, fn_name, None)
+            if not callable(fn):
+                continue
+            try:
+                j = fn()
+                assets = None
+                if isinstance(j, dict):
+                    assets = j.get("userAssets") or j.get("assets") or j.get("balances")
+                if not isinstance(assets, list):
+                    return None
+                # check base exposure and/or debt on base
+                for a in assets:
+                    if not isinstance(a, dict):
+                        continue
+                    if str(a.get("asset", "")).upper() == base:
+                        return True if _asset_has_exposure_margin(a) else False
+                # base not present -> can't be sure
+                return None
+            except Exception:
+                return None
+        return None
+
+    # --- spot mode ---
+    for fn_name in ("account", "get_account", "spot_account", "get_spot_account"):
+        fn = getattr(binance_api, fn_name, None)
+        if not callable(fn):
+            continue
+        try:
+            j = fn()
+            bals = None
+            if isinstance(j, dict):
+                bals = j.get("balances") or j.get("userAssets")
+            if not isinstance(bals, list):
+                return None
+            for a in bals:
+                if not isinstance(a, dict):
+                    continue
+                if str(a.get("asset", "")).upper() == base:
+                    return True if _asset_has_exposure_spot(a) else False
+            return None
+        except Exception:
+            return None
+    return None
+
+def _as_env_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if val is None:
+        return False
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def _preflight_margin_cross_usdc() -> None:
+    trade_mode = str(ENV.get("TRADE_MODE", "") or "").strip().lower()
+    is_isolated = _as_env_bool(ENV.get("MARGIN_ISOLATED"))
+    symbol = str(ENV.get("SYMBOL", "") or "").strip().upper()
+    expect_quote = str(ENV.get("PREFLIGHT_EXPECT_QUOTE", "") or "").strip().upper()
+
+    issues = []
+    if trade_mode != "margin":
+        issues.append("TRADE_MODE must be 'margin'")
+    if is_isolated:
+        issues.append("MARGIN_ISOLATED must be FALSE (cross)")
+    if expect_quote and not symbol.endswith(expect_quote):
+        issues.append(f"SYMBOL must end with {expect_quote} (quote asset)")
+
+    if not issues:
+        return
+
+    details = {
+        "issues": issues,
+        "trade_mode": trade_mode,
+        "margin_isolated": ENV.get("MARGIN_ISOLATED"),
+        "symbol": symbol,
+        "expect_quote": expect_quote,
+    }
+    log_event("PREFLIGHT_WARN", **details)
+    with suppress(Exception):
+        send_webhook({"event": "PREFLIGHT_WARN", **details})
+
+# Wire runtime dependencies for event_dedup (keeps call sites unchanged).
+event_dedup.configure(ENV, iso_utc=iso_utc, save_state=save_state, log_event=log_event)
+market_data.configure(ENV)
 
 def read_tail_lines(path: str, n: int) -> List[str]:
     """Read only the last N lines from a potentially large file.
@@ -272,199 +423,43 @@ def read_tail_lines(path: str, n: int) -> List[str]:
     except FileNotFoundError:
         return []
 
+# Configure trail helper module (inject ENV and file tail reader)
+# Configure margin guard hooks (future margin support; safe no-op by default)
+with suppress(Exception):
+    margin_guard.configure(
+        ENV,
+        log_event,
+        api=binance_api,
+        save_state_fn=save_state,
+        send_webhook_fn=send_webhook,
+    )
+trail.configure(ENV, read_tail_lines, log_event)
 
 def _now_s() -> float:
     return time.time()
 
-
-# ===================== DeltaScout event normalization / dedup =====================
-
-def _ts_norm(ts: Any) -> Optional[str]:
-    """Normalize timestamp for stable dedup keys."""
-    if ts is None:
-        return None
-    if isinstance(ts, str):
-        s = ts.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        with suppress(Exception):
-            return pd.to_datetime(s, utc=True).isoformat()
-        return s
-    with suppress(Exception):
-        return pd.to_datetime(ts, utc=True).isoformat()
-    return None
-
-
-def stable_event_key(evt: Dict[str, Any]) -> Optional[str]:
-    """Stable dedup key for PEAK events.
-
-    Previous version used only rounded price, which can 'glue' distinct events together (e.g. to 0.1).
-    Here we include multiple fields emitted by DeltaScout (ts/kind/price/delta/vol/imb).
-    """
-    if not isinstance(evt, dict):
-        return None
-
-    if evt.get("action") != "PEAK":
-        return None
-
-    if ENV["STRICT_SOURCE"] and evt.get("source") != "DeltaScout":
-        return None
-
-    kind = str(evt.get("kind") or "").strip().lower()
-    if kind not in ("long", "short"):
-        return None
-
-    ts = _ts_norm(evt.get("ts"))
-    if not ts:
-        return None
-
-    # Use quantized values (string-stable), but avoid over-rounding.
-    def _q(x: Any, nd: int) -> str:
-        with suppress(Exception):
-            xf = float(x)
-            if math.isfinite(xf):
-                return f"{xf:.{nd}f}"
-        return "na"
-
-    price_q = _q(evt.get("price"), max(2, int(ENV["DEDUP_PRICE_DECIMALS"])))
-    delta_q = _q(evt.get("delta"), 2)
-    vol_q = _q(evt.get("vol"), 2)
-    imb_q = _q(evt.get("imb"), 3)
-
-    return f"PEAK|{ts}|{kind}|p={price_q}|d={delta_q}|v={vol_q}|i={imb_q}"
-
-# ===================== Webhook =====================
-
-def dedup_fingerprint() -> str:
-    """Fingerprint of the current de-duplication scheme.
-
-    If stable_event_key() logic changes, this fingerprint changes too.
-    On boot we can safely rebuild seen_keys from the DeltaScout log tail.
-    """
-    try:
-        src = inspect.getsource(stable_event_key)
-    except Exception:
-        src = "stable_event_key"
-    base = f"{src}|DEDUP_PRICE_DECIMALS={ENV.get('DEDUP_PRICE_DECIMALS')}"
-    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
-
-
-def _dt_utc(ts_any: Any) -> Optional[pd.Timestamp]:
-    """Parse various timestamp formats to UTC Timestamp, or None."""
-    if ts_any is None:
-        return None
-    try:
-        dt = pd.to_datetime(str(ts_any), utc=True, errors="coerce")
-    except Exception:
-        return None
-    if dt is None or pd.isna(dt):
-        return None
-    return dt
-
-
-def bootstrap_seen_keys_from_tail(st: Dict[str, Any], tail_lines: List[str]) -> None:
-    """On boot, mark all PEAKs currently present in the DeltaScout log tail as 'seen'.
-
-    This prevents accidental trading of historical PEAKs after container/VPS restart,
-    API-key rotation, or de-dup key format changes.
-    """
-    meta = st.setdefault("meta", {})
-
-    fp_now = dedup_fingerprint()
-    fp_old = meta.get("dedup_fp")
-    if fp_old != fp_now:
-        # Reset seen_keys when scheme changed
-        meta["seen_keys"] = []
-        log_event("DEDUP_SCHEMA_CHANGED", old=fp_old, new=fp_now)
-
-    seen = set(meta.get("seen_keys", []))
-    added = 0
-
-    # Watermark: newest PEAK timestamp we've already consumed/ignored
-    last_peak_ts_dt = _dt_utc(meta.get("last_peak_ts"))
-
-    for ln in tail_lines:
-        try:
-            evt = json.loads(ln)
-        except Exception:
-            continue
-        if evt.get("action") != "PEAK":
-            continue
-
-        k = stable_event_key(evt)
-        if k and k not in seen:
-            seen.add(k)
-            added += 1
-
-        dt = _dt_utc(evt.get("ts"))
-        if dt is not None and (last_peak_ts_dt is None or dt > last_peak_ts_dt):
-            last_peak_ts_dt = dt
-
-    if last_peak_ts_dt is not None:
-        meta["last_peak_ts"] = last_peak_ts_dt.isoformat()
-
-    meta["seen_keys"] = list(seen)[-int(ENV.get("SEEN_KEYS_MAX", 500)):]
-    meta["dedup_fp"] = fp_now
-    meta["boot_ts"] = iso_utc()
-
-    save_state(st)
-
-    log_event(
-        "BOOTSTRAP_SEEN_KEYS",
-        added=added,
-        total=len(meta["seen_keys"]),
-        last_peak_ts=meta.get("last_peak_ts"),
-        dedup_fp=meta.get("dedup_fp"),
+# Configure invariants (detector-only; disabled by default)
+with suppress(Exception):
+    invariants.configure(
+        ENV,
+        log_event_fn=log_event,
+        send_webhook_fn=send_webhook,
+        now_fn=_now_s,
+        save_state_fn=save_state,
+    )
+with suppress(Exception):
+    margin_guard.configure(
+        ENV,
+        log_event,
+        api=binance_api,
+        save_state_fn=save_state,
+        send_webhook_fn=send_webhook,
     )
 
-
-def send_webhook(payload: Dict[str, Any]) -> None:
-    url = ENV["N8N_WEBHOOK_URL"]
-    if not url:
-        return
-    payload = dict(payload)
-    payload.setdefault("source", "executor")
-    try:
-        auth = None
-        if ENV["N8N_BASIC_AUTH_USER"] and ENV["N8N_BASIC_AUTH_PASSWORD"]:
-            auth = (ENV["N8N_BASIC_AUTH_USER"], ENV["N8N_BASIC_AUTH_PASSWORD"])
-        requests.post(url, json=payload, timeout=5, auth=auth)
-    except Exception as e:
-        log_event("WEBHOOK_ERROR", error=str(e), payload=payload)
-
+# ===================== DeltaScout event normalization / dedup =====================
+# (moved to executor_mod.event_dedup)
 
 # ===================== Rounding / sizing =====================
-
-def floor_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_FLOOR) * step
-    return float(d)
-
-
-def ceil_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_CEILING) * step
-    return float(d)
-
-
-def round_nearest_to_step(x: float, step: Decimal) -> float:
-    step = Decimal(step)
-    d = (Decimal(str(x)) / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
-    return float(d)
-
-
-def _decimals_from_step(step: Decimal) -> int:
-    """Number of decimal places implied by a step (tick/lot)."""
-    step = Decimal(step)
-    return max(0, -step.as_tuple().exponent)
-
-
-def fmt_price(p: float) -> str:
-    """Format price as a string respecting TICK_SIZE."""
-    dp = _decimals_from_step(ENV["TICK_SIZE"])
-    return f"{p:.{dp}f}"
-
-
 
 def _oid_int(v: Any) -> Optional[int]:
     try:
@@ -484,21 +479,105 @@ def _avg_fill_price(order: Dict[str, Any]) -> Optional[float]:
     except Exception:
         return None
     return None
-def fmt_qty(q: float) -> str:
-    """Format quantity as a string respecting QTY_STEP (trim trailing zeros)."""
-    dp = _decimals_from_step(ENV["QTY_STEP"])
-    s = f"{q:.{dp}f}"
-    return s.rstrip("0").rstrip(".") if "." in s else s
 
 # Backward-compatible name (kept for any leftover uses)
 
-def round_qty(x: float) -> float:
-    """Round a quantity DOWN to the configured qty step."""
-    return floor_to_step(x, ENV["QTY_STEP"])
+
+def _record_trade_execution_snapshot(st: Dict[str, Any], source: str, *, enrich_exchange: bool = False) -> Optional[Dict[str, Any]]:
+    """Best-effort execution snapshot; must never affect trading cleanup."""
+    try:
+        return trade_execution_snapshot.record_final_execution_snapshot(
+            st,
+            source=source,
+            binance_api=binance_api if enrich_exchange else None,
+        )
+    except Exception as exc:
+        with suppress(Exception):
+            log_event("TRADE_EXECUTION_SNAPSHOT_ERROR", source=source, error=str(exc))
+    return None
+
+
+def _quote_asset(symbol: str) -> str:
+    symbol = str(symbol or "").upper()
+    for quote in ("USDC", "USDT", "FDUSD", "BUSD", "USD"):
+        if symbol.endswith(quote):
+            return quote
+    return ""
+
+
+def _commission_usdc_valuation(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort current-price commission valuation for Telegram UX only."""
+    commissions = ((snapshot or {}).get("fees") or {}).get("commission_by_asset") or {}
+    if not commissions:
+        return {}
+
+    symbol = str((snapshot or {}).get("symbol") or "")
+    quote = _quote_asset(symbol)
+    if quote != "USDC":
+        return {}
+
+    total = Decimal("0")
+    used_symbol = None
+    for asset, raw_amount in commissions.items():
+        amount = Decimal(str(raw_amount or "0"))
+        asset = str(asset or "").upper()
+        if not amount:
+            continue
+        if asset == "USDC":
+            total += amount
+        elif asset == "BNB":
+            used_symbol = "BNBUSDC"
+            px = Decimal(str(binance_api.get_mid_price(used_symbol)))
+            total += amount * px
+        else:
+            return {}
+
+    if total <= 0:
+        return {}
+    return {
+        "commission_usdc_approx": format(total, "f"),
+        "commission_valuation_source": "binance_public_mid_at_notification",
+        "commission_valuation_symbol": used_symbol or "USDC",
+    }
+
+
+def _send_trade_closed_summary(st: Dict[str, Any], snapshot: Optional[Dict[str, Any]]) -> None:
+    """Best-effort close summary notification; must never affect cleanup."""
+    try:
+        if not isinstance(snapshot, dict) or not snapshot:
+            last_closed = (st or {}).get("last_closed")
+            if not isinstance(last_closed, dict) or not last_closed:
+                return
+            snapshot = trade_execution_snapshot.build_local_snapshot(st or {}, last_closed, "_close_slot")
+
+        valuation: Dict[str, Any] = {}
+        with suppress(Exception):
+            valuation = _commission_usdc_valuation(snapshot)
+        payload = trade_close_summary.build_trade_closed_summary_payload(snapshot, **valuation)
+        if not payload:
+            return
+        send_webhook(payload)
+        with suppress(Exception):
+            log_event(
+                "TRADE_CLOSED_SUMMARY_SENT",
+                trade_key=payload.get("trade_key"),
+                gross_pnl_usdc=payload.get("gross_pnl_usdc"),
+                net_pnl_approx_usdc=payload.get("net_pnl_approx_usdc"),
+                commission_usdc_approx=payload.get("commission_usdc_approx"),
+            )
+    except Exception as exc:
+        with suppress(Exception):
+            log_event("TRADE_CLOSED_SUMMARY_ERROR", error=str(exc))
+
+
+# Wire runtime dependencies for binance_api (keeps call sites unchanged).
+
+risk_math.configure(ENV)
+binance_api.configure(ENV, fmt_qty=risk_math.fmt_qty, fmt_price=risk_math.fmt_price, round_qty=risk_math.round_qty)
 
 
 def build_entry_price(kind: str, close_price: float) -> float:
-    """Entry price builder used for both paper and live.
+    """Entry price builder used for live.
 
     For breakout-style entries:
       - long  -> above close
@@ -537,67 +616,200 @@ def validate_qty(qty: float, entry: float) -> bool:
 # ===================== Market context =====================
 
 def load_df_sorted() -> pd.DataFrame:
-    # Robust loader: returns empty DF on schema issues.
-    if not os.path.exists(ENV["AGG_CSV"]):
-        return pd.DataFrame()
-
-    # Validate header first (BOM-safe) to fail loud on schema drift
-    with open(ENV["AGG_CSV"], "r", encoding="utf-8-sig", newline="") as f:
-        rdr = csv.reader(f)
-        header = next(rdr, None)
-        _validate_agg_header(header, ENV["AGG_CSV"])
-
-    df = pd.read_csv(ENV["AGG_CSV"], encoding="utf-8-sig")
-    df.columns = [_norm_col(c) for c in df.columns]
-
-    if "Timestamp" not in df.columns:
-        return pd.DataFrame()
-
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce").dt.floor("min")
-
-    # price
-    if "ClosePrice" in df.columns:
-        price = df["ClosePrice"]
-    elif "AvgPrice" in df.columns:
-        price = df["AvgPrice"]
-    else:
-        return pd.DataFrame()
-
-    df["price"] = pd.to_numeric(price, errors="coerce").ffill()
-
-    buy = pd.to_numeric(df.get("BuyQty", 0.0), errors="coerce").fillna(0.0)
-    sell = pd.to_numeric(df.get("SellQty", 0.0), errors="coerce").fillna(0.0)
-    df["buy"] = buy
-    df["sell"] = sell
-
-    df["vol1m"] = df["buy"] + df["sell"]
-    df["delta"] = df["buy"] - df["sell"]
-
-    df = df.dropna(subset=["Timestamp", "price"])
-
-    return df.reset_index(drop=True)
+    return market_data.load_df_sorted()
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    # normalize to minute resolution; be tolerant to tz formats
+    # V8 must resolve the exact signal minute. The previous helper fell back to
+    # the newest row and could therefore introduce lookahead on a missing minute.
     try:
-        target = pd.to_datetime(ts, utc=True).tz_convert(None).floor("min")
+        target = pd.to_datetime(ts, utc=True, errors="coerce")
+        if pd.isna(target):
+            return -1
+        target = target.tz_convert(None).floor("min")
+        series = pd.to_datetime(df["Timestamp"], utc=True, errors="coerce")
+        series = series.dt.tz_convert(None).dt.floor("min")
+        matched = df.index[series == target]
+        return int(matched[0]) if len(matched) else -1
     except Exception:
-        return len(df) - 1
-
-    try:
-        series = pd.to_datetime(df["Timestamp"], utc=True).tz_convert(None).dt.floor("min")
-        m = df.index[series == target]
-        return int(m[0]) if len(m) else len(df) - 1
-    except Exception:
-        return len(df) - 1
+        return -1
 
 
 def latest_price(df: pd.DataFrame) -> float:
-    if len(df) == 0:
-        return float("nan")
-    return float(df.iloc[-1]["price"])
+    return market_data.latest_price(df)
 
-# ===================== Stop / TP ("far" stop logic) =====================
+# ===================== Stop / TP (V8 structural initial stop) =====================
+
+
+class InitialStopSelectionError(RuntimeError):
+    """A candidate cannot satisfy the frozen V8 initial-stop contract."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+
+
+@dataclass(frozen=True)
+class InitialSwingSelection:
+    stop_usdt: float
+    swing_ts: datetime
+    swing_price_usdt: float
+    swing_volume: float
+    eligible_count: int
+    confirmed_count: int
+    window_gap_count: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "policy": str(ENV.get("INITIAL_STOP_POLICY") or ""),
+            "stop_usdt": self.stop_usdt,
+            "swing_ts": self.swing_ts.isoformat(),
+            "swing_price_usdt": self.swing_price_usdt,
+            "swing_volume": self.swing_volume,
+            "eligible_count": self.eligible_count,
+            "confirmed_count": self.confirmed_count,
+            "window_gap_count": self.window_gap_count,
+        }
+
+
+def _initial_stop_from_swing_usdt(side: str, entry_usdt: float, swing_price_usdt: float) -> float:
+    """Apply the structural buffer and the existing 0.2% far-stop floor."""
+
+    pct_stop = (
+        entry_usdt * (1 - float(ENV["SL_PCT"]))
+        if side == "BUY"
+        else entry_usdt * (1 + float(ENV["SL_PCT"]))
+    )
+    buffer_usd = float(ENV["INITIAL_SWING_BUFFER_USD"])
+    tick = ENV["TICK_SIZE"]
+    tick_f = float(tick)
+    if side == "BUY":
+        stop = min(pct_stop, swing_price_usdt - buffer_usd, entry_usdt - tick_f)
+        return floor_to_step(stop, tick)
+    if side == "SELL":
+        stop = max(pct_stop, swing_price_usdt + buffer_usd, entry_usdt + tick_f)
+        return ceil_to_step(stop, tick)
+    raise InitialStopSelectionError("INVALID_SIDE", str(side))
+
+
+def select_volume_confirmed_initial_stop(
+    df: pd.DataFrame,
+    signal_index: int,
+    side: str,
+    entry_usdt: float,
+) -> InitialSwingSelection:
+    """Select the highest-volume confirmed 25/25 swing in the prior 24 hours."""
+
+    policy = str(ENV.get("INITIAL_STOP_POLICY") or "").strip().upper()
+    if policy != "VOLUME_SWING_24H_LR25":
+        raise InitialStopSelectionError("UNSUPPORTED_INITIAL_STOP_POLICY", policy)
+
+    lookback = int(ENV["INITIAL_SWING_LOOKBACK"])
+    lr = int(ENV["INITIAL_SWING_LR"])
+    if lookback <= 0 or lr <= 0 or lookback < 2 * lr + 1:
+        raise InitialStopSelectionError(
+            "INVALID_INITIAL_STOP_CONFIG",
+            f"lookback={lookback} lr={lr}",
+        )
+    if signal_index < 0 or signal_index >= len(df):
+        raise InitialStopSelectionError("MISSING_EXACT_SIGNAL_MINUTE")
+
+    start = signal_index + 1 - lookback
+    if start < 0:
+        raise InitialStopSelectionError(
+            "NO_FULL_INITIAL_SWING_WINDOW",
+            f"bars={signal_index + 1} required={lookback}",
+        )
+    window = df.iloc[start:signal_index + 1].copy()
+    if bool(ENV.get("INITIAL_SWING_REQUIRE_FULL_WINDOW", True)) and len(window) != lookback:
+        raise InitialStopSelectionError(
+            "NO_FULL_INITIAL_SWING_WINDOW",
+            f"bars={len(window)} required={lookback}",
+        )
+
+    required = {
+        "Timestamp",
+        "low_usdt",
+        "high_usdt",
+        "volume_1m",
+        "swing_row_real",
+    }
+    missing = sorted(required.difference(window.columns))
+    if missing:
+        raise InitialStopSelectionError("INITIAL_SWING_SCHEMA_MISSING", ",".join(missing))
+
+    timestamps = pd.to_datetime(window["Timestamp"], utc=True, errors="coerce")
+    if timestamps.isna().any():
+        raise InitialStopSelectionError("INVALID_INITIAL_SWING_TIMESTAMPS")
+    deltas = timestamps.diff().dropna().dt.total_seconds()
+    window_gap_count = int(deltas.ne(60.0).sum())
+    rows = window.reset_index(drop=True)
+    confirmed_count = 0
+    eligible: list[tuple[float, datetime, float, float]] = []
+    cap = float(ENV["INITIAL_SWING_MAX_DISTANCE_USD"])
+
+    for index in range(lr, len(rows) - lr):
+        neighborhood = rows.iloc[index - lr:index + lr + 1]
+        if not bool(neighborhood["swing_row_real"].all()):
+            continue
+        row = rows.iloc[index]
+        if side == "BUY":
+            swing_price = float(row["low_usdt"])
+            if swing_price >= entry_usdt:
+                continue
+            comparisons = neighborhood["low_usdt"].tolist()
+            center = comparisons.pop(lr)
+            is_swing = all(center < float(value) for value in comparisons)
+        elif side == "SELL":
+            swing_price = float(row["high_usdt"])
+            if swing_price <= entry_usdt:
+                continue
+            comparisons = neighborhood["high_usdt"].tolist()
+            center = comparisons.pop(lr)
+            is_swing = all(center > float(value) for value in comparisons)
+        else:
+            raise InitialStopSelectionError("INVALID_SIDE", str(side))
+        if not is_swing:
+            continue
+
+        confirmed_count += 1
+        stop_usdt = _initial_stop_from_swing_usdt(side, entry_usdt, swing_price)
+        if cap > 0 and abs(entry_usdt - stop_usdt) > cap:
+            continue
+        swing_ts = pd.Timestamp(row["Timestamp"])
+        if swing_ts.tzinfo is None:
+            swing_ts = swing_ts.tz_localize("UTC")
+        else:
+            swing_ts = swing_ts.tz_convert("UTC")
+        eligible.append(
+            (
+                float(row["volume_1m"]),
+                swing_ts.to_pydatetime(),
+                swing_price,
+                stop_usdt,
+            )
+        )
+
+    if not eligible:
+        reason = "NO_SWING_WITHIN_INITIAL_STOP_CAP" if confirmed_count else "NO_CONFIRMED_VOLUME_SWING"
+        raise InitialStopSelectionError(reason, f"confirmed={confirmed_count} cap={cap}")
+
+    swing_volume, swing_ts, swing_price, stop_usdt = max(
+        eligible,
+        key=lambda item: (item[0], item[1]),
+    )
+    return InitialSwingSelection(
+        stop_usdt=stop_usdt,
+        swing_ts=swing_ts,
+        swing_price_usdt=swing_price,
+        swing_volume=swing_volume,
+        eligible_count=len(eligible),
+        confirmed_count=confirmed_count,
+        window_gap_count=window_gap_count,
+    )
+
+
+# Retained for rollback/debug comparison only; V8 entry planning never calls it.
 
 def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
     """Return a stop that is FARTHER from entry (vs near).
@@ -606,6 +818,7 @@ def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
 
     - BUY: choose min(pct_sl, swing_low)
     - SELL: choose max(pct_sl, swing_high)
+    - swings are based on LowPrice/HiPrice when available (v2), else fall back to price.
     """
     pct_sl = entry * (1 - ENV["SL_PCT"]) if side == "BUY" else entry * (1 + ENV["SL_PCT"])
 
@@ -614,10 +827,18 @@ def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
     else:
         lookback = df.iloc[max(0, i - ENV["SWING_MINS"]): i + 1]
         if side == "BUY":
-            swing = float(lookback["price"].min())
+            swing_col = "LowPrice" if "LowPrice" in lookback.columns else "price"
+            s = lookback[swing_col].dropna()
+            if s.empty:
+                s = lookback["price"].dropna()
+            swing = pct_sl if s.empty else float(s.min())
             sl = min(pct_sl, swing)
         else:
-            swing = float(lookback["price"].max())
+            swing_col = "HiPrice" if "HiPrice" in lookback.columns else "price"
+            s = lookback[swing_col].dropna()
+            if s.empty:
+                s = lookback["price"].dropna()
+            swing = pct_sl if s.empty else float(s.max())
             sl = max(pct_sl, swing)
 
     # Safety: enforce correct side and rounding
@@ -651,69 +872,7 @@ def compute_tps(entry: float, sl: float, side: str) -> List[float]:
         tps.append(tp)
     return tps
 
-# ===================== Binance adapter (used only when DRY=0) =====================
-
-def _binance_signed_request(method: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = ENV["BINANCE_API_KEY"]
-    api_secret = ENV["BINANCE_API_SECRET"]
-    base_url = ENV["BINANCE_BASE_URL"]
-    if not api_key or not api_secret:
-        raise RuntimeError("Binance API key/secret missing")
-
-    params = dict(params)
-    params["timestamp"] = int(time.time() * 1000) + int(BINANCE_TIME_OFFSET_MS)
-    params.setdefault("recvWindow", ENV.get("RECV_WINDOW", 5000))
-
-    # Deterministic query string for signature
-    params_str = {k: str(v) for k, v in sorted(params.items(), key=lambda kv: kv[0])}
-    query = urlencode(params_str)
-    signature = hmac.new(api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
-
-    headers = {"X-MBX-APIKEY": api_key}
-    url = base_url + endpoint
-
-    req_params = dict(params_str)
-    req_params["signature"] = signature
-
-    if method == "POST":
-        r = requests.post(url, headers=headers, params=req_params, timeout=5)
-    elif method == "GET":
-        r = requests.get(url, headers=headers, params=req_params, timeout=5)
-    elif method == "DELETE":
-        r = requests.delete(url, headers=headers, params=req_params, timeout=5)
-    else:
-        raise ValueError(f"Unsupported method: {method}")
-
-    if r.status_code != 200:
-        raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
-    return r.json()
-
-
-def binance_public_get(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Public GET without signature (used for rare Plan B guards)."""
-    base_url = ENV["BINANCE_BASE_URL"]
-    url = base_url + endpoint
-    r = requests.get(url, params=params or {}, timeout=5)
-    if r.status_code != 200:
-        raise RuntimeError(f"Binance API error: {r.status_code} {r.text}")
-    return r.json() if r.text else {}
-
-
-def _planb_exec_price(symbol: str, entry_side: str) -> Optional[float]:
-    """Return a conservative executable price for Plan B checks.
-    BUY  -> use ask
-    SELL -> use bid
-    """
-    j = binance_public_get("/api/v3/ticker/bookTicker", {"symbol": symbol})
-    try:
-        bid = float(j.get("bidPrice"))
-        ask = float(j.get("askPrice"))
-    except Exception:
-        return None
-    if not (math.isfinite(bid) and math.isfinite(ask) and bid > 0 and ask > 0):
-        return None
-    return ask if entry_side.upper() == "BUY" else bid
-
+# ===================== Binance adapter =====================
 
 def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, str, Dict[str, Any]]:
     """Guard against chasing far away from planned entry.
@@ -756,145 +915,46 @@ def _planb_market_allowed(posi: Dict[str, Any], px_exec: float) -> Tuple[bool, s
 def _clear_position_slot(st: Dict[str, Any], reason: str, **fields: Any) -> None:
     """Fail-safe cleanup: free position slot so new PEAKs can be handled."""
     pos = st.get("position")
+    _p = pos or {}
+    _orders = _p.get("orders") or {}
     st["last_closed"] = {
         "ts": iso_utc(),
-        "mode": (pos or {}).get("mode"),
+        "mode": _p.get("mode"),
         "reason": reason,
-        "pos_status": (pos or {}).get("status"),
-        **fields,
+        "pos_status": _p.get("status"),
+        # close snapshot — additive whitelist enrichment (no API calls, no logic change)
+        "opened_at": _p.get("opened_at"),
+        "trade_key": _p.get("trade_key") or _p.get("client_id"),
+        "order_id": _p.get("order_id"),
+        "qty": _p.get("qty"),
+        "entry_ref": (_p.get("prices") or {}).get("entry"),
+        "entry_actual": _p.get("entry_actual"),
+        "order_id_sl": _orders.get("sl"),
+        "order_id_tp1": _orders.get("tp1"),
+        "order_id_tp2": _orders.get("tp2"),
+        "qty1": _orders.get("qty1"),
+        "qty2": _orders.get("qty2"),
+        "qty3": _orders.get("qty3"),
+        "tp1_done": bool(_p.get("tp1_done")),
+        "tp2_done": bool(_p.get("tp2_done")),
+        "sl_done": bool(_p.get("sl_done")),
+        "trail_active": bool(_p.get("trail_active")),
+        "trail_sl_price": _p.get("trail_sl_price"),
+        "prices": _p.get("prices"),
+        **fields,  # caller-supplied overrides — preserve existing semantics
     }
+    _record_trade_execution_snapshot(st, "_clear_position_slot", enrich_exchange=False)
     st["position"] = None
+
     # unlock; avoid blocking next PEAK for no reason
     st["lock_until"] = 0.0
     save_state(st)
-
-
-def place_spot_limit(symbol: str, side: str, qty: float, price: float, client_id: Optional[str] = None) -> Dict[str, Any]:
-    """Place a LIMIT order.
-
-    Supports:
-      - TRADE_MODE=spot   -> POST /api/v3/order
-      - TRADE_MODE=margin -> POST /sapi/v1/margin/order
-
-    For margin we pass:
-      - isIsolated (TRUE/FALSE)
-      - sideEffectType (e.g. AUTO_BORROW_REPAY / AUTO_REPAY / MARGIN_BUY / NO_SIDE_EFFECT)
-      - autoRepayAtCancel (optional)
-      - newClientOrderId (optional, recommended for reliable sync-on-restart)
-    """
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-
-    # Format quantity/price as strings to avoid float quirks
-    qty_s = fmt_qty(qty)
-    price_s = fmt_price(price)
-
-    if mode == "margin":
-        params: Dict[str, Any] = {
-            "symbol": symbol,
-            "isIsolated": ENV["MARGIN_ISOLATED"],
-            "side": side,
-            "type": "LIMIT",
-            "timeInForce": "GTC",
-            "quantity": qty_s,
-            "price": price_s,
-            "newOrderRespType": "FULL",
-            "sideEffectType": ENV["MARGIN_SIDE_EFFECT"],
-        }
-        if client_id:
-            params["newClientOrderId"] = client_id
-        params["autoRepayAtCancel"] = "TRUE" if ENV["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE"
-        return _binance_signed_request("POST", "/sapi/v1/margin/order", params)
-
-    # spot
-    params2: Dict[str, Any] = {
-        "symbol": symbol,
-        "side": side,
-        "type": "LIMIT",
-        "timeInForce": "GTC",
-        "quantity": qty_s,
-        "price": price_s,
-    }
-    if client_id:
-        params2["newClientOrderId"] = client_id
-    return _binance_signed_request("POST", "/api/v3/order", params2)
-
-
-def place_spot_market(symbol: str, side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
-    """Place a MARKET order in current TRADE_MODE (spot or margin)."""
-    qty_r = round_qty(qty)
-    params: Dict[str, Any] = {
-        "symbol": symbol,
-        "side": side,
-        "type": "MARKET",
-        "quantity": fmt_qty(qty_r),
-        "newOrderRespType": "FULL",
-    }
-    if client_id:
-        params["newClientOrderId"] = client_id
-    return place_order_raw(params)
-
-def flatten_market(symbol: str, pos_side: str, qty: float, client_id: Optional[str] = None) -> Dict[str, Any]:
-    """Fail-safe: close a live position by MARKET (best effort)."""
-    exit_side = "SELL" if str(pos_side).upper() == "LONG" else "BUY"
-    if not client_id:
-        client_id = f"EX_FLAT_{int(time.time())}"
-    return place_spot_market(symbol, exit_side, qty, client_id=client_id)
-def check_order_status(symbol: str, order_id: int) -> Dict[str, Any]:
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-    if mode == "margin":
-        return _binance_signed_request(
-            "GET",
-            "/sapi/v1/margin/order",
-            {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"], "orderId": order_id},
-        )
-    return _binance_signed_request("GET", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
-
-
-def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-    if mode == "margin":
-        return _binance_signed_request(
-            "DELETE",
-            "/sapi/v1/margin/order",
-            {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"], "orderId": order_id},
-        )
-    return _binance_signed_request("DELETE", "/api/v3/order", {"symbol": symbol, "orderId": order_id})
-
-
-
-def open_orders(symbol: str) -> List[Dict[str, Any]]:
-    """Return open orders for symbol in current TRADE_MODE."""
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-    if mode == "margin":
-        j = _binance_signed_request("GET", "/sapi/v1/margin/openOrders", {"symbol": symbol, "isIsolated": ENV["MARGIN_ISOLATED"]})
-        return list(j) if isinstance(j, list) else []
-    j = _binance_signed_request("GET", "/api/v3/openOrders", {"symbol": symbol})
-    return list(j) if isinstance(j, list) else []
-
-
-def place_order_raw(endpoint_params: Dict[str, Any]) -> Dict[str, Any]:
-    """Place an order in current TRADE_MODE.
-
-    For margin orders, required common parameters are injected:
-      - isIsolated
-      - sideEffectType (if not already provided)
-      - autoRepayAtCancel (if not already provided)
-    """
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-
-    if mode == "margin":
-        p = dict(endpoint_params)
-        p.setdefault("symbol", ENV["SYMBOL"])
-        p.setdefault("isIsolated", ENV["MARGIN_ISOLATED"])
-        p.setdefault("sideEffectType", ENV["MARGIN_SIDE_EFFECT"])
-        p.setdefault("autoRepayAtCancel", "TRUE" if ENV["MARGIN_AUTO_REPAY_AT_CANCEL"] else "FALSE")
-        return _binance_signed_request("POST", "/sapi/v1/margin/order", p)
-
-    # spot
-    p = dict(endpoint_params)
-    p.setdefault("symbol", ENV["SYMBOL"])
-    return _binance_signed_request("POST", "/api/v3/order", p)
-
+    with suppress(Exception):
+        trade_outcome_archive.record_outcome(st, "_clear_position_slot", ENV.get("SYMBOL", ""))
+        # Margin safety: if borrow happened but entry failed/canceled, repay here best-effort.
+    with suppress(Exception):
+        tk = (pos or {}).get("trade_key") or (pos or {}).get("client_id") or (pos or {}).get("order_id")
+        margin_guard.on_after_position_closed(st, trade_key=tk)
 
 
 def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
@@ -982,30 +1042,7 @@ def validate_exit_plan(symbol: str, side: str, qty_total: float, prices: Dict[st
     if qty_total_r < min_qty:
         raise RuntimeError(f"qty_total too small after rounding: qty_total={qt} -> {qty_total_r} (min_qty={min_qty})")
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    step_d = ENV["QTY_STEP"]  # Decimal
-    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
-    if total_units <= 0:
-        raise RuntimeError(f"Invalid qty after rounding: qty_total_r={qty_total_r} step={step_d}")
-
-    u1 = total_units // 3
-    u2 = total_units // 3
-    u3 = total_units - u1 - u2
-
-    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
-    if u1 <= 0 or u2 <= 0:
-        u1 = total_units // 2
-        u2 = total_units - u1
-        u3 = 0
-
-    if (u1 + u2 + u3) != total_units:
-        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
-
-    qty1 = float(Decimal(u1) * step_d)
-    qty2 = float(Decimal(u2) * step_d)
-    qty3 = float(Decimal(u3) * step_d)
-    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
-        raise RuntimeError(f"Invalid qty split after rounding: qty_total={qty_total_r} qty1={qty1} qty2={qty2} step={ENV.get('QTY_STEP')}")
-
+    qty1, qty2, qty3 = risk_math.split_qty_3legs_validate(qty_total_r)
     # Min notional safety (optional but helpful)
     min_notional = float(ENV.get("MIN_NOTIONAL", 0.0))
     if min_notional > 0:
@@ -1038,7 +1075,7 @@ def _is_limit_maker_reject(exc: Exception) -> bool:
 def _place_limit_maker_then_limit(payload: dict) -> dict:
     """Try LIMIT_MAKER first; if rejected, retry as LIMIT GTC."""
     try:
-        return place_order_raw(payload)
+        return binance_api.place_order_raw(payload)
     except Exception as e:
         if not _is_limit_maker_reject(e):
             raise
@@ -1050,41 +1087,29 @@ def _place_limit_maker_then_limit(payload: dict) -> dict:
         if cid:
             payload2["newClientOrderId"] = (cid + "_GTC")[:36]
         log_event("LIMIT_MAKER_REJECT", reason=str(e))
-        return place_order_raw(payload2)
+        return binance_api.place_order_raw(payload2)
 
 def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, float]) -> Dict[str, Any]:
     """Place TP1 + TP2 + SL for V1.5 (no OCO).
 
     side: "LONG" | "SHORT"
     prices: {entry, sl, tp1, tp2} in *USDC* terms (already rounded)
+
+    Order of placement: SL first, then TP1, TP2.
+    Reason: on cross margin with NO_SIDE_EFFECT, Binance locks base asset
+    for each SELL order independently. SL (full qty) + TP1 + TP2 > entry qty,
+    so if TPs are placed first they lock part of the balance and SL is rejected
+    with insufficient balance. Placing SL first locks full qty, then TPs are
+    accepted as LIMIT_MAKER on cross margin even if total exceeds balance.
+
+    Rollback: if any order after SL fails, cancel already placed orders
+    before raising, to prevent duplicate exits on retry.
     """
     # Ensure qty is aligned to lot step before splitting
     qty_total_r = round_qty(qty_total)
 
     # Split strictly in integer 'step units' to avoid float floor artefacts
-    step_d = ENV["QTY_STEP"]  # Decimal
-    total_units = int((Decimal(str(qty_total_r)) / step_d).to_integral_value(rounding=ROUND_FLOOR))
-    if total_units <= 0:
-        raise RuntimeError(f"Invalid qty split after rounding: qty_total_r={qty_total_r} step={step_d}")
-
-    u1 = total_units // 3
-    u2 = total_units // 3
-    u3 = total_units - u1 - u2
-
-    # If any of first two legs becomes zero -> degrade to 2 legs (50/50), no trailing leg
-    if u1 <= 0 or u2 <= 0:
-        u1 = total_units // 2
-        u2 = total_units - u1
-        u3 = 0
-
-    if (u1 + u2 + u3) != total_units:
-        raise RuntimeError(f"Internal split error: units=({u1},{u2},{u3}) total_units={total_units}")
-
-    qty1 = float(Decimal(u1) * step_d)
-    qty2 = float(Decimal(u2) * step_d)
-    qty3 = float(Decimal(u3) * step_d)
-    if qty1 <= 0 or qty2 <= 0 or qty3 < 0:
-        raise RuntimeError(f"Invalid qty split: qty_total={qty_total_r} qty1={qty1} qty2={qty2} qty3={qty3}")
+    qty1, qty2, qty3 = risk_math.split_qty_3legs_place(qty_total_r)
     # Binance expects strings for precise formatting
     qty_total_s = fmt_qty(qty_total_r)
     qty1_s = fmt_qty(qty1)
@@ -1092,28 +1117,10 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
 
     tp1_s = fmt_price(float(prices["tp1"]))
     tp2_s = fmt_price(float(prices["tp2"]))
-    sl_s = fmt_price(float(prices["sl"]))
 
     exit_side = "SELL" if side == "LONG" else "BUY"
 
-    tp1 = _place_limit_maker_then_limit({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "LIMIT_MAKER",
-        "quantity": qty1_s,
-        "price": tp1_s,
-        "newClientOrderId": f"EX_TP1_{int(time.time())}",
-    })
-    tp2 = _place_limit_maker_then_limit({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "LIMIT_MAKER",
-        "quantity": qty2_s,
-        "price": tp2_s,
-        "newClientOrderId": f"EX_TP2_{int(time.time())}",
-    })
-    # Stop-loss for the whole remaining position (we adjust after TP1 in manage_v15_position)
-    #    # STOP_LOSS_LIMIT safety gap (limit price vs stop trigger)
+    # --- SL first (locks full qty, avoids insufficient balance for LONG exits) ---
     stop_p = float(prices["sl"])
     tick = float(ENV["TICK_SIZE"])
     gap_ticks = max(1, int(ENV.get("SL_LIMIT_GAP_TICKS") or 0))
@@ -1121,19 +1128,49 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
     limit_p = (stop_p - gap) if exit_side == "SELL" else (stop_p + gap)
     sl_stop_s = fmt_price(stop_p)
     sl_price_s = fmt_price(limit_p)
-    # Ensure price != stopPrice even after rounding to tick size
     if sl_price_s == sl_stop_s:
         sl_price_s = fmt_price((stop_p - tick) if exit_side == "SELL" else (stop_p + tick))
-    sl = place_order_raw({
-        "symbol": symbol,
-        "side": exit_side,
-        "type": "STOP_LOSS_LIMIT",
-        "quantity": qty_total_s,
-        "stopPrice": sl_stop_s,
-        "price": sl_price_s,
-        "timeInForce": "GTC",
-        "newClientOrderId": f"EX_SL_{int(time.time())}",
-    })
+
+    placed: Dict[str, int] = {}
+    try:
+        sl = binance_api.place_order_raw({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "STOP_LOSS_LIMIT",
+            "quantity": qty_total_s,
+            "stopPrice": sl_stop_s,
+            "price": sl_price_s,
+            "timeInForce": "GTC",
+            "newClientOrderId": f"EX_SL_{int(time.time())}",
+        })
+        placed["sl"] = sl["orderId"]
+
+        tp1 = _place_limit_maker_then_limit({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "LIMIT_MAKER",
+            "quantity": qty1_s,
+            "price": tp1_s,
+            "newClientOrderId": f"EX_TP1_{int(time.time())}",
+        })
+        placed["tp1"] = tp1["orderId"]
+
+        tp2 = _place_limit_maker_then_limit({
+            "symbol": symbol,
+            "side": exit_side,
+            "type": "LIMIT_MAKER",
+            "quantity": qty2_s,
+            "price": tp2_s,
+            "newClientOrderId": f"EX_TP2_{int(time.time())}",
+        })
+        placed["tp2"] = tp2["orderId"]
+
+    except Exception:
+        # Rollback: cancel any already placed orders to prevent orphans/duplicates on retry
+        for oid in placed.values():
+            with suppress(Exception):
+                binance_api.cancel_order(symbol, oid)
+        raise
 
     return {
         "tp1": tp1["orderId"],
@@ -1143,6 +1180,22 @@ def place_exits_v15(symbol: str, side: str, qty_total: float, prices: Dict[str, 
         "qty2": qty2,
         "qty3": qty3,
     }
+# Wire runtime dependencies for exits placement flow (keeps call sites unchanged).
+exits_flow.configure(
+    ENV,
+    save_state_fn=lambda st: save_state(st),
+    log_event_fn=lambda *a, **k: log_event(*a, **k),
+    send_webhook_fn=lambda payload: send_webhook(payload),
+    validate_exit_plan_fn=lambda *a, **k: validate_exit_plan(*a, **k),
+    place_exits_v15_fn=lambda *a, **k: place_exits_v15(*a, **k),
+    post_exits_success_hook_fn=lambda st, pos, trigger="EXITS_PLACED_V15": llm_trade_judge.maybe_record_llm_pretrade_judge(st, pos, trigger=trigger),
+)
+llm_trade_judge.configure(
+    ENV,
+    save_state_fn=lambda st: save_state(st),
+    log_event_fn=lambda *a, **k: log_event(*a, **k),
+    send_webhook_fn=lambda payload: send_webhook(payload),
+)
 def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
     """Live V1.5 manager: TP1 -> move SL to BE (entry), TP2 continues.
 
@@ -1158,7 +1211,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         return
     now_s = _now_s()
     try:
-        orders = open_orders(symbol)
+        orders = binance_api.open_orders(symbol)
     except Exception as e:
         # Do not abort manage-cycle: openOrders can be empty/incomplete or fail transiently.
         # We still can verify FILLED via check_order_status and cancel siblings best-effort.
@@ -1180,23 +1233,49 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
     def _status_is_filled(order_id: int) -> bool:
         try:
-            od = check_order_status(symbol, int(order_id))
+            od = binance_api.check_order_status(symbol, int(order_id))
             return str(od.get("status", "")).upper() == "FILLED"
         except Exception:
             return False
 
     def _close_slot(reason: str) -> None:
+        _orders = pos.get("orders") or {}
         st["last_closed"] = {
             "ts": iso_utc(),
             "mode": "live",
             "reason": reason,
             "side": pos.get("side"),
             "entry": (pos.get("prices") or {}).get("entry"),
+            # close snapshot — additive whitelist enrichment (no API calls, no logic change)
+            "opened_at": pos.get("opened_at"),
+            "trade_key": pos.get("trade_key") or pos.get("client_id"),
+            "order_id": pos.get("order_id"),
+            "qty": pos.get("qty"),
+            "entry_ref": (pos.get("prices") or {}).get("entry"),
+            "entry_actual": pos.get("entry_actual"),
+            "order_id_sl": _orders.get("sl"),
+            "order_id_tp1": _orders.get("tp1"),
+            "order_id_tp2": _orders.get("tp2"),
+            "qty1": _orders.get("qty1"),
+            "qty2": _orders.get("qty2"),
+            "qty3": _orders.get("qty3"),
+            "tp1_done": bool(pos.get("tp1_done")),
+            "tp2_done": bool(pos.get("tp2_done")),
+            "sl_done": bool(pos.get("sl_done")),
+            "trail_active": bool(pos.get("trail_active")),
+            "trail_sl_price": pos.get("trail_sl_price"),
+            "prices": pos.get("prices"),
         }
+        execution_snapshot = _record_trade_execution_snapshot(st, "_close_slot", enrich_exchange=True)
         st["position"] = None
         st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
         st["lock_until"] = 0.0
         save_state(st)
+        with suppress(Exception):
+            trade_outcome_archive.record_outcome(st, "_close_slot", ENV.get("SYMBOL", ""))
+        with suppress(Exception):
+            margin_guard.on_after_position_closed(st)
+        _send_trade_closed_summary(st, execution_snapshot)
 
     tp1_id = int(pos["orders"].get("tp1") or 0)
     tp2_id = int(pos["orders"].get("tp2") or 0)
@@ -1213,7 +1292,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             st["position"] = pos
             save_state(st)
             with suppress(Exception):
-                cancel_order(symbol, sl_prev)
+                binance_api.cancel_order(symbol, sl_prev)
 
     # TP1 filled -> move SL to BE (entry) for remaining qty2+qty3
     if tp1_id and not pos.get("tp1_done"):
@@ -1239,8 +1318,27 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # Ensure price != stopPrice even after rounding
                 if be_limit_s == be_stop_s:
                     be_limit_s = fmt_price((be_stop - tick) if exit_side == "SELL" else (be_stop + tick))
+                # Cancel old SL FIRST (and confirm), then place new BE SL.
+                old_sl_id = int((pos.get("orders") or {}).get("sl") or 0)
+                if old_sl_id:
+                    with suppress(Exception):
+                        binance_api.cancel_order(symbol, old_sl_id)
+                    od_c = None
+                    with suppress(Exception):
+                        od_c = binance_api.check_order_status(symbol, old_sl_id)
+                    st_c = str((od_c or {}).get("status", "")).upper()
+                    if st_c not in ("CANCELED", "REJECTED", "EXPIRED"):
+                        log_event(
+                            "TP1_SL_TO_BE_WAIT_CANCEL",
+                            mode="live",
+                            order_id_tp1=tp1_id,
+                            order_id_sl=old_sl_id,
+                            status=st_c or "UNKNOWN",
+                        )
+                        return
+
                 try:
-                    sl_new = place_order_raw({
+                    sl_new = binance_api.place_order_raw({
                         "symbol": symbol,
                         "side": exit_side,
                         "type": "STOP_LOSS_LIMIT",
@@ -1254,21 +1352,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     log_event("TP1_SL_TO_BE_ERROR", error=str(e), mode="live", order_id_tp1=tp1_id)
                     send_webhook({"event": "TP1_SL_TO_BE_ERROR", "mode": "live", "symbol": symbol, "order_id_tp1": tp1_id, "error": str(e)})
                 else:
-                    sl_id = int((pos.get("orders") or {}).get("sl") or 0)
-                    # Keep old SL id for best-effort cleanup even if cancel fails.
-                    if sl_id:
-                        pos["orders"]["sl_prev"] = sl_id
+                    # Keep old SL id for best-effort orphan cleanup (if needed).
+                    if old_sl_id:
+                        pos["orders"]["sl_prev"] = old_sl_id
                         pos["sl_prev_next_cancel_s"] = _now_s()
                     pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
+                    pos["prices"]["sl"] = be_stop
                     pos["tp1_done"] = True
                     st["position"] = pos
                     save_state(st)
                     log_event("TP1_DONE_SL_TO_BE", mode="live", order_id_tp1=tp1_id, new_sl_order_id=sl_new.get("orderId"))
                     send_webhook({"event": "TP1_DONE_SL_TO_BE", "mode": "live", "symbol": symbol, "new_sl_order_id": sl_new.get("orderId"), "entry": be_stop})
-                    # Best-effort cancel of old SL (do not depend on openOrders).
-                    if sl_id:
-                        with suppress(Exception):
-                            cancel_order(symbol, sl_id)
             else:
                 # Log once to avoid spam; can happen if order exists but is not filled yet.
                 miss = pos.setdefault("missing_not_filled", {})
@@ -1300,20 +1394,28 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # cancel TP1 best-effort (should already be filled, but do not assume)
                 if tp1_id:
                     with suppress(Exception):
-                        cancel_order(symbol, tp1_id)
+                        binance_api.cancel_order(symbol, tp1_id)
 
                 # replace current SL with trailing SL for remaining qty (qty3, or qty1+qty3 if TP2 filled first)
                 sl_now = int((pos.get("orders") or {}).get("sl") or 0)
 
-               # Primary: trailing stop from aggregated.csv swings (low API usage).
-                desired = _trail_desired_stop_from_agg(pos)
-                if desired is None:
+               # Primary: calculate the swing in BTCUSDT, then synchronize it to
+                # the BTCUSDC execution contour before any cancel/replace action.
+                trail_quote = None
+                trail_sync_failed = False
+                try:
+                    trail_quote = _trail_stop_quote_from_agg(pos)
+                except QuoteSyncError as exc:
+                    trail_sync_failed = True
+                    log_event("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+                desired = trail_quote.stop_usdc if trail_quote is not None else None
+                if desired is None and not trail_sync_failed:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
                     mid = 0.0
                     with suppress(Exception):
-                        mid = float(get_mid_price(symbol))
+                        mid = float(binance_api.get_mid_price(symbol))
                     if mid > 0.0:
-                        off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 50.0)
+                        off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                         desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
 
                 if desired is not None:
@@ -1340,10 +1442,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     if sl_now:
                         sl_canceled_ok = False
                         with suppress(Exception):
-                            cancel_order(symbol, sl_now)
+                            binance_api.cancel_order(symbol, sl_now)
                         od_c = None
                         with suppress(Exception):
-                            od_c = check_order_status(symbol, sl_now)
+                            od_c = binance_api.check_order_status(symbol, sl_now)
                         st_c = str((od_c or {}).get("status", "")).upper()
                         if st_c in ("CANCELED", "REJECTED", "EXPIRED"):
                             sl_canceled_ok = True
@@ -1353,15 +1455,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             pos["trail_pending_cancel_sl"] = sl_now
                             pos["trail_active"] = True
                             pos["trail_qty"] = open_qty
-                            ref = float(pos.get("last_price") or 0.0)
-                            if ref > 0.0:
-                                pos["trail_ref_price"] = ref
-                                pos["trail_wait_confirm"] = True
-                                pos["trail_confirmed"] = False
-                            else:
-                                pos["trail_ref_price"] = 0.0
-                                pos["trail_wait_confirm"] = False
-                                pos["trail_confirmed"] = False
+                            _set_trail_confirmation_reference_from_agg(pos)
                             # Force quick retry via trailing maintenance (still rate-limited).
                             pos["trail_last_update_s"] = 0.0
                             st["position"] = pos
@@ -1371,7 +1465,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     else:
                         pos["trail_pending_cancel_sl"] = 0
                     try:
-                        sl_new = place_order_raw({
+                        sl_new = binance_api.place_order_raw({
                             "symbol": symbol,
                             "side": exit_side,
                             "type": "STOP_LOSS_LIMIT",
@@ -1394,7 +1488,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             if fb_limit_s == fb_stop_s:
                                 fb_limit_s = fmt_price((fb_stop - tick) if exit_side == "SELL" else (fb_stop + tick))
                             try:
-                                fb = place_order_raw({
+                                fb = binance_api.place_order_raw({
                                     "symbol": symbol,
                                     "side": exit_side,
                                     "type": "STOP_LOSS_LIMIT",
@@ -1414,15 +1508,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         # Keep trail flags so we retry on next manage tick
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
-                        ref = float(pos.get("last_price") or 0.0)
-                        if ref > 0.0:
-                            pos["trail_ref_price"] = ref
-                            pos["trail_wait_confirm"] = True
-                            pos["trail_confirmed"] = False
-                        else:
-                            pos["trail_ref_price"] = 0.0
-                            pos["trail_wait_confirm"] = False
-                            pos["trail_confirmed"] = False
+                        _set_trail_confirmation_reference_from_agg(pos)
                         pos["trail_last_update_s"] = now_s
                         st["position"] = pos
                         save_state(st)
@@ -1431,15 +1517,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
-                        ref = float(pos.get("last_price") or 0.0)
-                        if ref > 0.0:
-                            pos["trail_ref_price"] = ref
-                            pos["trail_wait_confirm"] = True
-                            pos["trail_confirmed"] = False
-                        else:
-                            pos["trail_ref_price"] = 0.0
-                            pos["trail_wait_confirm"] = False
-                            pos["trail_confirmed"] = False
+                        _set_trail_confirmation_reference_from_agg(pos)
+                        if trail_quote is not None:
+                            _store_trail_quote_audit(pos, trail_quote)
                         pos["trail_sl_price"] = float(fmt_price(stop_p))
                         pos["trail_last_update_s"] = now_s
                         pos["status"] = "OPEN"
@@ -1452,15 +1532,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # No price right now -> mark trailing active and retry next tick
                 pos["trail_active"] = True
                 pos["trail_qty"] = open_qty
-                ref = float(pos.get("last_price") or 0.0)
-                if ref > 0.0:
-                    pos["trail_ref_price"] = ref
-                    pos["trail_wait_confirm"] = True
-                    pos["trail_confirmed"] = False
-                else:
-                    pos["trail_ref_price"] = 0.0
-                    pos["trail_wait_confirm"] = False
-                    pos["trail_confirmed"] = False
+                _set_trail_confirmation_reference_from_agg(pos)
                 pos["trail_last_update_s"] = now_s
                 st["position"] = pos
                 save_state(st)
@@ -1482,14 +1554,14 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
             sl_now = int((pos.get("orders") or {}).get("sl") or 0)
             if sl_now:
                 with suppress(Exception):
-                    cancel_order(symbol, sl_now)
+                    binance_api.cancel_order(symbol, sl_now)
             if tp1_id:
                 with suppress(Exception):
-                    cancel_order(symbol, tp1_id)
+                    binance_api.cancel_order(symbol, tp1_id)
             sl_prev2 = int((pos.get("orders") or {}).get("sl_prev") or 0)
             if sl_prev2:
                 with suppress(Exception):
-                    cancel_order(symbol, sl_prev2)
+                    binance_api.cancel_order(symbol, sl_prev2)
             _close_slot("TP2")
             return
         else:
@@ -1506,15 +1578,27 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         last_u = float(pos.get("trail_last_update_s") or 0.0)
         every = float(ENV.get("TRAIL_UPDATE_EVERY_SEC") or 20)
         if now_s - last_u >= every:
-            # Primary: aggregated.csv swings (no Binance polling).
-            desired = _trail_desired_stop_from_agg(pos)
-            if desired is None and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
+            # Primary: calculate in BTCUSDT and convert with a fresh same-cycle
+            # BTCUSDC/BTCUSDT ratio. A sync error keeps the existing SL intact.
+            trail_quote = None
+            trail_sync_failed = False
+            try:
+                trail_quote = _trail_stop_quote_from_agg(pos)
+            except QuoteSyncError as exc:
+                trail_sync_failed = True
+                log_event("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+            desired = trail_quote.stop_usdc if trail_quote is not None else None
+            if (
+                desired is None
+                and not trail_sync_failed
+                and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG"
+            ):
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
                 mid = 0.0
                 with suppress(Exception):
-                    mid = float(get_mid_price(symbol))
+                    mid = float(binance_api.get_mid_price(symbol))
                 if mid > 0.0:
-                    off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 50.0)
+                    off = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 15.0)
                     desired = (mid - off) if pos["side"] == "LONG" else (mid + off)
             if desired is not None:
                 step = float(ENV.get("TRAIL_STEP_USD") or 20.0)
@@ -1529,7 +1613,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if pend_sl:
                     od_p = None
                     with suppress(Exception):
-                        od_p = check_order_status(symbol, pend_sl)
+                        od_p = binance_api.check_order_status(symbol, pend_sl)
                     st_p = str((od_p or {}).get("status", "")).upper()
                     if st_p not in ("CANCELED", "REJECTED", "EXPIRED"):
                         pos["trail_last_update_s"] = now_s
@@ -1545,7 +1629,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 if sl_now:
                     od_s = None
                     with suppress(Exception):
-                        od_s = check_order_status(symbol, sl_now)
+                        od_s = binance_api.check_order_status(symbol, sl_now)
                     st_s = str((od_s or {}).get("status", "")).upper()
                     if st_s in ("CANCELED", "REJECTED", "EXPIRED"):
                         pos.setdefault("orders", {})["sl"] = 0
@@ -1570,7 +1654,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     # If SL disappeared while trailing is active -> restore immediately (best-effort).
                     if not sl_now:
                         try:
-                            sl_new = place_order_raw({
+                            sl_new = binance_api.place_order_raw({
                                 "symbol": symbol,
                                 "side": exit_side,
                                 "type": "STOP_LOSS_LIMIT",
@@ -1581,10 +1665,27 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                                 "newClientOrderId": f"EX_SL_TR_RESTORE_{int(time.time())}",
                             })
                         except Exception as e:
+                            err_msg = str(e)
+                            err_code = None
+                            with suppress(Exception):
+                                if getattr(e, "code", None) is not None:
+                                    err_code = int(getattr(e, "code"))
+                            if err_code is None and ('"code":-2010' in err_msg or '"code": -2010' in err_msg):
+                                err_code = -2010
+                            if err_code is None:
+                                err_code = 0
+                            pos["trail_last_error_code"] = err_code
+                            pos["trail_last_error_s"] = now_s
+                            pos["trail_error_count"] = int(pos.get("trail_error_count") or 0) + 1
+                            st["position"] = pos
+                            with suppress(Exception):
+                                save_state(st)
                             log_event("TRAIL_SL_RESTORE_ERROR", error=str(e), mode="live")
                         else:
                             pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                             pos["trail_sl_price"] = float(sl_stop_s)
+                            if trail_quote is not None:
+                                _store_trail_quote_audit(pos, trail_quote)
                             pos["trail_last_update_s"] = now_s
                             st["position"] = pos
                             save_state(st)
@@ -1593,10 +1694,10 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                     elif improve >= step:
                         # Cancel/replace. Do NOT place a new SL unless cancel is confirmed.
                         with suppress(Exception):
-                            cancel_order(symbol, sl_now)
+                            binance_api.cancel_order(symbol, sl_now)
                         od_c = None
                         with suppress(Exception):
-                            od_c = check_order_status(symbol, sl_now)
+                            od_c = binance_api.check_order_status(symbol, sl_now)
                         st_c = str((od_c or {}).get("status", "")).upper()
                         if st_c not in ("CANCELED", "REJECTED", "EXPIRED"):
                             pos["trail_last_update_s"] = now_s
@@ -1605,7 +1706,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             log_event("TRAIL_SL_CANCEL_NOT_CONFIRMED", mode="live", order_id_sl=sl_now, status=st_c or "UNKNOWN")
                         else:
                             try:
-                                sl_new = place_order_raw({
+                                sl_new = binance_api.place_order_raw({
                                     "symbol": symbol,
                                     "side": exit_side,
                                     "type": "STOP_LOSS_LIMIT",
@@ -1616,10 +1717,27 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                                     "newClientOrderId": f"EX_SL_TR_{int(time.time())}",
                                 })
                             except Exception as e:
+                                err_msg = str(e)
+                                err_code = None
+                                with suppress(Exception):
+                                    if getattr(e, "code", None) is not None:
+                                        err_code = int(getattr(e, "code"))
+                                if err_code is None and ('"code":-2010' in err_msg or '"code": -2010' in err_msg):
+                                    err_code = -2010
+                                if err_code is None:
+                                    err_code = 0
+                                pos["trail_last_error_code"] = err_code
+                                pos["trail_last_error_s"] = now_s
+                                pos["trail_error_count"] = int(pos.get("trail_error_count") or 0) + 1
+                                st["position"] = pos
+                                with suppress(Exception):
+                                    save_state(st)
                                 log_event("TRAIL_SL_UPDATE_ERROR", error=str(e), mode="live")
                             else:
                                 pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                                 pos["trail_sl_price"] = float(sl_stop_s)
+                                if trail_quote is not None:
+                                    _store_trail_quote_audit(pos, trail_quote)
                                 pos["trail_last_update_s"] = now_s
                                 st["position"] = pos
                                 save_state(st)
@@ -1649,15 +1767,15 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # cancel any remaining exits (best-effort) to avoid orphan orders
                 if tp1_id:
                     with suppress(Exception):
-                        cancel_order(symbol, tp1_id)
+                        binance_api.cancel_order(symbol, tp1_id)
                 if tp2_id:
                     with suppress(Exception):
-                        cancel_order(symbol, tp2_id)
+                        binance_api.cancel_order(symbol, tp2_id)
 
                 sl_prev3 = int((pos.get("orders") or {}).get("sl_prev") or 0)
                 if sl_prev3:
                     with suppress(Exception):
-                        cancel_order(symbol, sl_prev3)
+                        binance_api.cancel_order(symbol, sl_prev3)
 
                 _close_slot("SL")
             else:
@@ -1672,192 +1790,139 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 # ===================== State =====================
 
-def get_mid_price(symbol: str) -> float:
-    j = binance_public_get("/api/v3/ticker/bookTicker", {"symbol": symbol})
-    bid = float(j["bidPrice"])
-    ask = float(j["askPrice"])
-    return (bid + ask) / 2.0
+def _set_trail_confirmation_reference_from_agg(pos: dict) -> None:
+    """Store the trailing confirmation reference explicitly in BTCUSDT units."""
 
-def _read_last_close_prices_from_agg_csv(path: str, n_rows: int) -> list[float]:
-    """
-    Read last N rows from aggregated.csv and extract ClosePrice (fallback to AvgPrice).
-    CSV header expected (strict, 10 cols):
-    Timestamp,Trades,TotalQty,AvgSize,BuyQty,SellQty,AvgPrice,ClosePrice,HiPrice,LowPrice
-    """
-    if not path or n_rows <= 0:
-        return []
-    if not os.path.exists(path):
-        return []
-    # 1) Validate header (cheap, 1st line only)
-    try:
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            head = f.readline().strip()
-        header = next(csv.reader([head]), None)
-        _validate_agg_header(header, path)
-    except SystemExit:
-        raise
-    except Exception:
-        return []
-
-    # 2) Tail-read last lines only (avoid O(file_size) scans)
-    # Buffer is important because some lines may be malformed and get skipped.
-    buf_lines = max(n_rows + 50, 200)
-    lines = read_tail_lines(path, buf_lines)
-    if not lines:
-        return []
-
-    closes_rev: list[float] = []
-    bad_rows = 0
-    for ln in reversed(lines):
-        ln = (ln or "").strip()
-        if not ln or ln.startswith("Timestamp"):
-            continue
-        try:
-            parts = next(csv.reader([ln]))
-        except Exception:
-            continue
-        if len(parts) != len(EXPECTED_AGG_HEADER):
-            bad_rows += 1
-            if bad_rows % 200 == 0:
-                print(
-                    f"[CSV WARN] bad row width in {path}: got {len(parts)} expected {len(EXPECTED_AGG_HEADER)}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            continue
-        try:
-            v = (parts[7] or "").strip()  # ClosePrice
-            if v == "":
-                v = (parts[6] or "").strip()  # AvgPrice fallback
-            closes_rev.append(float(v))
-        except Exception:
-            continue
-        if len(closes_rev) >= n_rows:
-            break
-
-    closes_rev.reverse()  # restore chronological order
-    return closes_rev
+    df = load_df_sorted()
+    ref = latest_price(df) if not df.empty else float("nan")
+    if math.isfinite(ref) and ref > 0:
+        pos["trail_ref_price_usdt"] = float(ref)
+        # executor_mod.trail still consumes the legacy key; keep it as a
+        # compatibility mirror with the same explicit USDT value.
+        pos["trail_ref_price"] = float(ref)
+        pos["trail_wait_confirm"] = True
+        pos["trail_confirmed"] = False
+    else:
+        pos["trail_ref_price_usdt"] = 0.0
+        pos["trail_ref_price"] = 0.0
+        pos["trail_wait_confirm"] = False
+        pos["trail_confirmed"] = False
 
 
-def _find_last_fractal_swing(series: list[float], lr: int, kind: str) -> Optional[float]:
-    """
-    Find last swing point in series using simple fractal:
-      low:  x[i] < x[i-1..i-lr] and x[i] < x[i+1..i+lr]
-      high: x[i] > x[i-1..i-lr] and x[i] > x[i+1..i+lr]
-    Returns swing price or None.
-    """
-    if lr < 1:
-        lr = 1
-    if len(series) < (2 * lr + 1):
-        return None
-    # scan from right to left so we get the most recent confirmed swing
-    # last index we can test is len(series)-lr-1
-    for i in range(len(series) - lr - 1, lr - 1, -1):
-        x = series[i]
-        left = series[i - lr:i]
-        right = series[i + 1:i + 1 + lr]
-        if len(left) < lr or len(right) < lr:
-            continue
-        if kind == "low":
-            if all(x < v for v in left) and all(x < v for v in right):
-                return x
-        else:
-            if all(x > v for v in left) and all(x > v for v in right):
-                return x
-    return None
+def _trail_desired_stop_from_agg_usdt(pos: dict) -> Optional[float]:
+    """Compute the desired trailing stop in the BTCUSDT feed contour."""
+
+    if "trail_ref_price_usdt" in pos:
+        pos["trail_ref_price"] = pos.get("trail_ref_price_usdt")
+    return trail._trail_desired_stop_from_agg(pos)
 
 
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
-    """
-    Compute desired trailing stop based on last swing from aggregated.csv ClosePrice.
-    LONG: stop = swing_low - buffer
-    SHORT: stop = swing_high + buffer
-    """
-    path = ENV.get("AGG_CSV") or ""
-    if pos.get("trail_active") and pos.get("trail_wait_confirm"):
-        current_trail = float(pos.get("trail_sl_price") or 0.0)
-        if current_trail > 0.0:
-            ref = pos.get("trail_ref_price")
-            if ref is None:
-                return None
-            try:
-                ref_f = float(ref)
-            except Exception:
-                return None
-            if ref_f <= 0.0:
-                return None
-            if path:
-                closes = _read_last_close_prices_from_agg_csv(path, 10)
-            else:
-                closes = []
-            if not closes:
-                pos["trail_wait_confirm"] = False
-                pos["trail_confirmed"] = False
-                log_event("TRAIL_CONFIRM_SKIPPED_NO_AGG", mode="live", side=pos.get("side"), ref=ref_f)
-            else:
-                last_close = closes[-1]
-                confirm_buf = float(ENV.get("TRAIL_CONFIRM_BUFFER_USD") or 0.0)
-                if pos.get("side") == "LONG":
-                    if last_close <= (ref_f + confirm_buf):
-                        return None
-                else:
-                    if last_close >= (ref_f - confirm_buf):
-                        return None
-                pos["trail_wait_confirm"] = False
-                pos["trail_confirmed"] = True
-                log_event("TRAIL_CONFIRM_BREAK", mode="live", side=pos.get("side"), ref=ref_f, last_close=last_close, buffer=confirm_buf)
-    if not path:
-        return None
-    lookback = int(ENV.get("TRAIL_SWING_LOOKBACK") or 0)
-    lr = int(ENV.get("TRAIL_SWING_LR") or 2)
-    buf = float(ENV.get("TRAIL_SWING_BUFFER_USD") or 0.0)
-    closes = _read_last_close_prices_from_agg_csv(path, lookback)
-    if not closes:
-        return None
-    kind = "low" if pos.get("side") == "LONG" else "high"
-    swing = _find_last_fractal_swing(closes, lr=lr, kind=kind)
-    if swing is None:
-        return None
-    if pos.get("side") == "LONG":
-        return float(swing - buf)
-    else:
-        return float(swing + buf)
+    """Compatibility alias returning an unconverted BTCUSDT source level."""
 
-def get_usdt_usdc_k() -> float:
+    return _trail_desired_stop_from_agg_usdt(pos)
+
+
+class QuoteSyncError(RuntimeError):
+    """BTCUSDT structural price could not be safely synchronized to BTCUSDC."""
+
+
+@dataclass(frozen=True)
+class UsdtUsdcQuoteSnapshot:
+    mid_usdt: float
+    mid_usdc: float
+    ratio: float
+    observed_at_utc: str
+
+
+@dataclass(frozen=True)
+class TrailingStopQuote:
+    stop_usdt: float
+    stop_usdc: float
+    snapshot: UsdtUsdcQuoteSnapshot
+
+
+def get_mid_price(symbol: str) -> float:
+    """Testable public-mid adapter over the current VPS Binance module."""
+
+    return float(binance_api.get_mid_price(symbol))
+
+
+def get_usdt_usdc_quote_snapshot() -> UsdtUsdcQuoteSnapshot:
+    """Read a same-cycle BTCUSDT/BTCUSDC ratio and enforce a sanity band."""
+
     mid_usdt = get_mid_price("BTCUSDT")
     mid_usdc = get_mid_price("BTCUSDC")
-    return mid_usdc / mid_usdt
-
-def binance_sanity_check() -> None:
-    """Fast connectivity + auth check.
-
-    - public ping/time via /api/v3
-    - signed check:
-        - spot  : GET /api/v3/account
-        - margin: GET /sapi/v1/margin/account
-    """
-    # public
-    binance_public_get("/api/v3/ping")
-    srv_time = binance_public_get("/api/v3/time")
-    global BINANCE_TIME_OFFSET_MS
-    try:
-        server_ms = int(srv_time.get("serverTime", 0) or 0)
-        local_ms = int(time.time() * 1000)
-        BINANCE_TIME_OFFSET_MS = (server_ms - local_ms) if server_ms else 0
-    except Exception:
-        BINANCE_TIME_OFFSET_MS = 0
-    log_event("BINANCE_PUBLIC_OK", server_time=srv_time.get("serverTime"), time_offset_ms=BINANCE_TIME_OFFSET_MS)
-
-    mode = str(ENV.get("TRADE_MODE", "spot")).strip().lower()
-    if mode == "margin":
-        acc = _binance_signed_request("GET", "/sapi/v1/margin/account", {"recvWindow": ENV["RECV_WINDOW"]})
-        # Small, stable fields to log (avoid dumping huge balances)
-        log_event("BINANCE_SIGNED_OK", mode="margin", userAssets=len(acc.get("userAssets", [])))
-    else:
-        acc = _binance_signed_request("GET", "/api/v3/account", {"recvWindow": ENV["RECV_WINDOW"]})
-        log_event("BINANCE_SIGNED_OK", mode="spot", balances=len(acc.get("balances", [])))
+    if not math.isfinite(mid_usdt) or not math.isfinite(mid_usdc) or mid_usdt <= 0 or mid_usdc <= 0:
+        raise QuoteSyncError(f"invalid mids: BTCUSDT={mid_usdt} BTCUSDC={mid_usdc}")
+    ratio = mid_usdc / mid_usdt
+    ratio_min = float(ENV.get("USDT_USDC_RATIO_MIN") or 0.95)
+    ratio_max = float(ENV.get("USDT_USDC_RATIO_MAX") or 1.05)
+    if not math.isfinite(ratio) or ratio < ratio_min or ratio > ratio_max:
+        raise QuoteSyncError(
+            f"ratio outside sanity band: ratio={ratio} band=[{ratio_min},{ratio_max}]"
+        )
+    return UsdtUsdcQuoteSnapshot(
+        mid_usdt=mid_usdt,
+        mid_usdc=mid_usdc,
+        ratio=ratio,
+        observed_at_utc=iso_utc(),
+    )
 
 
+def convert_stop_usdt_to_usdc(stop_usdt: float, side: str, ratio: float) -> float:
+    """Convert a structural stop and round outward in the BTCUSDC quote space."""
+
+    raw = float(Decimal(str(stop_usdt)) * Decimal(str(ratio)))
+    if not math.isfinite(raw) or raw <= 0:
+        raise QuoteSyncError(f"invalid converted stop: stop_usdt={stop_usdt} ratio={ratio}")
+    if side == "LONG":
+        return floor_to_step(raw, ENV["TICK_SIZE"])
+    if side == "SHORT":
+        return ceil_to_step(raw, ENV["TICK_SIZE"])
+    raise QuoteSyncError(f"invalid side={side}")
+
+
+def _validate_stop_against_usdc_mid(side: str, stop_usdc: float, mid_usdc: float) -> None:
+    tick = float(ENV["TICK_SIZE"])
+    if side == "LONG" and stop_usdc > mid_usdc - tick:
+        raise QuoteSyncError(
+            f"LONG stop not below BTCUSDC mid: stop={stop_usdc} mid={mid_usdc}"
+        )
+    if side == "SHORT" and stop_usdc < mid_usdc + tick:
+        raise QuoteSyncError(
+            f"SHORT stop not above BTCUSDC mid: stop={stop_usdc} mid={mid_usdc}"
+        )
+    if side not in ("LONG", "SHORT"):
+        raise QuoteSyncError(f"invalid side={side}")
+
+
+def _trail_stop_quote_from_agg(pos: dict) -> Optional[TrailingStopQuote]:
+    """Convert the current USDT trailing swing to a validated BTCUSDC stop."""
+
+    stop_usdt = _trail_desired_stop_from_agg_usdt(pos)
+    if stop_usdt is None:
+        return None
+    snapshot = get_usdt_usdc_quote_snapshot()
+    stop_usdc = convert_stop_usdt_to_usdc(stop_usdt, str(pos.get("side") or ""), snapshot.ratio)
+    _validate_stop_against_usdc_mid(str(pos.get("side") or ""), stop_usdc, snapshot.mid_usdc)
+    return TrailingStopQuote(
+        stop_usdt=float(stop_usdt),
+        stop_usdc=stop_usdc,
+        snapshot=snapshot,
+    )
+
+
+def _store_trail_quote_audit(pos: dict, quote: TrailingStopQuote) -> None:
+    pos["trail_sl_price_usdt"] = quote.stop_usdt
+    pos["trail_conversion_ratio"] = quote.snapshot.ratio
+    pos["trail_conversion_mid_usdt"] = quote.snapshot.mid_usdt
+    pos["trail_conversion_mid_usdc"] = quote.snapshot.mid_usdc
+    pos["trail_conversion_ts"] = quote.snapshot.observed_at_utc
+
+
+def get_usdt_usdc_k() -> float:
+    return get_usdt_usdc_quote_snapshot().ratio
 
 def sync_from_binance(st: Dict[str, Any]) -> None:
     """Best-effort reconciliation of executor state with Binance.
@@ -1874,13 +1939,11 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
 
     This avoids accidental double-opening after restarts.
     """
-    if ENV["DRY"]:
-        return
     if str(ENV.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
 
     try:
-        orders = open_orders(ENV["SYMBOL"])
+        orders = binance_api.open_orders(ENV["SYMBOL"])
     except Exception as e:
         log_event("SYNC_ERR_OPENORDERS", error=str(e))
         return
@@ -1889,6 +1952,78 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     pos = st.get("position") or {}
 
     if not tagged:
+        # EXCHANGE-TRUTH CLEANUP:
+        # If state says we are OPEN, but the exchange has:
+        #   - no open orders for this symbol
+        #   - no position / no margin exposure for base asset
+        # then clear state + alert, instead of keeping a ghost OPEN.
+        if ENV.get("I13_CLEAR_STATE_ON_EXCHANGE_CLEAR") and pos and pos.get("mode") == "live" and pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED"):
+            symbol = str(ENV.get("SYMBOL", "") or "").strip().upper()
+            if symbol:
+                # throttle the alert via pos["recon"]["last_emit"]
+                recon = (pos.setdefault("recon", {}) if isinstance(pos, dict) else {})
+                last_emit = recon.setdefault("last_emit", {}) if isinstance(recon, dict) else {}
+                throttle_sec = int(ENV.get("RECON_THROTTLE_SEC") or ENV.get("INVAR_THROTTLE_SEC", 600) or 600)
+                now_s = time.time()
+
+                def _should_emit(event_key: str) -> bool:
+                    try:
+                        last_ts = float(last_emit.get(event_key) or 0.0)
+                    except Exception:
+                        last_ts = 0.0
+                    if now_s - last_ts < throttle_sec:
+                        return False
+                    last_emit[event_key] = now_s
+                    return True
+
+                try:
+                    all_open = binance_api.open_orders(symbol)
+                except Exception as e:
+                    all_open = None
+                    # we don't clear state if we can't confirm exchange empty
+                    if _should_emit("pos_clear:open_orders_error"):
+                        log_event("POSITION_CLEAR_CHECK_FAILED", mode="live", symbol=symbol, error=str(e))
+                if isinstance(all_open, list) and len(all_open) == 0:
+                    ex_pos = _exchange_position_exists(symbol)
+                    if ex_pos is False:
+                        # confirmed empty -> clear state + alert
+                        if _should_emit("pos_clear:confirmed"):
+                            log_event("POSITION_CLEARED_BY_EXCHANGE", mode="live", symbol=symbol, prev_status=pos.get("status"))
+                            with suppress(Exception):
+                                send_webhook({"event": "POSITION_CLEARED_BY_EXCHANGE", "mode": "live", "symbol": symbol, "prev_status": pos.get("status")})
+                        if str(ENV.get("TRADE_MODE", "")).strip().lower() == "margin":
+                            margin = st.get("margin", {})
+                            if (margin.get("borrowed_assets") or margin.get("borrowed_by_trade")):
+                                tk = pos.get("trade_key") or margin.get("active_trade_key")
+                                with suppress(Exception):
+                                    margin_guard.on_after_position_closed(st, trade_key=tk)
+                        # P5 fix: write fresh last_closed from current pos before clearing slot.
+                        # Without this, consumers see the stale last_closed from the previous trade.
+                        st["last_closed"] = {
+                            "ts": iso_utc(),
+                            "mode": pos.get("mode"),
+                            "reason": "SYNC_EXCHANGE_CLEAR",
+                            "pos_status": pos.get("status"),
+                            "trade_key": pos.get("trade_key") or pos.get("client_id"),
+                            "order_id": pos.get("order_id"),
+                            "side": pos.get("side"),
+                            "qty": pos.get("qty"),
+                            "entry_ref": (pos.get("prices") or {}).get("entry"),
+                            "entry_actual": pos.get("entry_actual"),
+                            "opened_at": pos.get("opened_at"),
+                        }
+                        _record_trade_execution_snapshot(st, "sync_exchange_clear", enrich_exchange=False)
+                        st["position"] = None
+                        st["lock_until"] = 0.0
+                        save_state(st)
+                        with suppress(Exception):
+                            trade_outcome_archive.record_outcome(st, "sync_exchange_clear", ENV.get("SYMBOL", ""))
+                        return
+                    elif ex_pos is None:
+                        # unknown -> do nothing, but leave trace (throttled)
+                        if _should_emit("pos_clear:unknown"):
+                            log_event("POSITION_CLEAR_EXCHANGE_UNKNOWN", mode="live", symbol=symbol)
+
         # IMPORTANT: OPEN_FILLED може легітимно мати 0 openOrders:
         # entry вже FILLED, а exits ще не поставились/впали і чекають retry.
         # Не можна чистити слот лише через openOrders==0, інакше "забудемо" реальну позицію.
@@ -1904,7 +2039,7 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                 return
             od = None
             with suppress(Exception):
-                od = check_order_status(ENV["SYMBOL"], oid)
+                od = binance_api.check_order_status(ENV["SYMBOL"], oid)
             st_o = str((od or {}).get("status", "")).upper()
             exq = float((od or {}).get("executedQty") or 0.0)
             if st_o not in ("CANCELED", "REJECTED", "EXPIRED") or exq > 0.0:
@@ -1912,14 +2047,197 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
                           prev_status=pos.get("status"), order_id=oid,
                           status=st_o or "UNKNOWN", executedQty=exq)
                 return
+            # P4 fix: write fresh last_closed and call margin hook before clearing slot.
+            # Mirrors _clear_position_slot() contract: snapshot → clear → save → hook.
+            # Must happen while pos is still the live dict (before position=None).
+            st["last_closed"] = {
+                "ts": iso_utc(),
+                "mode": pos.get("mode"),
+                "reason": "SYNC_CONFIRMED_CANCELED",
+                "pos_status": pos.get("status"),
+                "trade_key": pos.get("trade_key") or pos.get("client_id"),
+                "order_id": pos.get("order_id"),
+                "side": pos.get("side"),
+                "qty": pos.get("qty"),
+                "entry_ref": (pos.get("prices") or {}).get("entry"),
+                "entry_actual": pos.get("entry_actual"),
+                "opened_at": pos.get("opened_at"),
+                "order_status": st_o,
+            }
+            _record_trade_execution_snapshot(st, "sync_confirmed_canceled", enrich_exchange=False)
+            # trade_key for hook: prefer pos, then active margin state.
+            # Never fall back to stale st["last_closed"] — that is the bug this patch fixes.
+            _p4_tk = (
+                pos.get("trade_key")
+                or pos.get("client_id")
+                or (st.get("margin") or {}).get("active_trade_key")
+            )
             log_event("SYNC_CLEAR_NO_TAGGED_CONFIRMED_CANCELED", prev_status=pos.get("status"), order_id=oid)
             st["position"] = None
             st["lock_until"] = 0.0
             save_state(st)
+            with suppress(Exception):
+                trade_outcome_archive.record_outcome(st, "sync_confirmed_canceled", ENV.get("SYMBOL", ""))
+            with suppress(Exception):
+                margin_guard.on_after_position_closed(st, trade_key=_p4_tk)
         return
 
-    # We have tagged orders. If we already have a live position, keep it (but you can extend later).
+    # We have tagged orders. If we already have a live position, reconcile exits.
     if pos.get("mode") == "live" and pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED"):
+        open_ids = set()
+        for o in tagged:
+            with suppress(Exception):
+                open_ids.add(int(o.get("orderId")))
+        orders = pos.get("orders") or {}
+        updated = False
+        recon = pos.setdefault("recon", {})
+        last_emit = recon.setdefault("last_emit", {})
+        throttle_sec = int(ENV.get("RECON_THROTTLE_SEC") or ENV.get("INVAR_THROTTLE_SEC", 600) or 600)
+        now_s = time.time()
+
+        def _should_emit(event_key: str) -> bool:
+            last_ts = float(last_emit.get(event_key) or 0.0)
+            if now_s - last_ts < throttle_sec:
+                return False
+            last_emit[event_key] = now_s
+            return True
+
+        def _emit(event: str, payload: Dict[str, Any], emit_key: str) -> None:
+            nonlocal updated
+            if not _should_emit(emit_key):
+                return
+            updated = True
+            log_event(event, **payload)
+            with suppress(Exception):
+                send_webhook(payload)
+
+        for key in ("tp1", "tp2", "sl"):
+            oid = orders.get(key)
+            if not oid:
+                continue
+            with suppress(Exception):
+                oid = int(oid)
+            if oid in open_ids:
+                continue
+
+            status = ""
+            executed_qty = 0.0
+            try:
+                od = binance_api.get_order(ENV["SYMBOL"], oid)
+                status = str((od or {}).get("status", "")).upper()
+                with suppress(Exception):
+                    executed_qty = float((od or {}).get("executedQty") or 0.0)
+            except Exception as e:
+                err = str(e)
+                err_l = err.lower()
+
+                # Binance often returns -2013 "Order does not exist." / "Unknown order"
+                if ("-2013" in err_l) or ("order does not exist" in err_l) or ("unknown order" in err_l):
+                    orders.pop(key, None)
+                    recon.setdefault(f"{key}_missing_ts", iso_utc())
+                    recon[f"{key}_missing_reason"] = "NOT_FOUND"
+                    updated = True
+                    _emit(
+                        "RECON_ORDER_MISSING",
+                        {
+                            "event": "RECON_ORDER_MISSING",
+                            "which": key,
+                            "order_id": oid,
+                            "status": "NOT_FOUND",
+                            "error": err,
+                            "symbol": ENV["SYMBOL"],
+                        },
+                        f"recon:{key}:{oid}:not_found",
+                    )
+                    continue
+
+                recon.setdefault(f"{key}_unknown_ts", iso_utc())
+                updated = True
+                _emit(
+                    "RECON_ORDER_UNKNOWN",
+                    {
+                        "event": "RECON_ORDER_UNKNOWN",
+                        "which": key,
+                        "order_id": oid,
+                        "error": err,
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            if status == "FILLED":
+                recon.setdefault(f"{key}_filled_seen_ts", iso_utc())
+                updated = True
+                _emit(
+                    "RECON_ORDER_FILLED_SEEN",
+                    {
+                        "event": "RECON_ORDER_FILLED_SEEN",
+                        "which": key,
+                        "order_id": oid,
+                        "status": "FILLED",
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            if status in ("CANCELED", "EXPIRED", "REJECTED"):
+                orders.pop(key, None)
+                recon.setdefault(f"{key}_missing_ts", iso_utc())
+                recon[f"{key}_missing_reason"] = status
+                updated = True
+                _emit(
+                    "RECON_ORDER_MISSING",
+                    {
+                        "event": "RECON_ORDER_MISSING",
+                        "which": key,
+                        "order_id": oid,
+                        "status": status,
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            if not status:
+                recon.setdefault(f"{key}_unknown_ts", iso_utc())
+                updated = True
+                _emit(
+                    "RECON_ORDER_UNKNOWN",
+                    {
+                        "event": "RECON_ORDER_UNKNOWN",
+                        "which": key,
+                        "order_id": oid,
+                        "error": "status_missing",
+                        "symbol": ENV["SYMBOL"],
+                    },
+                    f"recon:{key}:{oid}",
+                )
+                continue
+
+            # Not in open_orders, but exchange says it's still "active-ish"
+            # => visibility for operator, but no auto-repair.
+            recon.setdefault(f"{key}_not_in_open_active_ts", iso_utc())
+            recon[f"{key}_not_in_open_active_status"] = status
+            updated = True
+            _emit(
+                "RECON_EXIT_NOT_IN_OPEN_BUT_ACTIVE",
+                {
+                    "event": "RECON_EXIT_NOT_IN_OPEN_BUT_ACTIVE",
+                    "which": key,
+                    "order_id": oid,
+                    "status": status,
+                    "executedQty": executed_qty,
+                    "symbol": ENV["SYMBOL"],
+                },
+                f"recon:{key}:{oid}:active:{status}",
+            )
+            continue
+
+        if updated:
+            pos["orders"] = orders
+            save_state(st)
         return
 
     # Rebuild a minimal position shell from open orders
@@ -1986,219 +2304,6 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     save_state(st)
     log_event("SYNC_ATTACHED", side=side_txt, tagged_orders=len(tagged))
 
-def load_state() -> Dict[str, Any]:
-    fn = ENV["STATE_FN"]
-    try:
-        with open(fn, "r", encoding="utf-8") as f:
-            st = json.load(f)
-    except FileNotFoundError:
-        st = {}
-    except Exception:
-        st = {}
-
-    st.setdefault("meta", {})
-    st["meta"].setdefault("seen_keys", [])
-    st.setdefault("position", None)
-    st.setdefault("last_closed", None)
-    st.setdefault("cooldown_until", 0.0)
-    st.setdefault("lock_until", 0.0)
-    return st
-
-
-def save_state(st: Dict[str, Any]) -> None:
-    fn = ENV["STATE_FN"]
-    _ensure_dir(fn)
-    tmp = fn + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(st, f, ensure_ascii=False, separators=(",", ":"), default=str)
-    os.replace(tmp, fn)
-
-
-def has_open_position(st: Dict[str, Any]) -> bool:
-    pos = st.get("position")
-    if not pos:
-        return False
-    return pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED")
-
-
-def in_cooldown(st: Dict[str, Any]) -> bool:
-    with suppress(Exception):
-        return _now_s() < float(st.get("cooldown_until") or 0.0)
-    return False
-
-
-def locked(st: Dict[str, Any]) -> bool:
-    with suppress(Exception):
-        return _now_s() < float(st.get("lock_until") or 0.0)
-    return False
-
-
-# ===================== Paper execution =====================
-
-def open_paper_position(st: Dict[str, Any], evt: Dict[str, Any], df: pd.DataFrame) -> None:
-    # Lock immediately to prevent duplicate opens in race/restart scenarios
-    st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
-    save_state(st)
-
-    kind = str(evt.get("kind"))
-    close_price = float(evt.get("price"))
-    entry = build_entry_price(kind, close_price)
-    qty = notional_to_qty(entry, ENV["QTY_USD"])
-
-    side = "BUY" if kind == "long" else "SELL"
-    side_txt = "LONG" if side == "BUY" else "SHORT"
-
-    if not validate_qty(qty, entry):
-        log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty)
-        return
-
-    # locate candle index by event timestamp
-    ts = evt.get("ts")
-    i = len(df) - 1
-    try:
-        if ts:
-            _ts = ts
-            if isinstance(_ts, str) and _ts.endswith("Z"):
-                _ts = _ts[:-1] + "+00:00"
-            i = locate_index_by_ts(df, pd.to_datetime(_ts, utc=True).to_pydatetime())
-    except Exception:
-        i = len(df) - 1
-
-    sl = swing_stop_far(df, i, side, entry)
-    tps = compute_tps(entry, sl, side)
-
-    pos = {
-        "status": "OPEN",
-        "mode": "paper",
-        "opened_at": iso_utc(),
-        "side": side_txt,
-        "qty": qty,
-        "entry": entry,
-        "sl": sl,
-        "tps": ([{"level": tps[0], "hit": False}, {"level": tps[1], "hit": False}] if len(tps) >= 2
-                else [{"level": tps[0], "hit": False}] if len(tps) == 1
-                else []),
-        "last_price": close_price,
-        "src_evt": {
-            "ts": evt.get("ts"),
-            "kind": kind,
-            "price": close_price,
-            "delta": evt.get("delta"),
-            "imb": evt.get("imb"),
-            "vol": evt.get("vol"),
-        },
-    }
-
-    st["position"] = pos
-    save_state(st)
-
-    log_event("OPEN", mode="paper", side=side_txt, entry=entry, sl=sl, qty=qty, tps=[x["level"] for x in pos["tps"]])
-
-    send_webhook(
-        {
-            "event": "OPEN",
-            "mode": "paper",
-            "symbol": ENV["SYMBOL"],
-            "side": side_txt,
-            "entry": entry,
-            "sl": sl,
-            "tps": [x["level"] for x in pos["tps"]],
-            "qty": qty,
-            "src": pos["src_evt"],
-        }
-    )
-
-
-def monitor_paper_position(st: Dict[str, Any], df: pd.DataFrame) -> None:
-    pos = st.get("position")
-    if not pos or pos.get("status") != "OPEN" or pos.get("mode") != "paper":
-        return
-
-    px = latest_price(df)
-    if not math.isfinite(px):
-        return
-
-    pos["last_price"] = px
-
-    side_txt = pos.get("side")
-    entry = float(pos.get("entry"))
-    sl = float(pos.get("sl"))
-    tps = pos.get("tps", [])
-
-    def _close(reason: str, level: float) -> None:
-        pos["status"] = "CLOSED"
-        pos["closed_at"] = iso_utc()
-        pos["close_reason"] = reason
-        pos["close_price"] = level
-        save_state(st)
-
-        log_event("CLOSE", mode="paper", reason=reason, close_price=level, last_price=px, side=side_txt)
-        send_webhook({"event": "CLOSE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "reason": reason, "close_price": level, "entry": entry, "sl": sl})
-
-        # persist last_closed but free slot for next trade
-        st["last_closed"] = {
-            "ts": iso_utc(),
-            "mode": "paper",
-            "reason": reason,
-            "side": side_txt,
-            "entry": entry,
-            "sl": sl,
-            "close_price": level,
-            "last_price": px,
-            "tps": pos.get("tps", []),
-            "src_evt": pos.get("src_evt"),
-        }
-        st["position"] = None
-        st["cooldown_until"] = _now_s() + float(ENV["COOLDOWN_SEC"])
-        st["lock_until"] = 0.0
-        save_state(st)
-
-    # SL check
-    if side_txt == "LONG":
-        if px <= sl:
-            _close("SL", sl)
-            return
-    else:
-        if px >= sl:
-            _close("SL", sl)
-            return
-
-    # TP progression
-    for idx, tp in enumerate(tps):
-        if tp.get("hit"):
-            continue
-        lvl = float(tp.get("level"))
-
-        hit = (side_txt == "LONG" and px >= lvl) or (side_txt == "SHORT" and px <= lvl)
-        if not hit:
-            continue
-
-        tp["hit"] = True
-        log_event("TP_HIT", tp_index=idx + 1, level=lvl, last_price=px)
-        send_webhook({"event": "TP_HIT", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "tp_index": idx + 1, "level": lvl, "last_price": px})
-
-        # After TP1: move SL to breakeven (entry) once
-        if idx == 0 and not pos.get("be_moved", False):
-            be = float(pos.get("entry"))
-            new_sl = round_nearest_to_step(be, ENV["TICK_SIZE"])
-
-            if side_txt == "LONG" and new_sl > be:
-                new_sl = floor_to_step(be, ENV["TICK_SIZE"])
-            if side_txt == "SHORT" and new_sl < be:
-                new_sl = ceil_to_step(be, ENV["TICK_SIZE"])
-
-            pos["sl"] = new_sl
-            pos["be_moved"] = True
-            log_event("SL_TO_BE", new_sl=new_sl, entry=be)
-            send_webhook({"event": "SL_TO_BE", "mode": "paper", "symbol": ENV["SYMBOL"], "side": side_txt, "new_sl": new_sl, "entry": be})
-
-        save_state(st)
-
-    # Close on final TP
-    if tps and all(x.get("hit") for x in tps):
-        _close("TP", float(tps[-1]["level"]))
-
-
 # ===================== Main loop =====================
 def handle_open_filled_exits_retry(st: dict) -> None:
     """Retry exits placement for a live position stuck in OPEN_FILLED without exits."""
@@ -2220,19 +2325,9 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     st["position"] = pos
     save_state(st)
 
-    try:
-        validated = validate_exit_plan(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
-        pos["qty"] = float(validated["qty_total_r"])
-        pos["prices"] = validated["prices"]
-        pos["orders"] = place_exits_v15(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
-        pos["status"] = "OPEN"
-        st["position"] = pos
-        save_state(st)
-        log_event("EXITS_PLACED_V15", mode="live", orders=pos["orders"], attempt=tries)
-        send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos["orders"], "prices": pos["prices"], "attempt": tries})
+    if exits_flow.ensure_exits(st, pos, reason="retry", best_effort=True, attempt=tries):
         return
-    except Exception as ee:
-        log_event("EXITS_RETRY_FAIL", error=str(ee), attempt=tries, symbol=ENV["SYMBOL"])
+
 
     if not ENV.get("FAILSAFE_FLATTEN", False):
         return
@@ -2241,27 +2336,67 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     first_fail_s = float(pos.get("exits_first_fail_s") or now)
     if max_tries and tries >= max_tries and (now - first_fail_s) >= grace:
         with suppress(Exception):
-            flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
+            binance_api.flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
         _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
 def main() -> None:
+    _validate_trade_mode()
     st = load_state()
+    # Margin-guard startup hook (safe no-op unless TRADE_MODE=margin)
+    # Best-effort shutdown hook for margin_guard (runs on SIGTERM and normal exit).
+    # Must never affect trading logic.
+    _shutdown_ran = False
 
+    def _shutdown_hook() -> None:
+        nonlocal _shutdown_ran
+        if _shutdown_ran:
+            return
+        _shutdown_ran = True
+        with suppress(Exception):
+            st2 = load_state()
+            margin_guard.on_shutdown(st2)
+
+    with suppress(Exception):
+        atexit.register(_shutdown_hook)
+
+    # Docker stop => SIGTERM. Don't touch SIGINT (KeyboardInterrupt already handled elsewhere).
+    with suppress(Exception):
+        def _sigterm_handler(signum, frame) -> None:
+            with suppress(Exception):
+                log_event("SIGTERM", signum=signum)
+            _shutdown_hook()
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+    with suppress(Exception):
+        margin_guard.on_startup(st)
     # Seed dedup keys with tail so we don't replay old PEAKs after fresh install
 
     # Always bootstrap seen_keys on start (safe by default)
     tail = read_tail_lines(ENV["DELTASCOUT_LOG"], ENV["TAIL_LINES"])
     bootstrap_seen_keys_from_tail(st, tail)
 
+    pos = st.get("position") if isinstance(st, dict) else None
+    pos_exists = isinstance(pos, dict) and bool(pos)
+    orders = pos.get("orders") if pos_exists and isinstance(pos.get("orders"), dict) else {}
+    log_event(
+        "BOOT_REHYDRATE",
+        position_exists=pos_exists,
+        status=pos.get("status") if pos_exists else None,
+        trail_active=pos.get("trail_active") if pos_exists else None,
+        order_sl=orders.get("sl") if pos_exists else None,
+        order_tp1=orders.get("tp1") if pos_exists else None,
+        order_tp2=orders.get("tp2") if pos_exists else None,
+    )
 
-    log_event("BOOT", dry=ENV["DRY"], symbol=ENV["SYMBOL"])
-    if not ENV["DRY"]:
-        with suppress(Exception):
-            sync_from_binance(st)
+    log_event("BOOT", trade_mode=ENV["TRADE_MODE"], symbol=ENV["SYMBOL"])
+    with suppress(Exception):
+        _preflight_margin_cross_usdc()
+    with suppress(Exception):
+        sync_from_binance(st)
 
     # Optional: one-shot connectivity/auth check (useful before going live)
-    if not ENV["DRY"] and ENV.get("LIVE_VALIDATE_ONLY"):
+    if ENV.get("LIVE_VALIDATE_ONLY"):
         try:
-            binance_sanity_check()
+            binance_api.binance_sanity_check()
             log_event("LIVE_VALIDATE_ONLY_DONE")
         except Exception as e:
             log_event("LIVE_VALIDATE_ONLY_FAIL", error=str(e))
@@ -2269,15 +2404,20 @@ def main() -> None:
         return
 
     last_manage_s = 0.0
-    agg_ok_prev: Optional[bool] = None
+    next_invar_s = 0.0
 
 
 
     while True:
         time.sleep(ENV["POLL_SEC"])
         st = load_state()  # <-- critical: pick up external state changes
+        loop_now_s = _now_s()
+        if ENV.get("INVAR_ENABLED") and loop_now_s >= float(next_invar_s):
+            with suppress(Exception):
+                invariants.run(st)
+            next_invar_s = loop_now_s + float(ENV.get("INVAR_EVERY_SEC") or 20)
         posi = st.get("position") or {}
-        if posi and posi.get("mode") == "live" and (not ENV["DRY"]) and str(posi.get("status", "")).upper() in (
+        if posi and posi.get("mode") == "live" and str(posi.get("status", "")).upper() in (
             "ENTRY_TIMEOUT_CANCELED",
             "ENTRY_TIMEOUT",
             "ENTRY_CANCELED",
@@ -2290,14 +2430,14 @@ def main() -> None:
             save_state(st)
             log_event("ENTRY_SLOT_CLEARED", prev_status=posi.get("status"))
             continue
-        if posi.get("mode") == "live" and posi.get("status") == "PENDING" and not ENV["DRY"]:
+        if posi.get("mode") == "live" and posi.get("status") == "PENDING":
             try:
                 last_poll = float(posi.get("last_poll_s", 0.0))
                 now_s = _now_s()
                 if now_s - last_poll >= float(ENV["LIVE_STATUS_POLL_EVERY"]):
                     oid = int(posi.get("order_id") or 0)
                     if oid:
-                        od = check_order_status(ENV["SYMBOL"], oid)
+                        od = binance_api.check_order_status(ENV["SYMBOL"], oid)
                         posi["last_poll_s"] = now_s
                         st["position"] = posi
                         save_state(st)
@@ -2320,22 +2460,11 @@ def main() -> None:
                             save_state(st)
                             log_event("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
                             send_webhook({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
-
+                            with suppress(Exception):
+                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
-                                try:
-                                    validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                    # Ensure we persist rounded qty/prices for consistency and clearer post-mortem
-                                    posi["qty"] = float(validated["qty_total_r"])
-                                    posi["prices"] = validated["prices"]
-                                    posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                    posi["status"] = "OPEN"
-                                    st["position"] = posi
-                                    save_state(st)
-                                    log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
-                                    send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
-                                except Exception as ee:
-                                    log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"), prices=posi.get("prices"))
+                                exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
 
                         elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
                             _clear_position_slot(st, f"ENTRY_{stt}", order_id=oid, status=stt)
@@ -2360,33 +2489,19 @@ def main() -> None:
 
                     if oid and posi.get("status") == "PENDING":
                         # Plan B: timeout -> cancel LIMIT and fall back to MARKET (unless ENTRY_MODE=LIMIT_ONLY).
-                        od_t = check_order_status(ENV["SYMBOL"], oid)
+                        od_t = binance_api.check_order_status(ENV["SYMBOL"], oid)
                         exq_t = float(od_t.get("executedQty") or 0.0)
 
                         def _try_place_exits_now() -> None:
                             # Best-effort immediate exits placement (reduces naked exposure window).
                             if posi.get("orders") or not posi.get("prices"):
                                 return
-                            try:
-                                validated = validate_exit_plan(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                posi["qty"] = float(validated["qty_total_r"])
-                                posi["prices"] = validated["prices"]
-                                posi["orders"] = place_exits_v15(ENV["SYMBOL"], posi["side"], float(posi["qty"]), posi["prices"])
-                                posi["status"] = "OPEN"
-                                st["position"] = posi
-                                save_state(st)
-                                log_event("EXITS_PLACED_V15", mode="live", orders=posi["orders"])
-                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": posi["orders"], "prices": posi["prices"]})
-                            except Exception as ee:
-                                # Keep OPEN_FILLED; retry logic in main loop will handle.
-                                st["position"] = posi
-                                save_state(st)
-                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=posi.get("side"), qty=posi.get("qty"))
+                            exits_flow.ensure_exits(st, posi, reason="try_now", best_effort=True, save_on_fail=True)
 
                         if exq_t > 0.0:
                             # Order partially/fully filled: keep the filled part and proceed to exits.
                             with suppress(Exception):
-                                cancel_order(ENV["SYMBOL"], oid)
+                                binance_api.cancel_order(ENV["SYMBOL"], oid)
                             posi["status"] = "OPEN_FILLED"
                             posi["filled_at"] = iso_utc()
                             posi["executedQty"] = od_t.get("executedQty")
@@ -2399,16 +2514,18 @@ def main() -> None:
                             save_state(st)
                             log_event("ENTRY_TIMEOUT_PARTIAL_FILLED", mode="live", order_id=oid, executedQty=exq_t)
                             send_webhook({"event": "ENTRY_TIMEOUT_PARTIAL_FILLED", "mode": "live", "order_id": oid, "executedQty": exq_t})
+                            with suppress(Exception):
+                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                             _try_place_exits_now()
                         else:
                             # Cancel LIMIT (best-effort)
                             with suppress(Exception):
-                                cancel_order(ENV["SYMBOL"], oid)
+                                binance_api.cancel_order(ENV["SYMBOL"], oid)
 
                             # Re-check once after cancel to catch a late fill (avoid double-entry).
                             od_after = None
                             with suppress(Exception):
-                                od_after = check_order_status(ENV["SYMBOL"], oid)
+                                od_after = binance_api.check_order_status(ENV["SYMBOL"], oid)
                             if od_after:
                                 exq_after = float(od_after.get("executedQty") or 0.0)
                                 st_after = str(od_after.get("status", "")).upper()
@@ -2425,6 +2542,8 @@ def main() -> None:
                                     save_state(st)
                                     log_event("ENTRY_TIMEOUT_LATE_FILL", mode="live", order_id=oid, executedQty=exq_after, status=st_after)
                                     send_webhook({"event": "ENTRY_TIMEOUT_LATE_FILL", "mode": "live", "order_id": oid, "executedQty": exq_after, "status": st_after})
+                                    with suppress(Exception):
+                                        margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                                     _try_place_exits_now()
                                     continue
                             # Only place MARKET when LIMIT is confirmed canceled/expired/rejected; otherwise wait.
@@ -2446,7 +2565,7 @@ def main() -> None:
 
                                 px_exec = None
                                 try:
-                                    px_exec = _planb_exec_price(ENV["SYMBOL"], entry_side)
+                                    px_exec = binance_api._planb_exec_price(ENV["SYMBOL"], entry_side)
                                 except Exception as ee:
                                     log_event("PLANB_PRICE_ERROR", error=str(ee), order_id=oid)
 
@@ -2464,9 +2583,12 @@ def main() -> None:
                                         send_webhook({"event": "ENTRY_TIMEOUT", "mode": "live", "order_id": oid, "fallback": f"ABORT_{why}", "info": info})
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_ABORT", order_id=oid, fallback=f"ABORT_{why}", **info)
                                         continue
-
+                                with suppress(Exception):
+                                    margin_guard.on_before_entry(st, ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), plan={
+                                        "trade_key": posi.get("trade_key") or posi.get("client_id") or posi.get("order_id"),
+                                    })
                                 try:
-                                    mkt = place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
+                                    mkt = binance_api.place_spot_market(ENV["SYMBOL"], entry_side, float(posi.get("qty") or 0.0), client_id=f"EX_EN_MKT_{int(time.time())}")
                                 except Exception as ee:
                                     log_event("ENTRY_TIMEOUT_MARKET_ERROR", error=str(ee), order_id=oid)
                                     send_webhook({"event": "ENTRY_TIMEOUT_MARKET_ERROR", "order_id": oid, "error": str(ee)})
@@ -2479,7 +2601,7 @@ def main() -> None:
                                         _clear_position_slot(st, "ENTRY_TIMEOUT_MARKET_NO_OID", order_id=oid)
                                     else:
                                         # Market should fill immediately, but confirm once.
-                                        od2 = check_order_status(ENV["SYMBOL"], int(oid2))
+                                        od2 = binance_api.check_order_status(ENV["SYMBOL"], int(oid2))
                                         exq2 = float(od2.get("executedQty") or 0.0)
                                         posi["order_id"] = int(oid2)
                                         posi["client_id"] = f"EX_EN_MKT_{int(time.time())}"
@@ -2495,6 +2617,8 @@ def main() -> None:
                                                 posi["entry_actual"] = float(fmt_price(avgp2))
                                             st["position"] = posi
                                             save_state(st)
+                                            with suppress(Exception):
+                                                margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid2))
                                             _try_place_exits_now()
                                         else:
                                             # Unexpected: market not filled. Keep pending and let poll loop handle it.
@@ -2512,7 +2636,7 @@ def main() -> None:
         new_events: List[Tuple[str, Dict[str, Any]]] = []
         meta = st.setdefault("meta", {})
         seen_keys = meta.get("seen_keys", [])
-        last_peak_ts_dt = _dt_utc(meta.get("last_peak_ts"))
+        last_peak_ts_dt = event_dedup._dt_utc(meta.get("last_peak_ts"))
 
         changed = False
 
@@ -2532,7 +2656,7 @@ def main() -> None:
             if not k or k in seen_keys:
                 continue
 
-            dt = _dt_utc(evt.get("ts"))
+            dt = event_dedup._dt_utc(evt.get("ts"))
 
             # Watermark filter: if this PEAK is not newer than what we've already seen,
             # mark it as seen but do NOT act on it.
@@ -2555,37 +2679,19 @@ def main() -> None:
             save_state(st)
 
 
-                # 2) Market data
-        # Paper mode: keep monitoring aggregated.csv.
-        # Live mode : do NOT read aggregated.csv in the main loop (only on PEAK for swing stop).
-        df: Optional[pd.DataFrame] = None
-        if ENV["DRY"]:
-            df = load_df_sorted()
-            ok = bool(df is not None and not df.empty)
-            if ok:
-                if agg_ok_prev is not True:
-                    log_event("AGG_OK")
-                    agg_ok_prev = True
-                monitor_paper_position(st, df)
-            else:
-                if agg_ok_prev is not False:
-                    log_event("AGG_READ_ERROR", error="empty_or_invalid_agg_csv")
-                    agg_ok_prev = False
-
-        # Live V1.5 management (TP1 -> SL to BE) — throttled
-        if not ENV["DRY"]:
-            pos_live = st.get("position") or {}
-            if pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED"):
-                now_s = _now_s()
-                if now_s - last_manage_s >= float(ENV["MANAGE_EVERY_SEC"]):
-                    last_manage_s = now_s
-                    # If entry filled but exits were not placed (or placement failed), retry.
-                    with suppress(Exception):
-                        handle_open_filled_exits_retry(st)             
-                    try:
-                        manage_v15_position(ENV["SYMBOL"], st)
-                    except Exception as e:
-                        log_event("LIVE_MANAGE_ERROR", error=str(e))
+        # 2) Live V1.5 management (TP1 -> SL to BE) — throttled
+        pos_live = st.get("position") or {}
+        if pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED"):
+            now_s = _now_s()
+            if now_s - last_manage_s >= float(ENV["MANAGE_EVERY_SEC"]):
+                last_manage_s = now_s
+                # If entry filled but exits were not placed (or placement failed), retry.
+                with suppress(Exception):
+                    handle_open_filled_exits_retry(st)             
+                try:
+                    manage_v15_position(ENV["SYMBOL"], st)
+                except Exception as e:
+                    log_event("LIVE_MANAGE_ERROR", error=str(e))
 
         if not new_events:
             continue
@@ -2595,15 +2701,14 @@ def main() -> None:
             # Safety: ignore very old PEAKs (e.g., after restarts / log replays)
             max_age = float(ENV.get("MAX_PEAK_AGE_SEC") or 0)
             if max_age > 0:
-                dt_evt = _dt_utc(evt.get("ts"))
+                dt_evt = event_dedup._dt_utc(evt.get("ts"))
                 if dt_evt is not None:
                     age = _now_s() - float(dt_evt.timestamp())
                     if age > max_age:
                         log_event("SKIP_PEAK", reason="stale_peak", age_sec=round(age, 3), evt_ts=str(evt.get("ts")))
                         continue
-            if not ENV["DRY"]:
-                with suppress(Exception):
-                    sync_from_binance(st)
+            with suppress(Exception):
+                sync_from_binance(st)
 
             if locked(st):
                 log_event("SKIP_PEAK", reason="position_lock")
@@ -2615,144 +2720,231 @@ def main() -> None:
                 log_event("SKIP_PEAK", reason="position_already_open")
                 continue
 
-            # Paper for now (DRY=1). When DRY=0 we will switch to Binance entry.
-            if ENV["DRY"]:
-                open_paper_position(st, evt, df)
-            else:
-                # Minimal live scaffold: open a LIMIT order and store as PENDING.
-                # (Exit logic / SL/TP placement is added in the next step.)
+            # Minimal live scaffold: open a LIMIT order and store as PENDING.
+            # (Exit logic / SL/TP placement is added in the next step.)
+            try:
+                # lock immediately
+                st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
+                save_state(st)
+
+                kind = str(evt.get("kind"))
+                close_price_usdt = float(evt.get("price"))
+                entry_usdt = build_entry_price(kind, close_price_usdt)
+                side = "BUY" if kind == "long" else "SELL"
+                side_txt = "LONG" if side == "BUY" else "SHORT"                    # aggregated.csv is used ONLY here (to compute swing stop from the USDT feed)
+                df_local = load_df_sorted()
+                if df_local.empty:
+                    log_event("SKIP_OPEN", reason="agg_unavailable")
+                    continue
+
+                # locate candle index by event timestamp (in USDT feed)
+                ts = evt.get("ts")
+                i = -1
                 try:
-                    # lock immediately
-                    st["lock_until"] = _now_s() + float(ENV["LOCK_SEC"])
-                    save_state(st)
+                    if ts:
+                        _ts = ts
+                        if isinstance(_ts, str) and _ts.endswith("Z"):
+                            _ts = _ts[:-1] + "+00:00"
+                        i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
+                except Exception:
+                    i = -1
 
-                    kind = str(evt.get("kind"))
-                    close_price_usdt = float(evt.get("price"))
-                    entry_usdt = build_entry_price(kind, close_price_usdt)
-                    side = "BUY" if kind == "long" else "SELL"
-                    side_txt = "LONG" if side == "BUY" else "SHORT"                    # aggregated.csv is used ONLY here (to compute swing stop from the USDT feed)
-                    df_local = load_df_sorted()
-                    if df_local.empty:
-                        log_event("SKIP_OPEN", reason="agg_unavailable")
-                        continue
+                try:
+                    initial_swing = select_volume_confirmed_initial_stop(
+                        df_local,
+                        i,
+                        side,
+                        entry_usdt,
+                    )
+                except InitialStopSelectionError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason=exc.reason,
+                        detail=exc.detail,
+                        entry_usdt=entry_usdt,
+                        evt_ts=evt.get("ts"),
+                    )
+                    continue
+                sl_usdt = initial_swing.stop_usdt
+                tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
+                if len(tps_usdt) < 2:
+                    log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
+                    continue
+                tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
 
-                    # locate candle index by event timestamp (in USDT feed)
-                    ts = evt.get("ts")
-                    i = len(df_local) - 1
+                # --- USDT -> USDC conversion (k_entry fixed once per position) ---
+                try:
+                    entry_quote = get_usdt_usdc_quote_snapshot()
+                except QuoteSyncError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason="USDT_USDC_SYNC_FAILED",
+                        detail=str(exc),
+                        entry_usdt=entry_usdt,
+                        sl_usdt=sl_usdt,
+                    )
+                    continue
+                k_entry = entry_quote.ratio
+
+                # Convert prices, then apply *directional* rounding to keep logic stable.
+                tick = ENV["TICK_SIZE"]
+                close_usdc = float(close_price_usdt) * float(k_entry)
+
+                raw_entry = float(entry_usdt) * float(k_entry)
+                raw_sl = float(sl_usdt) * float(k_entry)
+                raw_tp1 = float(tp1_usdt) * float(k_entry)
+                raw_tp2 = float(tp2_usdt) * float(k_entry)
+
+                if kind == "long":
+                    # entry must be >= close_usdc + 1 tick
+                    entry = floor_to_step(raw_entry, tick)
+                    min_entry = close_usdc + float(tick)
+                    if entry < min_entry:
+                        entry = ceil_to_step(min_entry, tick)
+
+                    sl = floor_to_step(raw_sl, tick)
+                    tp1 = floor_to_step(raw_tp1, tick)
+                    tp2 = floor_to_step(raw_tp2, tick)
+                else:
+                    # entry must be <= close_usdc - 1 tick
+                    entry = ceil_to_step(raw_entry, tick)
+                    max_entry = close_usdc - float(tick)
+                    if entry > max_entry:
+                        entry = floor_to_step(max_entry, tick)
+
+                    sl = ceil_to_step(raw_sl, tick)
+                    tp1 = ceil_to_step(raw_tp1, tick)
+                    tp2 = ceil_to_step(raw_tp2, tick)
+
+                try:
+                    _validate_stop_against_usdc_mid(side_txt, sl, entry_quote.mid_usdc)
+                except QuoteSyncError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason="INITIAL_STOP_INVALID_ON_USDC",
+                        detail=str(exc),
+                        sl_usdt=sl_usdt,
+                        sl_usdc=sl,
+                        mid_usdc=entry_quote.mid_usdc,
+                    )
+                    continue
+
+                qty = notional_to_qty(entry, ENV["QTY_USD"])
+
+                if not validate_qty(qty, entry):
+                    log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
+                    continue
+
+                client_id = f"EX_EN_{int(time.time())}"
+                entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
+                if entry_mode == "MARKET_ONLY":
+                    with suppress(Exception):
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                            "trade_key": client_id,
+                            "entry_price": entry,
+                        })
+                    order = binance_api.place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
+                    exq0 = float(order.get("executedQty") or 0.0)
+                    status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
+                    avgp0 = _avg_fill_price(order)
+                    entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
+                else:
+                    with suppress(Exception):
+                        margin_guard.on_before_entry(st, ENV["SYMBOL"], side, float(qty), plan={
+                            "trade_key": client_id,
+                            "entry_price": entry,
+                        })
+                    order = binance_api.place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
+                    status0 = "PENDING"
+                    entry_actual0 = None
+                st["position"] = {
+                    "status": status0,
+                    "mode": "live",
+                    "opened_at": iso_utc(),
+                    "opened_s": _now_s(),
+                    "side": side_txt,
+                    "qty": qty,
+                    "entry": entry,
+                    "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
+                    "client_id": client_id,
+                    "trade_key": client_id,
+                    "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
+                    "entry_actual": entry_actual0,
+                    "k_entry": k_entry,
+                    "entry_conversion": {
+                        "mid_usdt": entry_quote.mid_usdt,
+                        "mid_usdc": entry_quote.mid_usdc,
+                        "ratio": entry_quote.ratio,
+                        "observed_at_utc": entry_quote.observed_at_utc,
+                    },
+                    "initial_swing": initial_swing.to_dict(),
+                    "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
+                    "src_evt": {
+                        "ts": evt.get("ts"),
+                        "kind": kind,
+                        "source": evt.get("source"),
+                        "action": evt.get("action"),
+                        "delta": evt.get("delta"),
+                        "vol": evt.get("vol"),
+                        "imb": evt.get("imb"),
+                        "price": evt.get("price"),
+                        "vwap": evt.get("vwap"),
+                        "poc": evt.get("poc"),
+                        "price_usdt": close_price_usdt,
+                        "entry_usdt": entry_usdt,
+                        "sl_usdt": sl_usdt,
+                        "tp1_usdt": tp1_usdt,
+                        "tp2_usdt": tp2_usdt,
+                    },
+                }
+                baseline_log = None
+                baseline = st.get("baseline")
+                if not isinstance(baseline, dict):
+                    baseline = {}
+                active_snap = baseline.get("active")
+                active_key = active_snap.get("trade_key") if isinstance(active_snap, dict) else None
+                trade_key = st["position"].get("trade_key") or st["position"].get("client_id")
+                if active_snap is None or active_key != trade_key:
                     try:
-                        if ts:
-                            _ts = ts
-                            if isinstance(_ts, str) and _ts.endswith("Z"):
-                                _ts = _ts[:-1] + "+00:00"
-                            i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
-                    except Exception:
-                        i = len(df_local) - 1
+                        snap = baseline_policy.take_snapshot(
+                            binance_api,
+                            ENV,
+                            ENV["SYMBOL"],
+                            trade_key,
+                            "pre_trade",
+                        )
+                        baseline["active"] = snap
+                        if baseline.get("truth") is not None and not isinstance(baseline.get("truth"), dict):
+                            baseline["truth"] = None
+                        baseline.setdefault("truth", None)
+                        st["baseline"] = baseline
+                        baseline_log = {
+                            "which": "active",
+                            "trade_key": trade_key,
+                            "symbol": snap.get("symbol"),
+                            "trade_mode": snap.get("trade_mode"),
+                        }
+                    except Exception as e:
+                        log_event("BASELINE_ERROR", which="active", trade_key=trade_key, error=str(e))
+                if status0 == "OPEN_FILLED":
+                    pos0 = st.get("position") or {}
+                    with suppress(Exception):
+                        margin_guard.on_after_entry_opened(st, trade_key=(pos0.get("trade_key") or pos0.get("client_id") or pos0.get("order_id")))
+                    exits_placed_open_filled = False
+                    if (not pos0.get("orders")) and pos0.get("prices"):
+                        exits_placed_open_filled = exits_flow.ensure_exits(st, pos0, reason="open_filled", best_effort=True, save_on_success=False)
+                save_state(st)
+                if status0 == "OPEN_FILLED" and exits_placed_open_filled:
+                    with suppress(Exception):
+                        llm_trade_judge.maybe_record_llm_pretrade_judge(st, st.get("position") or {}, trigger="EXITS_PLACED_V15")
+                if baseline_log is not None:
+                    log_event("BASELINE_TAKEN", **baseline_log)
 
-                    sl_usdt = swing_stop_far(df_local, i, side, entry_usdt)
-                    tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
-                    if len(tps_usdt) < 2:
-                        log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
-                        continue
-                    tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
-
+                log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
+                send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
+            except Exception as e:
+                log_event("LIVE_OPEN_ERROR", error=str(e))
                     
-# --- USDT -> USDC conversion (k_entry fixed once per position) ---
-                    k_entry = get_usdt_usdc_k()
-
-                    # Convert prices, then apply *directional* rounding to keep logic stable.
-                    tick = ENV["TICK_SIZE"]
-                    close_usdc = float(close_price_usdt) * float(k_entry)
-
-                    raw_entry = float(entry_usdt) * float(k_entry)
-                    raw_sl = float(sl_usdt) * float(k_entry)
-                    raw_tp1 = float(tp1_usdt) * float(k_entry)
-                    raw_tp2 = float(tp2_usdt) * float(k_entry)
-
-                    if kind == "long":
-                        # entry must be >= close_usdc + 1 tick
-                        entry = floor_to_step(raw_entry, tick)
-                        min_entry = close_usdc + float(tick)
-                        if entry < min_entry:
-                            entry = ceil_to_step(min_entry, tick)
-
-                        sl = floor_to_step(raw_sl, tick)
-                        tp1 = floor_to_step(raw_tp1, tick)
-                        tp2 = floor_to_step(raw_tp2, tick)
-                    else:
-                        # entry must be <= close_usdc - 1 tick
-                        entry = ceil_to_step(raw_entry, tick)
-                        max_entry = close_usdc - float(tick)
-                        if entry > max_entry:
-                            entry = floor_to_step(max_entry, tick)
-
-                        sl = ceil_to_step(raw_sl, tick)
-                        tp1 = ceil_to_step(raw_tp1, tick)
-                        tp2 = ceil_to_step(raw_tp2, tick)
-
-                    qty = notional_to_qty(entry, ENV["QTY_USD"])
-
-                    if not validate_qty(qty, entry):
-                        log_event("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
-                        continue
-
-                    client_id = f"EX_EN_{int(time.time())}"
-                    entry_mode = str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
-                    if entry_mode == "MARKET_ONLY":
-                        order = place_spot_market(ENV["SYMBOL"], side, qty, client_id=client_id)
-                        exq0 = float(order.get("executedQty") or 0.0)
-                        status0 = "OPEN_FILLED" if exq0 > 0.0 else "PENDING"
-                        avgp0 = _avg_fill_price(order)
-                        entry_actual0 = float(fmt_price(avgp0)) if avgp0 else None
-                    else:
-                        order = place_spot_limit(ENV["SYMBOL"], side, qty, entry, client_id=client_id)
-                        status0 = "PENDING"
-                        entry_actual0 = None
-                    st["position"] = {
-                        "status": status0,
-                        "mode": "live",
-                        "opened_at": iso_utc(),
-                        "opened_s": _now_s(),
-                        "side": side_txt,
-                        "qty": qty,
-                        "entry": entry,
-                        "order_id": _oid_int(order.get("orderId")) or order.get("orderId"),
-                        "client_id": client_id,
-                        "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
-                        "entry_actual": entry_actual0,
-                        "k_entry": k_entry,
-                        "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
-                        "src_evt": {
-                            "ts": evt.get("ts"),
-                            "kind": kind,
-                            "price_usdt": close_price_usdt,
-                            "entry_usdt": entry_usdt,
-                            "sl_usdt": sl_usdt,
-                            "tp1_usdt": tp1_usdt,
-                            "tp2_usdt": tp2_usdt,
-                        },
-                    }
-                    if status0 == "OPEN_FILLED":
-                        pos0 = st.get("position") or {}
-                        if (not pos0.get("orders")) and pos0.get("prices"):
-                            try:
-                                validated = validate_exit_plan(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
-                                pos0["qty"] = float(validated["qty_total_r"])
-                                pos0["prices"] = validated["prices"]
-                                pos0["orders"] = place_exits_v15(ENV["SYMBOL"], pos0["side"], float(pos0["qty"]), pos0["prices"])
-                                pos0["status"] = "OPEN"
-                                st["position"] = pos0
-                                log_event("EXITS_PLACED_V15", mode="live", orders=pos0["orders"])
-                                send_webhook({"event": "EXITS_PLACED_V15", "mode": "live", "symbol": ENV["SYMBOL"], "orders": pos0["orders"], "prices": pos0["prices"]})
-                            except Exception as ee:
-                                log_event("EXITS_PLACE_ERROR", error=str(ee), symbol=ENV["SYMBOL"], side=pos0.get("side"), qty=pos0.get("qty"), prices=pos0.get("prices"))
-                    save_state(st)
-
-                    log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
-                    send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
-                except Exception as e:
-                    log_event("LIVE_OPEN_ERROR", error=str(e))
-
-
 if __name__ == "__main__":
     try:
         main()
