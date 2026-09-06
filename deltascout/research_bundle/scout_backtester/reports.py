@@ -20,7 +20,8 @@ def write_summary(
     independent: list[TradeResult],
     portfolio: list[TradeResult],
     parity_rows: list[dict[str, Any]],
-    feed_quality_counts: dict[str, int],
+    signal_feed_quality_counts: dict[str, int],
+    execution_feed_quality_counts: dict[str, int],
     opportunity_rows: list[dict[str, Any]],
 ) -> Path:
     filled = [item for item in independent if item.entry_status == "FILLED"]
@@ -60,6 +61,8 @@ def write_summary(
         f"- Cost model: `{config.cost_model_id}`; commission rate `{config.commission_rate:.6%}`",
         f"- Slippage: entry `{config.entry_slippage_bps}` bps, exit `{config.exit_slippage_bps}` bps, stop `{config.stop_slippage_bps}` bps",
         f"- Conversion: `{config.conversion_model_id}`",
+        f"- Signal/shadow contour: `{config.signal_feature_feed_symbol}`",
+        f"- Execution lifecycle contour: `{config.replay_feed_symbol}`",
         "",
         "## Cohort and lifecycle",
         "",
@@ -80,10 +83,24 @@ def write_summary(
         f"- Portfolio rows excluded after loss of feed state: {_rate(len(no_feed_blocked), len(portfolio))}",
         f"- Blocked candidates outperforming active trade: {sum(1 for row in evaluable_opportunities if row.get('blocked_outperformed_active') is True)}/{len(evaluable_opportunities)}",
         "",
-        "## Feed quality",
+        "## Signal/feed quality",
         "",
     ]
-    lines.extend(f"- `{name}`: {count}" for name, count in feed_quality_counts.items())
+    lines.extend(f"- `{name}`: {count}" for name, count in signal_feed_quality_counts.items())
+    lines.extend(["", "## Execution/feed quality", ""])
+    lines.extend(f"- `{name}`: {count}" for name, count in execution_feed_quality_counts.items())
+    contour_limitations = (
+        [
+            "- Entry/SL/TP and lifecycle replay remain entirely on the BTCUSDT signal feed; no USDT/USDC conversion is applied.",
+            "- Legacy output column names ending in `_usdc` are retained for schema compatibility; in this mode they are dollar-valued BTCUSDT-contour results.",
+            "- This research contour does not reproduce BTCUSDC exchange fills or the live executor's instantaneous bookTicker conversion.",
+        ]
+        if config.price_contour == "btcusdt_signal"
+        else [
+            "- Entry/SL/TP levels use one contemporaneous signal-cutoff BTCUSDC/BTCUSDT close ratio; this is a one-minute proxy for the live bookTicker ratio.",
+            "- Trailing swing levels are computed on BTCUSDC Spot closes so all post-conversion barriers stay in one execution-price contour; this intentionally avoids the live AGG USDT/USDC trailing inconsistency.",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -98,12 +115,13 @@ def write_summary(
         group_filled = [item for item in group_all if item.entry_status == "FILLED"]
         group_resolved = [item for item in group_filled if item.lifecycle_class in {"PLAIN_SL", "TP1_SL", "TP1_TP2_TRAILING_STOP"}]
         group_net = sum(float(item.net_pnl_usdc or 0.0) for item in group_filled)
+        group_expectancy = f"{group_net / len(group_filled):.2f} USDC" if group_filled else "n/a"
         lines.append(
             f"| `{group}` | {len(group_all)} | {_rate(len(group_filled), len(group_all))} | "
             f"{_rate(sum(1 for item in group_resolved if item.lifecycle_class == 'PLAIN_SL'), len(group_resolved))} | "
             f"{_rate(sum(1 for item in group_resolved if item.lifecycle_class == 'TP1_SL'), len(group_resolved))} | "
             f"{_rate(sum(1 for item in group_resolved if item.lifecycle_class == 'TP1_TP2_TRAILING_STOP'), len(group_resolved))} | "
-            f"{group_net / len(group_filled):.2f} USDC |"
+            f"{group_expectancy} |"
         )
     lines.extend(
         [
@@ -138,7 +156,9 @@ def write_summary(
             "## Limitations",
             "",
             "- One-minute OHLC cannot prove intrabar event order; conservative baseline and target-first sensitivity are reported separately.",
-            "- Signal/reference and execution symbols use the declared 1:1 USDT/USDC approximation.",
+        ]
+        + contour_limitations
+        + [
             "- Borrow interest is unavailable and is not treated as observed zero.",
             "- Recovered rows support price/volume/delta replay, while funding and liquidation evidence remain degraded in the documented gap.",
             "- This is offline research/shadow evidence. It is not a live-promotion or market-edge claim.",

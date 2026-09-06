@@ -36,11 +36,17 @@ def _filter_df_by_date(df: pd.DataFrame, ts_col: str, source_date: str) -> pd.Da
 
 
 def derive_reject_dataset(df_evt: pd.DataFrame, source_date: str, soft_vwap_margin: float, soft_imb_margin: float) -> pd.DataFrame:
-    rej = df_evt[df_evt["event"].isin(["CANDIDATE_COMPARISON_REJECT", "CANDIDATE_GATE_REJECT"])].copy()
+    rej = df_evt[
+        df_evt["event"].isin(
+            ["CANDIDATE_COMPARISON_REJECT", "CANDIDATE_GATE_REJECT", "PEAK_LOSS_FILTER_REJECT"]
+        )
+    ].copy()
     if rej.empty:
         return pd.DataFrame(columns=["source_date", "event", "event_ts", "kind", "reject_reason", "reject_class", "seq"])
 
     def classify(row: pd.Series) -> str:
+        if str(row.get("event") or "") == "PEAK_LOSS_FILTER_REJECT":
+            return "policy_filter"
         reason = str(row.get("reject_reason") or "")
         if reason in {"3of3_fail", "chop_coh", "ema50_vwap_regime"}:
             return "multi_condition"

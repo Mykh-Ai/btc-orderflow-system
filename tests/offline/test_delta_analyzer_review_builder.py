@@ -231,6 +231,30 @@ def test_reject_table_includes_only_reject_rows(dataset_root: Path, tmp_path: Pa
     }
 
 
+def test_reject_table_includes_loss_filter_reject(tmp_path: Path):
+    _write_csv(
+        tmp_path / "events_context_2026-01-02.csv",
+        EVENTS_CONTEXT_FIELDS,
+        [
+            _make_events_context_row(
+                event_type="PEAK_LOSS_FILTER_REJECT",
+                reject_reason="loss_avoidance_union",
+                delta="12",
+                vol="20",
+                price="101",
+            )
+        ],
+    )
+
+    result = build_daily_review_package("2026-01-02", tmp_path, tmp_path)
+
+    with result.reject_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "PEAK_LOSS_FILTER_REJECT"
+    assert rows[0]["reject_reason"] == "loss_avoidance_union"
+
+
 def test_accepted_table_joins_close_outcomes_on_peak_ts_and_peak_kind(
     dataset_root: Path, tmp_path: Path
 ):

@@ -16,6 +16,10 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# Legacy production snapshot contains mixed historical line endings. Preserve the
+# untouched bytes so focused Executor changes do not renormalize the whole file.
+executor/executor.py -text whitespace=cr-at-eol
+
 *.png binary
 *.jpg binary
 *.jpeg binary

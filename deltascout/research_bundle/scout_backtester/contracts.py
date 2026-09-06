@@ -9,8 +9,10 @@ Side = Literal["LONG", "SHORT"]
 
 CANDIDATE_CONTRACT_VERSION = "SCOUT_CANDIDATE_V0_1"
 FEED_CONTRACT_VERSION = "SCOUT_FEED_V0_1"
-EXECUTION_POLICY_ID = "EXECUTOR_V15_REPLAY_V0_1"
+EXECUTION_POLICY_ID = "EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2"
+USDT_SIGNAL_EXECUTION_POLICY_ID = "EXECUTOR_V15_REPLAY_USDT_SIGNAL_CONTOUR_V0_1"
 FILL_MODEL_ID = "MARKETABLE_LIMIT_NEXT_BAR_V0_1"
+LIMIT_THEN_MARKET_90S_GUARDED_FILL_MODEL_ID = "LIMIT_THEN_MARKET_90S_GUARDED_V0_1"
 CONSERVATIVE_SAME_BAR_POLICY_ID = "CONSERVATIVE_STOP_FIRST_V0_1"
 TARGET_FIRST_SAME_BAR_POLICY_ID = "TARGET_FIRST_SENSITIVITY_V0_1"
 COMMISSION_MODEL_ID = "COMMISSION_TURNOVER_RATE_V0_1"
@@ -18,7 +20,8 @@ ZERO_SLIPPAGE_MODEL_ID = "ZERO_SLIPPAGE_DIAGNOSTIC"
 FIXED_BPS_SLIPPAGE_MODEL_ID = "FIXED_BPS_ADVERSE"
 UTILITY_POLICY_ID = "SCOUT_UTILITY_V0_1"
 QUALITY_POLICY_ID = "EFFECTIVE_FEED_RECOVERY_QUALITY_V0_1"
-CONVERSION_MODEL_ID = "USDT_USDC_PARITY_1_TO_1_V0"
+CONVERSION_MODEL_ID = "CONTEMPORANEOUS_BTCUSDC_SPOT_TO_BTCUSDT_REFERENCE_CLOSE_RATIO_V0_1"
+IDENTITY_CONVERSION_MODEL_ID = "IDENTITY_BTCUSDT_SIGNAL_CONTOUR_V0_1"
 
 REQUIRED_GROUPS = (
     "PEAK_EMIT_BASELINE",
@@ -33,6 +36,15 @@ REQUIRED_GROUPS = (
 
 class BacktestContractError(RuntimeError):
     """Raised when deterministic replay inputs violate a declared contract."""
+
+
+class InitialStopSelectionError(BacktestContractError):
+    """Raised when an opt-in initial-stop policy rejects a candidate."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
+        super().__init__(f"{reason}: {detail}" if detail else reason)
 
 
 @dataclass(frozen=True)
@@ -52,9 +64,19 @@ class Candidate:
     poc: float | None
     comparison_3of3_pass_count: int | None
     comparison_3of3_failed_subconditions: str | None
-    shadow_flags: dict[str, bool | None]
+    shadow_flags: dict[str, Any]
     source_path: str
     source_row_hash: str
+    admission_status: str = "ADMITTED"
+    filter_rule_id: str | None = None
+    filter_decision: str | None = None
+    comparison_price_pass: bool | None = None
+    comparison_vol_pass: bool | None = None
+    comparison_vwap_pass: bool | None = None
+    comparison_setup_variant: str | None = None
+    comparison_previous_price: float | None = None
+    comparison_previous_vol: float | None = None
+    comparison_previous_vwap: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         row = asdict(self)
@@ -93,9 +115,11 @@ class FeedBar:
 class ReplayConfig:
     experiment_id: str
     description: str = ""
+    price_contour: str = "btcusdc_spot"
     symbol: str = "BTCUSDC"
     signal_price_symbol: str = "BTCUSDT_REFERENCE"
-    replay_feed_symbol: str = "BTCUSDT_REFERENCE"
+    signal_feature_feed_symbol: str = "BTCUSDT_USDM_FUTURES_ENRICHED"
+    replay_feed_symbol: str = "BTCUSDC_SPOT_1M"
     execution_symbol: str = "BTCUSDC"
     fixed_notional_usdc: float = 3000.0
     tick_size: float = 0.01
@@ -104,8 +128,20 @@ class ReplayConfig:
     min_notional: float = 5.0
     entry_offset_usd: float = 0.5
     entry_expiry_bars: int = 2
+    live_entry_timeout_seconds: int = 90
+    planb_max_dev_r_mult: float = 0.25
+    planb_max_dev_usd: float = 0.0
+    planb_require_price: bool = True
+    planb_abort_if_past_tp1: bool = True
+    planb_price_proxy: str = "SECOND_NEXT_BAR_OPEN"
     sl_pct: float = 0.002
     swing_lookback_minutes: int = 180
+    initial_stop_policy: str = "window_extreme"
+    initial_swing_price_source: str = "close"
+    initial_swing_buffer_usd: float = 0.0
+    initial_swing_lr: int = 25
+    initial_swing_max_distance_usd: float = 0.0
+    initial_swing_require_full_window: bool = False
     tp_r_multipliers: tuple[float, float] = (1.0, 2.0)
     cooldown_seconds: int = 180
     trail_swing_lookback: int = 240
@@ -113,6 +149,8 @@ class ReplayConfig:
     trail_swing_buffer_usd: float = 50.0
     trail_step_usd: float = 20.0
     trail_confirm_buffer_usd: float = 0.0
+    usdt_usdc_ratio_min: float = 0.95
+    usdt_usdc_ratio_max: float = 1.05
     sl_limit_gap_ticks: int = 2
     execution_policy_id: str = EXECUTION_POLICY_ID
     fill_model_id: str = FILL_MODEL_ID
@@ -132,6 +170,84 @@ class ReplayConfig:
     def validate(self) -> None:
         if not self.experiment_id.strip():
             raise BacktestContractError("experiment_id must not be empty")
+        if self.price_contour not in {"btcusdc_spot", "btcusdt_signal"}:
+            raise BacktestContractError(f"unsupported price_contour={self.price_contour}")
+        if self.initial_swing_price_source not in {"close", "extreme"}:
+            raise BacktestContractError(
+                f"unsupported initial_swing_price_source={self.initial_swing_price_source}"
+            )
+        if self.initial_swing_buffer_usd < 0:
+            raise BacktestContractError(
+                f"initial_swing_buffer_usd must be non-negative, got {self.initial_swing_buffer_usd}"
+            )
+        if self.fill_model_id not in {
+            FILL_MODEL_ID,
+            LIMIT_THEN_MARKET_90S_GUARDED_FILL_MODEL_ID,
+        }:
+            raise BacktestContractError(f"unsupported fill_model_id={self.fill_model_id}")
+        if self.live_entry_timeout_seconds <= 0:
+            raise BacktestContractError(
+                "live_entry_timeout_seconds must be positive, "
+                f"got {self.live_entry_timeout_seconds}"
+            )
+        if (
+            self.fill_model_id == LIMIT_THEN_MARKET_90S_GUARDED_FILL_MODEL_ID
+            and self.live_entry_timeout_seconds != 90
+        ):
+            raise BacktestContractError(
+                "LIMIT_THEN_MARKET_90S_GUARDED_V0_1 requires "
+                "live_entry_timeout_seconds=90"
+            )
+        if self.planb_max_dev_r_mult < 0:
+            raise BacktestContractError(
+                f"planb_max_dev_r_mult must be non-negative, got {self.planb_max_dev_r_mult}"
+            )
+        if self.planb_max_dev_usd < 0:
+            raise BacktestContractError(
+                f"planb_max_dev_usd must be non-negative, got {self.planb_max_dev_usd}"
+            )
+        if self.planb_price_proxy != "SECOND_NEXT_BAR_OPEN":
+            raise BacktestContractError(f"unsupported planb_price_proxy={self.planb_price_proxy}")
+        if self.initial_stop_policy not in {"window_extreme", "volume_confirmed_swing"}:
+            raise BacktestContractError(f"unsupported initial_stop_policy={self.initial_stop_policy}")
+        if self.initial_swing_lr <= 0:
+            raise BacktestContractError(f"initial_swing_lr must be positive, got {self.initial_swing_lr}")
+        if self.initial_swing_max_distance_usd < 0:
+            raise BacktestContractError(
+                "initial_swing_max_distance_usd must be non-negative, "
+                f"got {self.initial_swing_max_distance_usd}"
+            )
+        if self.trail_swing_lookback <= 0:
+            raise BacktestContractError(
+                f"trail_swing_lookback must be positive, got {self.trail_swing_lookback}"
+            )
+        if self.trail_swing_lr <= 0:
+            raise BacktestContractError(
+                f"trail_swing_lr must be positive, got {self.trail_swing_lr}"
+            )
+        if self.trail_swing_buffer_usd < 0 or self.trail_step_usd < 0:
+            raise BacktestContractError("trailing buffers and step must be non-negative")
+        if self.trail_confirm_buffer_usd < 0:
+            raise BacktestContractError(
+                "trail_confirm_buffer_usd must be non-negative, "
+                f"got {self.trail_confirm_buffer_usd}"
+            )
+        if (
+            self.usdt_usdc_ratio_min <= 0
+            or self.usdt_usdc_ratio_max <= 0
+            or self.usdt_usdc_ratio_min > self.usdt_usdc_ratio_max
+        ):
+            raise BacktestContractError(
+                "invalid USDT/USDC ratio band: "
+                f"[{self.usdt_usdc_ratio_min}, {self.usdt_usdc_ratio_max}]"
+            )
+        if (
+            self.initial_stop_policy == "volume_confirmed_swing"
+            and self.swing_lookback_minutes < 2 * self.initial_swing_lr + 1
+        ):
+            raise BacktestContractError(
+                "volume_confirmed_swing lookback must contain at least one complete fractal window"
+            )
         positive = {
             "fixed_notional_usdc": self.fixed_notional_usdc,
             "tick_size": self.tick_size,
@@ -162,6 +278,20 @@ class ExecutionPlan:
     tp1_price: float
     tp2_price: float
     fixed_notional_usdc: float
+    signal_reference_price_usdt: float
+    reference_feed_close_usdt: float
+    execution_feed_close_usdc: float
+    conversion_ratio: float
+    conversion_reference_ts: datetime
+    planned_entry_price_usdt: float
+    initial_stop_price_usdt: float
+    tp1_price_usdt: float
+    tp2_price_usdt: float
+    initial_swing_ts: datetime | None
+    initial_swing_price_usdt: float | None
+    initial_swing_volume: float | None
+    initial_swing_eligible_count: int
+    initial_swing_confirmed_count: int
 
 
 @dataclass(frozen=True)
@@ -208,11 +338,32 @@ class TradeResult:
     signal_ts_utc: datetime
     entry_status: str
     session_label: str = ""
+    signal_reference_price_usdt: float | None = None
+    reference_feed_close_usdt: float | None = None
+    execution_feed_close_usdc: float | None = None
+    conversion_ratio: float | None = None
+    conversion_reference_ts: datetime | None = None
+    planned_entry_price_usdt: float | None = None
+    initial_stop_price_usdt: float | None = None
+    tp1_price_usdt: float | None = None
+    tp2_price_usdt: float | None = None
+    initial_swing_ts: datetime | None = None
+    initial_swing_price_usdt: float | None = None
+    initial_swing_volume: float | None = None
+    initial_swing_eligible_count: int = 0
+    initial_swing_confirmed_count: int = 0
     weak_peak_le_50: bool | None = None
     oi_down_60_and_directional_delta_pct_240_lt_0_06: bool | None = None
     loss_avoidance_conservative_union: bool | None = None
     entry_fill_ts: datetime | None = None
     entry_expiry_ts: datetime | None = None
+    entry_fill_method: str = ""
+    planb_decision: str = ""
+    planb_abort_reason: str = ""
+    planb_exec_price_proxy: float | None = None
+    planb_deviation_usd: float | None = None
+    planb_max_deviation_usd: float | None = None
+    planb_risk_usd: float | None = None
     data_quality_interruption_ts: datetime | None = None
     planned_entry_price: float | None = None
     entry_fill_price: float | None = None
@@ -264,6 +415,8 @@ class TradeResult:
         row.pop("legs", None)
         for key in (
             "signal_ts_utc",
+            "conversion_reference_ts",
+            "initial_swing_ts",
             "entry_fill_ts",
             "entry_expiry_ts",
             "data_quality_interruption_ts",

@@ -240,7 +240,7 @@ environment access, state writes, logging, exchange adapters, and live side effe
 For MVP, implement a versioned pure policy named:
 
 ```text
-EXECUTOR_V15_REPLAY_V0_1
+EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2
 ```
 
 Longer term, shared pure functions may be extracted into a side-effect-free module
@@ -466,7 +466,7 @@ dollar profit.
 
 ### 11.1 Versioned defaults
 
-`EXECUTOR_V15_REPLAY_V0_1` defaults:
+`EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2` defaults:
 
 | Parameter | Default | Source semantics |
 |---|---:|---|
@@ -506,14 +506,21 @@ execution_symbol
 conversion_model_id
 ```
 
-Initial deterministic baseline:
+Deterministic dual-feed baseline:
 
 ```text
-USDT_USDC_PARITY_1_TO_1_V0
+CONTEMPORANEOUS_BTCUSDC_SPOT_TO_BTCUSDT_REFERENCE_CLOSE_RATIO_V0_1
 ```
 
-This approximation must be visible in all parity reports. A historical conversion
-series may be added later. Missing conversion evidence must never be hidden.
+The candidate signal and swing stop are planned in USDT on the signal/reference
+contour. At the signal cutoff, one frozen ratio is calculated from the exact-minute
+BTCUSDC Spot close divided by the exact-minute BTCUSDT reference close. Entry, stop,
+TP1, and TP2 are converted once and directionally tick-rounded before fill replay.
+The ratio, both source closes, and cutoff timestamp must be persisted. BTCUSDC Spot
+OHLC is then the only contour allowed to trigger fills, stops, targets, and trailing
+events. Signal-feed volume, OI, delta, or Futures-only wicks must never enter lifecycle
+execution. The close ratio is an explicit one-minute proxy for live bookTicker, not a
+claim of exact exchange planning parity.
 
 ### 11.3 Planned entry
 
@@ -551,6 +558,29 @@ Rules:
   not silently replace the baseline.
 - Plan-B market fallback is a separate fill-model variant, not part of the initial
   baseline unless explicitly configured.
+
+Guarded Plan-B variant:
+
+```text
+LIMIT_THEN_MARKET_90S_GUARDED_V0_1
+```
+
+Rules:
+
+- The first complete post-signal minute is the LIMIT-touch window.
+- If no LIMIT fill occurs, the open of the second complete post-signal minute is the
+  deterministic 90-second executable-price proxy.
+- A missing or synthetic required bar is `NO_FEED_COVERAGE`.
+- The MARKET fallback is rejected when `abs(proxy - planned_entry) > 0.25R` with
+  `R = abs(planned_entry - initial_stop)`; an explicit positive absolute threshold
+  may raise the maximum in the same way as Executor `PLANB_MAX_DEV_USD`.
+- After the deviation check, the fallback is rejected when the proxy is past TP1 in
+  the trade direction.
+- Otherwise the entry fills at the proxy open and is labeled `PLANB_MARKET`.
+- The ledger must persist fill method, decision, abort reason, proxy price,
+  deviation, maximum deviation, and risk.
+- This is a deterministic OHLC approximation. It does not reconstruct bid/ask,
+  partial fills, cancel races, cancel-confirmation polling, or market slippage.
 
 The fill model must never use a future close to improve the fill.
 
@@ -665,14 +695,24 @@ When TP2 is reached:
 
 Reproduce the pure market-data meaning of Executor trailing:
 
-- use the most recent confirmed fractal swing from replay `Close` values;
-- long uses a fractal low minus `trail_swing_buffer_usd`;
-- short uses a fractal high plus `trail_swing_buffer_usd`;
+- use the most recent confirmed fractal swing from the BTCUSDT reference feed;
+- long uses `LowPrice` and a fractal low minus `trail_swing_buffer_usd`;
+- short uses `HiPrice` and a fractal high plus `trail_swing_buffer_usd`;
+- use BTCUSDT `ClosePrice` only for the post-activation confirmation break;
 - fractal left/right width is `trail_swing_lr`;
 - a swing is confirmed only after the required right-hand bars exist;
-- update only when the desired stop improves by at least `trail_step_usd`;
-- never loosen a trailing stop;
+- calculate a contemporaneous historical proxy
+  `k_trail = BTCUSDC execution close / BTCUSDT reference close` for every trail
+  activation or update, and reject the quote outside `[0.95, 1.05]`;
+- convert the buffered USDT stop with `k_trail`, round outward, and validate it
+  against the current BTCUSDC execution close before changing the active stop;
+- after activation, update only when the converted BTCUSDC stop improves by at
+  least `trail_step_usd`, and never loosen an active trailing stop;
 - activate an updated stop on the following bar to prevent look-ahead.
+
+Missing exact-minute reference/execution alignment or an invalid conversion retains
+the existing protective stop. Every applied update must audit the source swing,
+source USDT stop, converted stop, ratio, both reference closes, and quote timestamp.
 
 Exchange cancel/replace failures are not modeled in the baseline economic replay. A
 future execution-stress variant may model delayed trail updates.
@@ -1087,7 +1127,7 @@ MVP implementation status requires:
 - zero unexplained `PLAIN_SL` versus `TP1_TP2` lifecycle inversions;
 - every mismatch explicitly classified.
 
-`EXECUTOR_V15_REPLAY_V0_1` may be marked parity-validated only when:
+`EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2` may be marked parity-validated only when:
 
 - at least 90% of comparable real snapshots match lifecycle class; and
 - no protected winner is replayed as a plain stop without an understood, documented
@@ -1141,16 +1181,17 @@ Proposed command:
 python -m deltascout.research_bundle.scout_backtester.cli `
   --candidate-root deltascout/research_material/reviews `
   --feed-root deltascout/research_material/effective_feed `
+  --execution-feed-root deltascout/research_material/execution_feed/btcusdc_spot_1m/daily `
   --quality-sidecar-root deltascout/research_material/recovery_reports `
   --date-from 2026-03-20 `
   --date-to 2026-08-20 `
   --candidate-groups PEAK_EMIT_BASELINE,ALMOST_PEAK_2_OF_3 `
-  --execution-policy EXECUTOR_V15_REPLAY_V0_1 `
+  --execution-policy EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2 `
   --fill-model MARKETABLE_LIMIT_NEXT_BAR_V0_1 `
   --same-bar-policy CONSERVATIVE_STOP_FIRST_V0_1 `
   --cost-model COMMISSION_TURNOVER_RATE_V0_1 `
   --replay-modes independent_opportunity,executor_portfolio `
-  --experiment-id scout_mvp_peak_vs_almost_peak_v0
+  --experiment-id scout_peak_vs_almost_peak_btcusdc_spot_dual_feed_v1
 ```
 
 CLI requirements:
@@ -1280,7 +1321,7 @@ After parity validation, run exactly this first comparison:
 Baseline: PEAK_EMIT_BASELINE
 Candidate: ALMOST_PEAK_2_OF_3
 Modes: independent_opportunity + executor_portfolio
-Execution: EXECUTOR_V15_REPLAY_V0_1
+Execution: EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2
 Same-bar: conservative baseline + target-first sensitivity
 Economics: fixed 3000 USDC notional + commission + slippage stress
 Date range: maximum reliable locally available range
@@ -1310,7 +1351,8 @@ Mitigation: conservative baseline, sensitivity policy, ambiguity flags.
 
 ### Signal/reference symbol versus execution symbol
 
-Mitigation: explicit conversion model and parity report; no hidden 1:1 assumption.
+Mitigation: separate feed roles, exact-cutoff persisted conversion evidence, official
+BTCUSDC Spot execution OHLC, and parity report; no hidden 1:1 assumption.
 
 ### Live entry timeout cannot be reproduced exactly
 
@@ -1352,7 +1394,8 @@ Not authorized by this specification, but anticipated:
 
 1. Full DeltaScout detector replay from raw minute feed under alternate detection
    thresholds.
-2. Historical BTCUSDT/BTCUSDC conversion series.
+2. Higher-frequency BTCUSDT/BTCUSDC bookTicker conversion evidence for tighter live
+   planning parity than the current exact-minute close proxy.
 3. Exchange microstructure and partial-fill model.
 4. Delayed cancel/replace and stop-limit non-fill stress.
 5. Borrow-interest model.

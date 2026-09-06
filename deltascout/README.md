@@ -7,14 +7,23 @@ DeltaScout monitors the aggregated trade feed (`aggregated.csv`) produced by the
 ## Pipeline
 
 ```text
-CSV row -> Delta Detection -> Comparison (3/3 rule) -> Gate Logic -> PEAK Emit
+CSV row -> Delta Detection -> Comparison (3/3 rule) -> Gate Logic -> Optional PEAK admission -> PEAK Emit
 ```
 
 1. **Feed ingestion**: tail-poll `aggregated.csv`, yield one row at a time
 2. **Raw delta detection**: compute `delta = buy - sell`, track rolling window max and min
 3. **Comparison logic**: current peak must beat previous on price, volume, and VWAP
 4. **Gate logic**: EMA50 regime, VWAP regime, CHOP30, COH10, IMB band
-5. **PEAK emit**: write JSONL to the live signal bus and mirror `PEAK_EMIT` to the research archive
+5. **Optional PEAK admission**: evaluate the loss-avoidance rule in `off`, `shadow`, or `veto` mode
+6. **PEAK emit**: write admitted JSONL to the live signal bus and mirror `PEAK_EMIT` to the research archive
+
+The loss-avoidance rule is PEAK-only. It never applies to `ALMOST_PEAK_2_OF_3`. It combines:
+
+- component A: same-side 24-hour peak percentile `<= 50`;
+- component B: trusted `oi_change_60m < 0` and directional `delta_pct_240m < 0.06`;
+- union decision: A or B.
+
+Missing, stale, synthetic, duplicated, or incomplete feature inputs fail open. `shadow` records the decision but preserves the original PEAK bus behavior. `veto` may suppress a PEAK only after its audit record was written successfully; five consecutive would-block decisions open a circuit breaker and restore PEAK emission.
 
 ---
 
@@ -78,6 +87,8 @@ The decision archive stores additive runtime events from DeltaScout:
 | `CANDIDATE_COMPARISON_REJECT` | Candidate failed base checks or 3/3 comparison |
 | `CANDIDATE_GATE_REJECT` | Candidate passed comparison but failed a gate |
 | `PEAK_EMIT` | Mirrored successful PEAK event with gate context |
+| `PEAK_LOSS_FILTER_DECISION` | Audited PEAK admission decision in shadow/veto mode |
+| `PEAK_LOSS_FILTER_REJECT` | Vetoed PEAK, including its full counterfactual PEAK payload for replay |
 
 Example record:
 
@@ -209,6 +220,8 @@ DELTA_MAX
 DELTA_MIN
 CANDIDATE_COMPARISON_REJECT
 CANDIDATE_GATE_REJECT
+PEAK_LOSS_FILTER_DECISION
+PEAK_LOSS_FILTER_REJECT
 PEAK_EMIT
 ```
 
@@ -232,6 +245,14 @@ PEAK_EMIT
 | `ROLL_WINDOW_MIN` | `180` | Rolling ownership window in minutes |
 | `STARTUP_LOOKBACK_MIN` | `1500` | Warmup rows |
 | `WEBHOOK_URL` | unset | Optional debug webhook |
+| `LOSS_FILTER_MODE` | `off` | Admission mode: `off`, `shadow`, or `veto` |
+| `LOSS_FILTER_ENRICHED_FEED_DIR` | `/opt/aitrader/feed` | Daily enriched feed used for cutoff-safe OI/delta features |
+| `LOSS_FILTER_STATE_PATH` | `/data/state/deltascout/loss_filter_state.json` | Atomic same-side peak history state |
+| `LOSS_FILTER_RESEARCH_ARCHIVE_DIR` | `/data/archive/deltascout` | Canonical `DELTA_MAX/MIN` archive used to rebuild the runtime cache on startup |
+| `LOSS_FILTER_RULE_ID` | `DS_PEAK_LOSS_AVOIDANCE_UNION_V1` | Pinned policy identifier; mismatch fails open |
+| `LOSS_FILTER_SOURCE_TIMEZONE` | `Europe/Bratislava` | Timezone of legacy DeltaScout timestamps |
+| `LOSS_FILTER_ENRICHED_TIMEZONE` | `UTC` | Timezone of enriched daily feed timestamps |
+| `LOSS_FILTER_EVAL_BUDGET_MS` | `500` | Maximum evaluation budget before fail-open |
 
 Gate parameters include `CHOP30_MAX`, `COH10_MIN`, `IMB_MIN`, `IMB_MAX`, and `VWAP_MAX_DIST_USD`.
 

@@ -23,3 +23,19 @@ def test_recovery_quality_is_joined_per_bar(tmp_path: Path) -> None:
     bars = load_feed(feed, date_from="2026-04-24", date_to="2026-04-24", quality_sidecar_root=quality)
     assert bars[0].recovery_overlap is True
     assert bars[0].feed_quality_class == "RECOVERED_LEGACY_PRICE"
+
+
+def test_official_spot_execution_role_does_not_require_signal_recovery_sidecar(tmp_path: Path) -> None:
+    feed = tmp_path / "spot"
+    fields = ["Timestamp", "Open", "High", "Low", "Close", "Volume", "BuyQty", "SellQty", "IsSynthetic"]
+    _csv(feed / "2026-04-24.csv", fields, {"Timestamp": "2026-04-24 00:00:00", "Open": 100, "High": 101, "Low": 99, "Close": 100, "Volume": 1, "BuyQty": 0.5, "SellQty": 0.5, "IsSynthetic": 0})
+
+    bars = load_feed(
+        feed,
+        date_from="2026-04-24",
+        date_to="2026-04-24",
+        feed_role="official_spot_execution",
+    )
+
+    assert bars[0].feed_quality_class == "BINANCE_SPOT_OFFICIAL"
+    assert bars[0].recovery_overlap is False

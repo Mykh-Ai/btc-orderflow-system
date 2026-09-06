@@ -67,7 +67,7 @@ def replay_portfolio(
             active_id = active.trade_id if active else ""
         elif active is not None:
             pending_until = active.entry_fill_ts or active.entry_expiry_ts
-            if active.entry_status == "NO_FILL" and pending_until is not None and now > pending_until:
+            if active.entry_status in {"NO_FILL", "ABORTED"} and pending_until is not None and now > pending_until:
                 active = None
             elif active.exit_ts is not None and now > active.exit_ts:
                 cooldown_until = active.exit_ts + timedelta(seconds=config.cooldown_seconds)
@@ -174,7 +174,7 @@ def replay_portfolio(
                     payload=dict(source_event.payload),
                 )
             )
-        if accepted.entry_status in {"FILLED", "NO_FILL"}:
+        if accepted.entry_status in {"FILLED", "NO_FILL", "ABORTED"}:
             active = accepted
             if accepted.entry_status == "FILLED" and accepted.data_quality_interruption_ts is not None:
                 portfolio_unknown_from = accepted.data_quality_interruption_ts

@@ -67,3 +67,62 @@ def test_local_timestamp_conversion_and_ambiguous_time_failure() -> None:
     assert converted.isoformat() == "2026-03-20T00:36:00+00:00"
     with pytest.raises(BacktestContractError, match="ambiguous"):
         local_event_to_utc("2026-10-25 02:30:00")
+
+
+def test_filter_reject_is_compiled_directly_from_raw_archive_as_peak_counterfactual(tmp_path: Path) -> None:
+    reviews = tmp_path / "reviews"
+    raw = tmp_path / "raw_archive"
+    reviews.mkdir()
+    raw.mkdir()
+    day = "2026-08-20"
+    would_be_peak = {
+        "ts": "2026-08-20 16:30:00",
+        "source": "DeltaScout",
+        "action": "PEAK",
+        "kind": "long",
+        "delta": 125.0,
+        "vol": 200.0,
+        "imb": 0.625,
+        "price": 65000.5,
+        "vwap": 64950,
+        "poc": 64900,
+    }
+    row = {
+        "schema": 1,
+        "event": "PEAK_LOSS_FILTER_REJECT",
+        "ts": would_be_peak["ts"],
+        "kind": "long",
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "decision": "BLOCK",
+        "component_a": False,
+        "component_b": True,
+        "union": True,
+        "same_side_peak_count_24h": 12,
+        "same_side_peak_percentile_24h": 75.0,
+        "oi_change_60m": -100.0,
+        "oi_trusted_60m": True,
+        "directional_delta_pct_240m": 0.02,
+        "would_be_peak": would_be_peak,
+    }
+    (raw / f"{day}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    candidates, quality = compile_candidates(
+        reviews,
+        date_from=day,
+        date_to=day,
+        raw_archive_root=raw,
+        candidate_groups=["PEAK_EMIT_BASELINE"],
+    )
+
+    assert quality == []
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.event_type == "PEAK_LOSS_FILTER_REJECT"
+    assert candidate.candidate_group == "PEAK_EMIT_BASELINE"
+    assert candidate.admission_status == "FILTER_REJECTED"
+    assert candidate.filter_decision == "BLOCK"
+    assert candidate.filter_rule_id == "DS_PEAK_LOSS_AVOIDANCE_UNION_V1"
+    assert candidate.signal_price == 65000.5
+    assert candidate.signal_ts_utc.isoformat() == "2026-08-20T14:30:00+00:00"
+    assert candidate.shadow_flags["loss_avoidance_conservative_union"] is True
+    assert candidate.shadow_flags["oi_change_60m"] == -100.0

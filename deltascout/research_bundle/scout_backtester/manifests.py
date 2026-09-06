@@ -20,7 +20,17 @@ def sha256_file(path: Path) -> str:
 
 def input_record(path: Path) -> dict[str, Any]:
     stat = path.stat()
-    return {"path": str(path), "size": stat.st_size, "sha256": sha256_file(path)}
+    record: dict[str, Any] = {"path": str(path), "size": stat.st_size, "sha256": sha256_file(path)}
+    if path.suffix.lower() in {".csv", ".jsonl"}:
+        with path.open("rb") as handle:
+            line_count = sum(chunk.count(b"\n") for chunk in iter(lambda: handle.read(1024 * 1024), b""))
+            if stat.st_size:
+                handle.seek(-1, 2)
+                if handle.read(1) != b"\n":
+                    line_count += 1
+        record["line_count"] = line_count
+        record["data_row_count"] = max(0, line_count - 1) if path.suffix.lower() == ".csv" else line_count
+    return record
 
 
 def git_state(repo_root: Path) -> dict[str, Any]:
@@ -49,6 +59,7 @@ def build_run_fingerprint(
     date_to: str,
     candidate_groups: list[str],
     replay_modes: list[str],
+    candidate_selection: dict[str, Any] | None = None,
 ) -> str:
     payload = {
         "config": config.to_dict(),
@@ -57,6 +68,7 @@ def build_run_fingerprint(
         "date_from": date_from,
         "date_to": date_to,
         "candidate_groups": candidate_groups,
+        "candidate_selection": candidate_selection or {},
         "replay_modes": replay_modes,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=list)
@@ -72,15 +84,20 @@ def write_manifest(
     run_fingerprint: str,
     date_from: str,
     date_to: str,
-    feed_date_from: str,
-    feed_date_to: str,
+    signal_feed_date_from: str,
+    signal_feed_date_to: str,
+    execution_feed_date_from: str,
+    execution_feed_date_to: str,
     candidate_groups: list[str],
     replay_modes: list[str],
     candidate_count: int,
     quality_count: int,
-    feed_quality_counts: dict[str, int],
+    signal_feed_quality_counts: dict[str, int],
+    execution_feed_quality_counts: dict[str, int],
     exclusions: dict[str, int],
     output_paths: Iterable[Path],
+    research_analysis: dict[str, Any] | None = None,
+    candidate_selection: dict[str, Any] | None = None,
 ) -> Path:
     payload = {
         "experiment_id": config.experiment_id,
@@ -91,16 +108,27 @@ def write_manifest(
         "run_fingerprint": run_fingerprint,
         "candidate_contract_version": CANDIDATE_CONTRACT_VERSION,
         "feed_contract_version": FEED_CONTRACT_VERSION,
-        "date_range": {"candidate_from": date_from, "candidate_to": date_to, "feed_from": feed_date_from, "feed_to": feed_date_to},
+        "date_range": {
+            "candidate_from": date_from,
+            "candidate_to": date_to,
+            "signal_feed_from": signal_feed_date_from,
+            "signal_feed_to": signal_feed_date_to,
+            "execution_feed_from": execution_feed_date_from,
+            "execution_feed_to": execution_feed_date_to,
+        },
         "candidate_groups": candidate_groups,
+        "candidate_selection": candidate_selection or {},
         "replay_modes": replay_modes,
         "resolved_config": config.to_dict(),
         "input_files": input_records,
         "candidate_count": candidate_count,
         "candidate_quality_count": quality_count,
-        "feed_quality_counts": feed_quality_counts,
+        "signal_feed_quality_counts": signal_feed_quality_counts,
+        "execution_feed_quality_counts": execution_feed_quality_counts,
         "exclusions": exclusions,
         "output_artifacts": [input_record(item) for item in output_paths],
     }
+    if research_analysis is not None:
+        payload["research_analysis"] = research_analysis
     path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, default=list) + "\n", encoding="utf-8")
     return path

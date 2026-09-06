@@ -33,6 +33,53 @@ def _normalized_lifecycle(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _lifecycle_from_last_closed(last_closed: dict[str, Any]) -> str:
+    explicit = _normalized_lifecycle(last_closed.get("trade_lifecycle_state"))
+    if explicit:
+        return explicit
+    if bool(last_closed.get("tp2_done")) and bool(last_closed.get("trail_active")):
+        return "TP1_TP2_TRAILING_STOP"
+    if bool(last_closed.get("tp1_done")):
+        return "TP1_SL"
+    if bool(last_closed.get("sl_done")) or _normalized_lifecycle(last_closed.get("reason")) == "SL":
+        return "PLAIN_SL"
+    return ""
+
+
+def _operational_side(last_closed: dict[str, Any]) -> str:
+    side = str(last_closed.get("side") or "").upper()
+    if side in {"LONG", "SHORT"}:
+        return side
+    prices = last_closed.get("prices") or {}
+    entry = _float(prices.get("entry") or last_closed.get("entry"))
+    stop = _float(prices.get("sl"))
+    tp1 = _float(prices.get("tp1"))
+    if entry is None:
+        return ""
+    if stop is not None and stop > entry and (tp1 is None or tp1 < entry):
+        return "SHORT"
+    if stop is not None and stop < entry and (tp1 is None or tp1 > entry):
+        return "LONG"
+    return ""
+
+
+def _operational_entry_status(last_closed: dict[str, Any], lifecycle: str) -> str:
+    reason = _normalized_lifecycle(last_closed.get("reason"))
+    if reason in {
+        "ENTRY_CANCELED",
+        "ENTRY_EXPIRED",
+        "ENTRY_REJECTED",
+        "ENTRY_TIMEOUT",
+        "ENTRY_TIMEOUT_ABORT",
+        "ENTRY_TIMEOUT_MARKET_ERROR",
+        "ENTRY_TIMEOUT_MARKET_NO_OID",
+    }:
+        return "ABORTED"
+    if lifecycle or _float(last_closed.get("entry_actual")) is not None:
+        return "FILLED"
+    return "UNKNOWN"
+
+
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -53,34 +100,45 @@ def _pnl_by_key(path: Path) -> dict[str, dict[str, str]]:
 
 def _operational_records(server_state_root: Path) -> list[dict[str, Any]]:
     snapshots = _load_jsonl(server_state_root / "trade_execution_snapshots.jsonl")
-    if snapshots:
-        return snapshots
     outcomes = _load_jsonl(server_state_root / "trade_outcomes.jsonl")
-    return [
-        {
+    records: dict[str, dict[str, Any]] = {}
+    for row in snapshots:
+        last_closed = row.get("local_last_closed") or {}
+        trade_key = str(row.get("trade_key") or last_closed.get("trade_key") or "")
+        if trade_key:
+            records[trade_key] = {**row, "operational_record_source": "trade_execution_snapshot"}
+    for row in outcomes:
+        last_closed = row.get("last_closed") or {}
+        trade_key = str(last_closed.get("trade_key") or "")
+        if not trade_key or trade_key in records:
+            continue
+        records[trade_key] = {
             "schema": row.get("schema"),
-            "trade_key": (row.get("last_closed") or {}).get("trade_key"),
+            "trade_key": trade_key,
             "ts": row.get("ts"),
             "excluded_from_scoring": False,
-            "local_last_closed": row.get("last_closed") or {},
-            "lifecycle_class": (row.get("last_closed") or {}).get("trade_lifecycle_state"),
+            "local_last_closed": last_closed,
+            "lifecycle_class": _lifecycle_from_last_closed(last_closed),
+            "operational_record_source": "trade_outcome_fallback",
         }
-        for row in outcomes
-    ]
+    return sorted(records.values(), key=lambda row: (str(row.get("ts") or ""), str(row.get("trade_key") or "")))
 
 
 def _match_result(record: dict[str, Any], results: list[TradeResult]) -> tuple[TradeResult | None, str]:
     last_closed = record.get("local_last_closed") or {}
     opened_at = _parse_ts(last_closed.get("opened_at"))
-    side = str(last_closed.get("side") or "").upper()
+    side = _operational_side(last_closed)
     if opened_at is None or side not in {"LONG", "SHORT"}:
         return None, "missing operational opened_at/side"
     eligible: list[tuple[float, float, TradeResult]] = []
     live_entry = _float((last_closed.get("prices") or {}).get("entry") or last_closed.get("entry"))
     for result in results:
-        if result.side != side or result.entry_fill_ts is None:
+        if result.side != side:
             continue
-        time_distance = abs((result.entry_fill_ts - opened_at).total_seconds())
+        # Candidate identity must not depend on whether the replay fill model
+        # happened to fill it. The operational trade is caused by the signal;
+        # entry fill status is a parity result, not a join prerequisite.
+        time_distance = abs((result.signal_ts_utc - opened_at).total_seconds())
         if time_distance > 6 * 3600:
             continue
         price_distance = abs(float(result.planned_entry_price or 0.0) - live_entry) if live_entry is not None else 0.0
@@ -110,12 +168,16 @@ def build_parity_report(
         result, join_reason = _match_result(record, results)
         live_prices = last_closed.get("prices") or {}
         live_entry = _float(live_prices.get("entry") or last_closed.get("entry"))
+        live_entry_actual = _float(last_closed.get("entry_actual"))
         live_stop = _float(live_prices.get("sl"))
         live_tp1 = _float(live_prices.get("tp1"))
         live_tp2 = _float(live_prices.get("tp2"))
         live_qty = _float(last_closed.get("qty"))
         live_tp1_done = bool(last_closed.get("tp1_done"))
-        operational_lifecycle = _normalized_lifecycle(record.get("lifecycle_class") or last_closed.get("trade_lifecycle_state"))
+        operational_lifecycle = _normalized_lifecycle(record.get("lifecycle_class")) or _lifecycle_from_last_closed(last_closed)
+        operational_entry_status = _operational_entry_status(last_closed, operational_lifecycle)
+        if operational_entry_status == "ABORTED":
+            operational_lifecycle = ""
         pnl_row = pnl.get(trade_key, {})
         operational_gross = _float(pnl_row.get("gross_pnl_usdc"))
         operational_net = _float(pnl_row.get("net_pnl_usdc"))
@@ -139,6 +201,23 @@ def build_parity_report(
         qty_difference = float(result.qty_total) - live_qty if result and live_qty is not None else None
         if entry_match is False:
             mismatch_reasons.append("entry_plan_difference_conversion_or_order_timing")
+        replay_filled = result.entry_status == "FILLED" if result is not None else None
+        operational_filled = (
+            operational_entry_status == "FILLED"
+            if operational_entry_status in {"FILLED", "ABORTED"}
+            else None
+        )
+        entry_execution_match = (
+            replay_filled == operational_filled
+            if replay_filled is not None and operational_filled is not None
+            else None
+        )
+        if entry_execution_match is False:
+            mismatch_reasons.append("entry_execution_difference")
+            if operational_filled is True:
+                mismatch_reasons.append("entry_not_filled_in_replay")
+            elif operational_filled is False:
+                mismatch_reasons.append("entry_filled_in_replay_but_live_aborted")
         if result is not None and live_tp1_done:
             mismatch_reasons.append("initial_stop_unavailable_after_live_breakeven_mutation")
         if stop_difference is not None and abs(stop_difference) > tick_size:
@@ -153,7 +232,7 @@ def build_parity_report(
             if operational_lifecycle == "TP1_SL" and result.lifecycle_class == "TP1_TP2_TRAILING_STOP":
                 mismatch_reasons.append("tp2_touch_difference_conversion_or_target_plan")
             else:
-                mismatch_reasons.append("lifecycle_difference_minute_bar_or_execution_timing")
+                mismatch_reasons.append("lifecycle_difference_reference_feed_or_execution_symbol_path")
         gross_difference = float(result.gross_pnl_usdc) - operational_gross if result and result.gross_pnl_usdc is not None and operational_gross is not None else None
         net_difference = float(result.net_pnl_usdc) - operational_net if result and result.net_pnl_usdc is not None and operational_net is not None else None
         if gross_difference is not None and abs(gross_difference) > 0.01:
@@ -163,9 +242,19 @@ def build_parity_report(
         rows.append(
             {
                 "trade_key": trade_key,
+                "operational_record_source": record.get("operational_record_source") or "",
                 "excluded_from_scoring": excluded,
                 "candidate_id": result.candidate_id if result else "",
                 "candidate_join_status": "MATCHED" if result else "UNMATCHED",
+                "operational_opened_at": last_closed.get("opened_at") or "",
+                "operational_entry_status": operational_entry_status,
+                "operational_entry_reference": live_entry,
+                "operational_entry_actual": live_entry_actual,
+                "replay_signal_ts_utc": result.signal_ts_utc.isoformat() if result else "",
+                "replay_entry_status": result.entry_status if result else "",
+                "replay_entry_fill_ts": result.entry_fill_ts.isoformat() if result and result.entry_fill_ts else "",
+                "replay_planned_entry_price": result.planned_entry_price if result else None,
+                "entry_execution_match": entry_execution_match,
                 "entry_plan_match": entry_match,
                 "stop_plan_difference_usd": stop_difference,
                 "tp1_difference_usd": tp1_difference,

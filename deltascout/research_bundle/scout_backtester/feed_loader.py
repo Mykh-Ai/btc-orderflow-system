@@ -90,7 +90,10 @@ def load_feed(
     date_from: str,
     date_to: str,
     quality_sidecar_root: Path | None = None,
+    feed_role: str = "signal_enriched",
 ) -> list[FeedBar]:
+    if feed_role not in {"signal_enriched", "official_spot_execution"}:
+        raise BacktestContractError(f"unsupported feed_role={feed_role}")
     quality = load_quality_sidecar(quality_sidecar_root)
     bars: list[FeedBar] = []
     seen: set[datetime] = set()
@@ -115,12 +118,17 @@ def load_feed(
                 if low > min(open_price, close) or high < max(open_price, close) or low > high:
                     raise BacktestContractError(f"invalid OHLC ordering at {path}:{row_number}")
                 synthetic = str(row.get("IsSynthetic") or "").strip().lower() in {"1", "true", "yes"}
-                recovery_overlap = RECOVERY_START <= ts <= RECOVERY_END
-                quality_class = quality.get(ts)
-                if recovery_overlap and not quality_class:
-                    raise BacktestContractError(f"missing recovery quality sidecar row for {ts.isoformat()}")
-                if not quality_class:
-                    quality_class = "SYNTHETIC_UNTRUSTED" if synthetic else "REAL_ENRICHED"
+                recovery_overlap = feed_role == "signal_enriched" and RECOVERY_START <= ts <= RECOVERY_END
+                if feed_role == "official_spot_execution":
+                    if synthetic:
+                        raise BacktestContractError(f"official spot execution row cannot be synthetic at {path}:{row_number}")
+                    quality_class = "BINANCE_SPOT_OFFICIAL"
+                else:
+                    quality_class = quality.get(ts)
+                    if recovery_overlap and not quality_class:
+                        raise BacktestContractError(f"missing recovery quality sidecar row for {ts.isoformat()}")
+                    if not quality_class:
+                        quality_class = "SYNTHETIC_UNTRUSTED" if synthetic else "REAL_ENRICHED"
                 bars.append(
                     FeedBar(
                         ts=ts,

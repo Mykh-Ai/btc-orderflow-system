@@ -6,11 +6,34 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
+from deltascout.loss_avoidance_policy import evaluate_loss_avoidance_policy
+
 from .candidate_compiler import local_event_to_utc
 from .contracts import BacktestContractError, Candidate, FeedBar
 
 
 TRUSTED_OI_CLASSES = {"REAL_ENRICHED"}
+
+
+def conservative_filter_flags(
+    *,
+    same_side_peak_percentile_24h: float | None,
+    oi_change_60m: float | None,
+    oi_trusted_60m: bool,
+    directional_delta_pct_240m: float | None,
+) -> dict[str, bool | None]:
+    """Compatibility wrapper around the shared live/offline V1 policy kernel."""
+    decision = evaluate_loss_avoidance_policy(
+        same_side_peak_percentile_24h=same_side_peak_percentile_24h,
+        oi_change_60m=oi_change_60m,
+        oi_trusted_60m=oi_trusted_60m,
+        directional_delta_pct_240m=directional_delta_pct_240m,
+    )
+    return {
+        "weak_peak_le_50": decision.component_a,
+        "oi_down_60_and_directional_delta_pct_240_lt_0_06": decision.component_b,
+        "loss_avoidance_conservative_union": decision.union,
+    }
 
 
 def _load_peak_history(raw_archive_root: Path, date_from: str, date_to: str) -> list[tuple[object, str, float]]:
@@ -67,8 +90,6 @@ def enrich_shadow_flags(
             if values
             else None
         )
-        weak = percentile <= 50.0 if percentile is not None else None
-
         bars_60 = _window(bars, feed_times, candidate.signal_ts_utc, 60)
         oi_values = [bar.optional.get("OpenInterest") for bar in bars_60 if bar.optional.get("OpenInterest") is not None]
         oi_trusted = bool(bars_60) and all(
@@ -84,20 +105,23 @@ def enrich_shadow_flags(
             total = buy + sell
             if total > 0:
                 directional_delta_pct = (buy - sell) / total * (1 if candidate.side == "LONG" else -1)
-        oi_rule = (
-            oi_change < 0 and directional_delta_pct < 0.06
-            if oi_change is not None and directional_delta_pct is not None
-            else None
+        flags = conservative_filter_flags(
+            same_side_peak_percentile_24h=percentile,
+            oi_change_60m=oi_change,
+            oi_trusted_60m=oi_trusted,
+            directional_delta_pct_240m=directional_delta_pct,
         )
-        known = [value for value in (weak, oi_rule) if value is not None]
-        union = any(known) if known else None
         enriched.append(
             replace(
                 candidate,
                 shadow_flags={
-                    "weak_peak_le_50": weak,
-                    "oi_down_60_and_directional_delta_pct_240_lt_0_06": oi_rule,
-                    "loss_avoidance_conservative_union": union,
+                    **flags,
+                    "same_side_peak_count_24h": len(values),
+                    "same_side_peak_percentile_24h": percentile,
+                    "oi_change_60m": oi_change,
+                    "oi_trusted_60m": oi_trusted,
+                    "directional_delta_pct_240m": directional_delta_pct,
+                    "directional_delta_240m_available": directional_delta_pct is not None,
                 },
             )
         )

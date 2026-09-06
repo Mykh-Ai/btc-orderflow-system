@@ -32,6 +32,7 @@ def test_reject_classification_soft_and_multi():
             {"event": "CANDIDATE_COMPARISON_REJECT", "event_ts": pd.Timestamp("2026-01-01T00:01:00Z"), "seq": 2, "reject_reason": "vwap_distance", "kind": "short", "price": 1010, "vwap": 0, "vwap_max_dist_usd": 1000},
             {"event": "CANDIDATE_GATE_REJECT", "event_ts": pd.Timestamp("2026-01-01T00:02:00Z"), "seq": 3, "reject_reason": "imb_band", "kind": "long", "imb": 0.651, "imb_min": 0.55, "imb_max": 0.65},
             {"event": "CANDIDATE_COMPARISON_REJECT", "event_ts": pd.Timestamp("2026-01-01T00:03:00Z"), "seq": 4, "reject_reason": "direction_mismatch", "kind": "long"},
+            {"event": "PEAK_LOSS_FILTER_REJECT", "event_ts": pd.Timestamp("2026-01-01T00:04:00Z"), "seq": 5, "reject_reason": "loss_avoidance_union", "kind": "short"},
         ]
     )
 
@@ -41,6 +42,7 @@ def test_reject_classification_soft_and_multi():
     assert classes[2] == "soft_fail"
     assert classes[3] == "soft_fail"
     assert classes[4] == "single_condition"
+    assert classes[5] == "policy_filter"
 
 
 def test_close_outcomes_exact_and_ambiguous():

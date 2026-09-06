@@ -44,6 +44,7 @@ def bar(
     high: float,
     low: float,
     close: float,
+    volume: float = 1.0,
     synthetic: bool = False,
 ) -> FeedBar:
     return FeedBar(
@@ -52,7 +53,7 @@ def bar(
         high=high,
         low=low,
         close=close,
-        volume=1.0,
+        volume=volume,
         buy_qty=0.5,
         sell_qty=0.5,
         is_synthetic=synthetic,
