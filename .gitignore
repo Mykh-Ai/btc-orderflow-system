@@ -27,3 +27,6 @@ Thumbs.db
 tmpclaude-*
 *.tmp
 test/.tmp_invariants_state_*.json
+
+# Downloaded production evidence; keep outside source control
+/server_journals/
