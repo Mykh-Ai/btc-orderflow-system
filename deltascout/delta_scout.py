@@ -276,6 +276,17 @@ class Scout:
     def _admit_peak(self, peak_payload: dict, research_payload: dict) -> bool:
         """Evaluate one already-valid PEAK and preserve the existing bus contract."""
         if self.loss_filter.mode == "off":
+            peak_payload["loss_filter_admission"] = {
+                "schema_version": "DS_ENTRY_ADMISSION_V1",
+                "source": "DeltaScout_loss_filter_runtime",
+                "policy_id": getattr(getattr(self.loss_filter, "config", None), "rule_id", None),
+                "configured_mode": "off",
+                "decision": "DISABLED",
+                "effective_action": "EMIT",
+                "filter_a": {"status": "UNKNOWN"},
+                "filter_b": {"status": "UNKNOWN"},
+                "unknown_policy": "FILTER_DISABLED",
+            }
             self._emit_json(peak_payload)
             self._emit_research("PEAK_EMIT", research_payload)
             return True
@@ -288,6 +299,18 @@ class Scout:
             )
         except Exception as e:
             print(f"[LOSS FILTER EVALUATION ERROR] {e}", file=sys.stderr, flush=True)
+            peak_payload["loss_filter_admission"] = {
+                "schema_version": "DS_ENTRY_ADMISSION_V1",
+                "source": "DeltaScout_loss_filter_runtime",
+                "policy_id": getattr(getattr(self.loss_filter, "config", None), "rule_id", None),
+                "configured_mode": getattr(self.loss_filter, "mode", None),
+                "decision": "EVALUATION_ERROR",
+                "effective_action": "EMIT",
+                "filter_a": {"status": "UNKNOWN"},
+                "filter_b": {"status": "UNKNOWN"},
+                "unknown_policy": "EVALUATION_ERROR_FAIL_OPEN",
+            }
+            research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
             self._emit_json(peak_payload)
             self._emit_research("PEAK_EMIT", research_payload)
             return True
@@ -316,8 +339,22 @@ class Scout:
             "consecutive_would_block": self._loss_filter_consecutive_would_block,
             "effective_action": "BLOCK" if evaluation.may_veto and not circuit_was_open else "EMIT",
         })
+        peak_payload["loss_filter_admission"] = evaluation.to_entry_admission_fields(
+            effective_action=audit_fields["effective_action"]
+        )
+        peak_payload["loss_filter_admission"].update({
+            "signal_ts_utc": audit_fields.get("signal_ts_utc"),
+            "evaluation_ms": audit_fields.get("evaluation_ms"),
+            "circuit_open": circuit_was_open,
+        })
+        # The additive admission block is part of the emitted signal. Keep the
+        # audit's copy consistent with that final signal shape.
+        audit_fields["would_be_peak"] = dict(peak_payload)
+        research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
         audit_ok = self._emit_research("PEAK_LOSS_FILTER_DECISION", audit_fields)
         effective_block = evaluation.may_veto and not circuit_was_open and audit_ok
+        peak_payload["loss_filter_admission"]["effective_action"] = "BLOCK" if effective_block else "EMIT"
+        research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
 
         if would_block and self._loss_filter_consecutive_would_block >= 5:
             self._loss_filter_circuit_open = True

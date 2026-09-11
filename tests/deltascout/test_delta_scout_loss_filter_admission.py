@@ -97,6 +97,12 @@ def test_shadow_block_decision_preserves_exact_live_peak_payload(monkeypatch, tm
     assert [event for event, _ in research] == ["PEAK_LOSS_FILTER_DECISION", "PEAK_EMIT"]
     assert research[0][1]["effective_action"] == "EMIT"
     assert research[0][1]["would_be_peak"] == peak
+    admission = bus[0]["loss_filter_admission"]
+    assert admission["decision"] == "BLOCK"
+    assert admission["effective_action"] == "EMIT"
+    assert admission["filter_a"]["status"] == "BLOCK"
+    assert admission["filter_b"]["status"] == "PASS"
+    assert "same_side_peak_percentile_24h" in admission["filter_a"]["condition"]
     assert notifications == []
 
 
@@ -129,6 +135,7 @@ def test_veto_audit_failure_is_fail_open(monkeypatch, tmp_path) -> None:
     assert admitted is True
     assert bus == [peak]
     assert [event for event, _ in research] == ["PEAK_LOSS_FILTER_DECISION", "PEAK_EMIT"]
+    assert bus[0]["loss_filter_admission"]["effective_action"] == "EMIT"
     assert notifications == []
 
 
@@ -145,6 +152,8 @@ def test_runtime_fail_open_reason_prevents_veto(monkeypatch, tmp_path) -> None:
     assert admitted is True
     assert bus == [peak]
     assert research[0][1]["effective_action"] == "EMIT"
+    assert bus[0]["loss_filter_admission"]["filter_a"]["status"] == "BLOCK"
+    assert bus[0]["loss_filter_admission"]["fail_open_reason"] == "ENRICHED_STALE"
 
 
 def test_circuit_opens_after_five_consecutive_would_blocks(monkeypatch, tmp_path) -> None:
@@ -159,3 +168,17 @@ def test_circuit_opens_after_five_consecutive_would_blocks(monkeypatch, tmp_path
     assert bus == [peak]
     decision_rows = [fields for event, fields in research if event == "PEAK_LOSS_FILTER_DECISION"]
     assert decision_rows[-1]["circuit_open"] is True
+    assert bus[0]["loss_filter_admission"]["effective_action"] == "EMIT"
+
+
+def test_filter_status_explains_blocker_flags_for_entry_assessor(monkeypatch, tmp_path) -> None:
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, _, _ = _scout(module, _evaluation(mode="veto", block=False))
+    peak, mirror = _payloads()
+
+    assert scout._admit_peak(peak, mirror) is True
+    admission = bus[0]["loss_filter_admission"]
+    assert admission["decision"] == "KEEP"
+    assert admission["filter_a"]["status"] == "PASS"
+    assert admission["filter_b"]["status"] == "PASS"
+    assert admission["combined_rule"].startswith("A OR B blocker")

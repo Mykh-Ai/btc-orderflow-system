@@ -138,6 +138,55 @@ class RuntimeFilterEvaluation:
         }
         return fields
 
+    def to_entry_admission_fields(self, *, effective_action: str) -> dict[str, Any]:
+        """Return cutoff-safe filter provenance for an entry assessor.
+
+        ``component_a``/``component_b`` are blocker matches: ``true`` means the
+        component failed, not that it passed. Keep the rule meaning and inputs
+        beside the status so an LLM cannot interpret opaque A/B flags.
+        """
+
+        def status(value: bool | None) -> str:
+            if value is True:
+                return "BLOCK"
+            if value is False:
+                return "PASS"
+            return "UNKNOWN"
+
+        return {
+            "schema_version": "DS_ENTRY_ADMISSION_V1",
+            "source": "DeltaScout_loss_filter_runtime",
+            "policy_id": self.rule_id,
+            "configured_mode": self.configured_mode,
+            "purpose": "Upstream loss-avoidance admission provenance; not an independent market feature.",
+            "filter_a": {
+                "status": status(self.decision.component_a),
+                "purpose": "Reject a weak same-side PEAK relative to the prior 24-hour same-side peak distribution.",
+                "condition": "same_side_peak_percentile_24h <= 50.0 => BLOCK",
+                "actual_value": self.same_side_peak_percentile_24h,
+                "threshold": 50.0,
+                "sample_count": self.same_side_peak_count_24h,
+            },
+            "filter_b": {
+                "status": status(self.decision.component_b),
+                "purpose": "Reject a move with falling trusted OI and weak direction-adjusted 240-minute flow.",
+                "condition": "oi_change_60m < 0 AND directional_delta_pct_240m < 0.06 => BLOCK",
+                "oi_change_60m": self.oi_change_60m,
+                "directional_delta_pct_240m": self.directional_delta_pct_240m,
+                "oi_trusted_60m": self.oi_trusted_60m,
+                "threshold_directional_delta_pct_240m": 0.06,
+            },
+            "combined_rule": "A OR B blocker; both known PASS values are required for KEEP.",
+            "unknown_policy": "UNKNOWN_KEEP",
+            "decision": self.decision.decision,
+            "effective_action": effective_action,
+            "reason_codes": list(self.decision.reason_codes),
+            "fail_open_reason": self.fail_open_reason,
+            "feature_status": self.feature_status,
+            "enriched_last_ts_utc": self.enriched_last_ts_utc.isoformat() if self.enriched_last_ts_utc else None,
+            "peak_history_status": self.peak_history_status,
+        }
+
 
 def _unknown_decision() -> LossAvoidanceDecision:
     return evaluate_loss_avoidance_policy(
