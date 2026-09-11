@@ -42,6 +42,12 @@ docs/private/
 /.worktrees/
 /deltascout.zip
 
+# Local Codex attachments, deployment mirrors, and generated test/research outputs
+/.codex-remote-attachments/
+/deployment_staging/
+/outputs/
+/pytest-of-User/
+
 #aggregator.py
 data/feed/.gitkeep
 data/logs/.gitkeep
