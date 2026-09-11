@@ -6,6 +6,7 @@ The durable artifact is an append-only JSONL verdict journal.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import time
 import uuid
@@ -15,6 +16,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import requests
+
+from .entry_snapshot import (
+    EntrySnapshotError,
+    PROMPT_VERSION as ENTRY_PROMPT_VERSION,
+    SNAPSHOT_SCHEMA_VERSION as ENTRY_SNAPSHOT_SCHEMA_VERSION,
+    build_entry_prompt,
+    build_entry_snapshot,
+)
 
 ENV: Dict[str, Any] = {
     "SYMBOL": os.getenv("SYMBOL", "BTCUSDC"),
@@ -36,6 +45,11 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED", ""),
     "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED", ""),
     "LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES", "5"),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", "false"),
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH": os.getenv(
+        "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH",
+        "/data/state/market_monitor_state_v39a.json",
+    ),
 }
 
 save_state: Optional[Callable[[dict], None]] = None
@@ -722,9 +736,68 @@ def _resolve_market_monitor_current_feed_path(path: str, cutoff_ts: Any) -> str:
     return path
 
 
+def _market_monitor_lineage_hashes(current_feed_path: str, context_feed_path: str) -> Dict[str, str]:
+    hashes: Dict[str, str] = {}
+    candidates = [current_feed_path, context_feed_path]
+    for candidate in candidates:
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            digest = hashlib.sha256()
+            with open(candidate, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            hashes[os.path.basename(candidate)] = digest.hexdigest()
+        except OSError:
+            continue
+    return hashes
+
+
+def _build_v39a_market_monitor_snapshot(
+    *,
+    current_feed: Any,
+    context_feed: Any,
+    cutoff_ts: Any,
+    base_snapshot: Dict[str, Any],
+    evidence_pack: Dict[str, Any],
+    current_feed_path: str,
+    context_feed_path: str,
+    state_path: str,
+) -> Dict[str, Any]:
+    try:
+        from market_monitor.snapshot_builder_v39a import build_market_monitor_snapshot_v39a
+    except ImportError:
+        from .market_monitor_snapshot_v39a import build_market_monitor_snapshot_v39a
+
+    # The legacy hook resolves a directory-valued current feed to only the
+    # cutoff day's CSV.  That is sufficient for v1's local windows but cannot
+    # prove a complete 1440-minute window.  v39A uses the broader context feed
+    # when available; the adapter still applies the exact cutoff and future-row
+    # exclusion before calculating every window.
+    v39a_feed = context_feed if context_feed is not None and not context_feed.empty else current_feed
+    snapshot = build_market_monitor_snapshot_v39a(
+        v39a_feed,
+        context_feed=context_feed,
+        cutoff_ts=cutoff_ts,
+        state_path=state_path,
+        symbol=str(evidence_pack.get("symbol") or ""),
+        base_snapshot=base_snapshot,
+        lineage={
+            "feed_identity": current_feed_path,
+            "source_hashes": _market_monitor_lineage_hashes(current_feed_path, context_feed_path),
+        },
+    )
+    if not isinstance(snapshot, dict):
+        raise TypeError("market_monitor_snapshot_v39a_invalid_result")
+    snapshot["enabled"] = True
+    snapshot["runtime_mode"] = "v39a_opt_in"
+    return snapshot
+
+
 def build_market_monitor_snapshot_until_cutoff(evidence_pack: Dict[str, Any], env: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = env if isinstance(env, dict) else ENV
-    if not _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False):
+    v39a_enabled = _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", False), False)
+    if not _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False) and not v39a_enabled:
         return {"enabled": False, "data_gaps": ["market_monitor_snapshot_disabled"]}
 
     cutoff_ts = evidence_pack.get("analysis_cutoff_ts")
@@ -782,6 +855,37 @@ def build_market_monitor_snapshot_until_cutoff(evidence_pack: Dict[str, Any], en
         )
         if isinstance(snapshot, dict):
             snapshot["enabled"] = True
+            if v39a_enabled:
+                state_path = str(
+                    cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH")
+                    or "/data/state/market_monitor_state_v39a.json"
+                ).strip()
+                try:
+                    snapshot = _build_v39a_market_monitor_snapshot(
+                        current_feed=current_feed,
+                        context_feed=context_feed,
+                        cutoff_ts=cutoff_ts,
+                        base_snapshot=snapshot,
+                        evidence_pack=evidence_pack,
+                        current_feed_path=resolved_current_feed_path,
+                        context_feed_path=context_feed_path,
+                        state_path=state_path,
+                    )
+                except Exception as exc:
+                    return {
+                        "enabled": True,
+                        "schema_version": "market_monitor_snapshot_error_v39a",
+                        "cutoff_ts": cutoff_ts,
+                        "symbol": evidence_pack.get("symbol") or "",
+                        "source_paths": {
+                            "current_feed": current_feed_path,
+                            "resolved_current_feed": resolved_current_feed_path,
+                            "context_feed": context_feed_path,
+                            "state_path": state_path,
+                        },
+                        "data_gaps": [f"market_monitor_snapshot_v39a_error:{type(exc).__name__}"],
+                        "boundary": "descriptive market-state snapshot only",
+                    }
             return snapshot
         return {
             "enabled": True,
@@ -876,12 +980,23 @@ def build_pretrade_evidence_pack(pos: Dict[str, Any], st: Dict[str, Any], trigge
             "enabled": True,
             "data_gaps": [f"market_context_error:{type(exc).__name__}"],
         }
-    if _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False):
+    if (
+        _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False)
+        or _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", False), False)
+    ):
         snapshot = build_market_monitor_snapshot_until_cutoff(pack)
         pack["market_monitor_snapshot"] = snapshot
         for gap in snapshot.get("data_gaps") or []:
             if gap not in pack["data_gaps"]:
                 pack["data_gaps"].append(gap)
+    try:
+        pack["entry_snapshot"] = build_entry_snapshot(pack, env=ENV)
+        pack["entry_snapshot_version"] = ENTRY_SNAPSHOT_SCHEMA_VERSION
+    except EntrySnapshotError as exc:
+        # The full pack remains available for a diagnostic journal record, but
+        # the prompt builder will refuse to send it to a model without the
+        # isolated snapshot.
+        pack["entry_snapshot_error"] = f"{type(exc).__name__}:{exc}"
     return pack
 
 
@@ -1017,38 +1132,10 @@ def _json_schema() -> Dict[str, Any]:
 
 
 def build_llm_trade_judge_prompt(evidence_pack: Dict[str, Any]) -> str:
-    return (
-        "You are LLM Trade Judge for an automated Binance execution engine.\n"
-        "Judge only the trade signal quality at entry time.\n"
-        "You only see information available until analysis_cutoff_ts, which is normalized UTC.\n"
-        "peak_ts_raw may be legacy feed local time. Do not use raw timestamps for filtering; use analysis_cutoff_ts.\n"
-        "The evidence pack includes src_evt/current PEAK, market_context.deltascout, and market_context.aggregated.\n"
-        "The evidence pack may include market_monitor_snapshot: a descriptive pre-cutoff Market Monitor snapshot "
-        "with local 15m/60m/240m context, broad 1d/3d/7d/30d context, market state, market_structure_state, "
-        "zones, liquidity zones, data-quality flags, and context conflicts. market_structure_state is repaired 37E state evidence "
-        "with range_pct, close_position, dominant_side, and range_quality; use it to avoid misreading bearish expansion as range/support. "
-        "It is not a trading instruction and must not modify live orders.\n"
-        "All market_context and market_monitor_snapshot records are intended to be pre-cutoff only; "
-        "do not use or infer data after analysis_cutoff_ts.\n"
-        "Do not infer future outcome. Do not mention whether the trade won or lost.\n"
-        "The LLM is advisory only and must not suggest changing live orders.\n"
-        "Return only JSON, no markdown.\n"
-        "Allowed verdict values: SUPPORT, REJECT, UNCLEAR.\n"
-        "SUPPORT means the bot side is favored. REJECT means reject the bot trade. "
-        "UNCLEAR counts as reject-side in the game. If market_context is sufficient and the signal is weak or bad, use REJECT. "
-        "Use UNCLEAR only when the edge still cannot be assessed after reading market_context.\n"
-        "Calibrate verdict strictly: SUPPORT requires clear, fresh directional edge after accounting for risk_flags. "
-        "Do not use SUPPORT merely because local momentum agrees with the bot when the entry is a late chase. "
-        "Prefer REJECT when the bot direction is already stretched into a local 60m/240m extreme, the peak is weak or moderate, "
-        "or a significant liquidity/market zone immediately opposes continuation. Prefer UNCLEAR when broad 1d/3d/7d context "
-        "conflicts with local flow, data quality is degraded/recovered, or zone evidence is mixed enough that edge is not reliable. "
-        "If you still choose SUPPORT with multiple material risk_flags, lower confidence and explain why those risks are outweighed.\n"
-        "If direction conflicts with VWAP, rolling_vwap_approx, or orderflow/imbalance context, reflect it in reason_codes or risk_flags.\n"
-        "Allowed setup_class values: continuation_pressure, reversal_onset, reversal_confirmation, "
-        "exhaustion, trap_false_break, absorption_like, honest_directional_flow, noisy_peak, unknown.\n"
-        "Evidence pack follows:\n"
-        f"{json.dumps(evidence_pack, ensure_ascii=False, separators=(',', ':'), default=str)}"
-    )
+    snapshot = evidence_pack.get("entry_snapshot") if isinstance(evidence_pack, dict) else None
+    if not isinstance(snapshot, dict):
+        snapshot = build_entry_snapshot(evidence_pack, env=ENV)
+    return build_entry_prompt(snapshot)
 
 
 def _extract_response_text(response: Any) -> str:
@@ -1086,9 +1173,16 @@ def call_openai_trade_judge(evidence_pack: Dict[str, Any]) -> str:
     max_output_tokens = max(800, _as_int(ENV.get("LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS"), 2000))
 
     if openai_client is not None:
+        # Keep compatibility with the injected test/client hook while making
+        # the model-facing argument explicitly entry-only as well.
+        client_pack = {
+            "schema_version": "LLM_TRADE_JUDGE_INPUT_V2",
+            "prompt_version": ENTRY_PROMPT_VERSION,
+            "entry_snapshot": evidence_pack.get("entry_snapshot"),
+        }
         response = openai_client(
             prompt=prompt,
-            evidence_pack=evidence_pack,
+            evidence_pack=client_pack,
             model=model,
             timeout_sec=timeout_sec,
             max_output_tokens=max_output_tokens,
@@ -1349,6 +1443,12 @@ def maybe_record_llm_pretrade_judge(st: Dict[str, Any], pos: Dict[str, Any], tri
             return {"status": "noop", "reason": "duplicate_primary", "trade_key": trade_key}
 
         evidence_pack = build_pretrade_evidence_pack(pos, st, trigger)
+        try:
+            entry_prompt = build_llm_trade_judge_prompt(evidence_pack)
+            evidence_pack["entry_prompt_version"] = ENTRY_PROMPT_VERSION
+            evidence_pack["entry_prompt_sha256"] = hashlib.sha256(entry_prompt.encode("utf-8")).hexdigest()
+        except EntrySnapshotError as exc:
+            evidence_pack["entry_prompt_error"] = f"{type(exc).__name__}:{exc}"
         mode = str(ENV.get("LLM_TRADE_JUDGE_MODE") or "stub").strip().lower()
         if mode == "stub":
             result = append_stub_pretrade_verdict(journal_path, evidence_pack)
