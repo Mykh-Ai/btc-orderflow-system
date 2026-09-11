@@ -6,6 +6,55 @@ durable journals, and explicit LLM review artifacts.
 
 Do not use this file as an execution input. Do not infer missing data.
 
+## 2026-09-11T15:10:00Z - Entry-Only Prompt V2 And v39A Monitor Runtime
+
+### Runtime Identity
+
+- Project/game name: `LLM Trade Judge Game`.
+- Advisory runtime component: `LLM Trade Judge`.
+- Production configuration checked on the server:
+  - mode: `openai`;
+  - model: `gpt-5.5`;
+  - enabled: `true`.
+- The model makes one entry-time quality verdict. It does not monitor the trade
+  after entry and does not know or control the trailing stop.
+
+### Prompt And Evidence Boundary
+
+- Added `LLM_ENTRY_SNAPSHOT_V2` and `LLM_ENTRY_PROMPT_V2`.
+- The prompt now receives only the isolated entry snapshot, including the
+  signal, explicit filter A/B admission meaning and conditions, initial
+  execution geometry, Market Monitor evidence, quality flags, and lineage.
+- Removed model-facing orders, order ids, client ids, outcome, PnL, live
+  position-management state, and trailing-stop fields. The full evidence pack
+  remains available only for the durable diagnostic journal.
+- Added prompt version and SHA-256 identity to the journal evidence.
+
+### Market Monitor v39A
+
+- Added opt-in schema `market_monitor_snapshot_v39a` and state schema
+  `SHI_RESET_39A_RUNTIME_STATE_CARRY_FORWARD_V1`.
+- Exact closed UTC-minute windows: 5/15/30/60/240/1440.
+- Added missing/duplicate checks, future-row exclusion, per-window
+  RAW/RECOVERED_DEGRADED quality, source hashes, and atomic persistent state.
+- Existing v1/37E market-state and zone output is retained with explicit
+  `base_monitor_snapshot_v1` provenance; this change does not claim the missing
+  unified 39A level lifecycle or sweep classifier.
+- Production state path: `/data/state/market_monitor_state_v39a.json`.
+
+### Deployment And Validation
+
+- Commit: `9825123 Add opt-in v39a market monitor snapshots`.
+- Branch pushed: `codex/scout-replay-backtester-v0-1`.
+- Server files were backed up before upload; Executor was recreated/restarted.
+- Final real-feed smoke at `2026-09-11T15:10:00Z` returned v39A with all six
+  windows complete, zero future rows, persisted state loaded, and continuity
+  `CONTINUOUS_CARRY_FORWARD`.
+- Targeted validation: `58 passed`; server hook and v39A module hashes matched
+  the reviewed local files.
+- No changes to entry placement, SL/TP, trailing, reconciliation, Binance order
+  calls, or PnL policy.
+
 ## Entry Template
 
 ```yaml
