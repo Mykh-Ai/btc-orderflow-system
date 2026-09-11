@@ -11,6 +11,25 @@ from deltascout.research_bundle.scout_backtester.replay_engine import (
 from .conftest import bar, candidate
 
 
+@pytest.mark.parametrize(('side', 'fill'), [('LONG', 99.0), ('LONG', 100.0), ('SHORT', 101.0), ('SHORT', 100.0)])
+def test_initial_stop_wrong_side_after_fill_stops_replay(side, fill, replay_config):
+    from deltascout.research_bundle.scout_backtester.contracts import BacktestContractError
+
+    prices = [bar(0, open_=100, high=100, low=100, close=100),
+              bar(1, open_=fill, high=fill, low=fill, close=fill)]
+    with pytest.raises(BacktestContractError, match='INITIAL_STOP_WRONG_SIDE_AFTER_FILL'):
+        replay_candidate(candidate(side), prices, replay_config)
+
+
+@pytest.mark.parametrize(('side', 'fill'), [('LONG', 100.4), ('SHORT', 99.6)])
+def test_improved_entry_with_protective_stop_remains_valid(side, fill, replay_config):
+    prices = [bar(0, open_=100, high=100, low=100, close=100),
+              bar(1, open_=fill, high=fill, low=fill, close=fill)]
+    result, _ = replay_candidate(candidate(side), prices, replay_config)
+    assert result.entry_status == 'FILLED'
+    assert result.entry_fill_price == fill
+
+
 def test_futures_only_wick_cannot_trigger_spot_targets(replay_config) -> None:
     reference = [
         bar(0, open_=100.0, high=100.0, low=100.0, close=100.0),

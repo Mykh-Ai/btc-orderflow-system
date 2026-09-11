@@ -249,6 +249,9 @@ def _input_paths(
     if quality_root and quality_root.exists():
         paths.extend(sorted(quality_root.glob("recovery_quality_*.csv")))
         paths.extend(sorted(quality_root.glob("recovery_report_*.md")))
+        recovery_manifest = quality_root / "recovery_manifest.json"
+        if recovery_manifest.exists():
+            paths.append(recovery_manifest)
     for name in ("trade_execution_snapshots.jsonl", "trade_pnl_ledger.csv", "trade_outcomes.jsonl"):
         path = server_state_root / name
         if path.exists():

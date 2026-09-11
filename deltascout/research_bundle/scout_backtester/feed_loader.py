@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +108,12 @@ def load_feed(
                 raise BacktestContractError(f"missing feed columns={sorted(missing)} in {path}")
             for row_number, row in enumerate(reader, start=2):
                 ts = parse_feed_timestamp(row.get("Timestamp"))
+                if feed_role == "official_spot_execution":
+                    # acquire_binance_spot_klines writes Binance's 1m OPEN time.
+                    # Replay/SHI/legacy use completed-minute labels. The close
+                    # of the 10:07 candle is available at 10:08, never at 10:07.
+                    # Preserve the source files; normalize availability in memory.
+                    ts += timedelta(minutes=1)
                 if ts in seen:
                     raise BacktestContractError(f"duplicate feed minute={ts.isoformat()} at {path}:{row_number}")
                 seen.add(ts)

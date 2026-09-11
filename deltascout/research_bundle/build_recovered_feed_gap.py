@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 DEFAULT_START = "2026-04-23 17:05:00"
@@ -42,6 +45,11 @@ QUALITY_COLUMNS = [
     "OriginalClose",
     "RecoveredClose",
     "Notes",
+    "LegacyTimestamp",
+    "LegacyTimezone",
+    "LegacyUtcOffsetSeconds",
+    "LegacySourceFile",
+    "LegacySourceRow",
 ]
 
 
@@ -74,6 +82,58 @@ def _read_csv_map(path: Path) -> dict[str, dict[str, str]]:
         return {}
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
         return {row["Timestamp"]: row for row in csv.DictReader(fh)}
+
+
+def _legacy_utc_minute(value: str, zone: ZoneInfo) -> tuple[datetime, int]:
+    parsed = _parse_ts(value.strip())
+    localized = parsed.replace(tzinfo=zone, fold=0)
+    if localized.utcoffset() != parsed.replace(tzinfo=zone, fold=1).utcoffset():
+        raise ValueError(f"ambiguous or nonexistent legacy timestamp={value!r} zone={zone.key}")
+    utc = localized.astimezone(timezone.utc)
+    if utc.astimezone(zone).replace(tzinfo=None) != parsed:
+        raise ValueError(f"nonexistent legacy timestamp={value!r} zone={zone.key}")
+    # Same completed-aggregation minute keys as the existing legacy normalizer.
+    # Do not relabel these as exchange kline open times.
+    if utc.second >= 30:
+        utc += timedelta(minutes=1)
+    return utc.replace(second=0, microsecond=0, tzinfo=None), int(localized.utcoffset().total_seconds())
+
+
+def _read_legacy_utc_days(
+    root: Path, start: datetime, end: datetime, zone: ZoneInfo,
+) -> tuple[dict[str, dict[str, dict[str, str]]], list[Path]]:
+    # Include neighbouring local dates: e.g. May 6 22:00 UTC is May 7 00:00 local.
+    first = start.replace(hour=0, minute=0, second=0, tzinfo=timezone.utc).astimezone(zone)
+    last = end.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc).astimezone(zone)
+    paths = [root / f"{day}.csv" for day in _date_range(first - timedelta(days=1), last + timedelta(days=1))]
+    by_day: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
+    inputs = []
+    required = {"Timestamp", "Trades", "TotalQty", "BuyQty", "SellQty", "AvgPrice", "ClosePrice", "HiPrice", "LowPrice"}
+    for path in paths:
+        if not path.exists():
+            continue
+        inputs.append(path)
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ValueError(f"missing legacy columns={sorted(missing)} in {path}")
+            for row_number, row in enumerate(reader, 2):
+                utc, offset = _legacy_utc_minute(row["Timestamp"], zone)
+                day, key = utc.date().isoformat(), utc.strftime("%Y-%m-%d %H:%M:%S")
+                if not start.date() <= utc.date() <= end.date():
+                    continue
+                if key in by_day[day]:
+                    raise ValueError(f"duplicate normalized legacy minute={key} at {path}:{row_number}")
+                by_day[day][key] = {
+                    **row,
+                    "LegacyTimestamp": row["Timestamp"],
+                    "LegacyTimezone": zone.key,
+                    "LegacyUtcOffsetSeconds": str(offset),
+                    "LegacySourceFile": str(path),
+                    "LegacySourceRow": str(row_number),
+                }
+    return by_day, inputs
 
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
@@ -230,6 +290,7 @@ def _recover_row(
         "OriginalClose": "" if not shi_row else shi_row.get("Close", ""),
         "RecoveredClose": output["Close"],
         "Notes": "IsSynthetic=0 because price/volume/delta are recovered from real legacy archive; see sidecar for degraded enriched fields.",
+        **{key: legacy_row[key] for key in QUALITY_COLUMNS if key.startswith("Legacy")},
     }
     return output, quality
 
@@ -242,8 +303,23 @@ def build_recovered_feed_gap(
     start: datetime,
     end: datetime,
     mirror_output_root: Path | None = None,
+    legacy_source_timezone: str = "Europe/Bratislava",
 ) -> BuildStats:
+    if start.tzinfo is not None or end.tzinfo is not None or start > end:
+        raise ValueError("start/end must be ordered naive UTC timestamps")
     days = _date_range(start, end)
+    scope_id = f"{start:%Y-%m-%d_%H%M}_to_{end:%Y-%m-%d_%H%M}"
+    quality_path = quality_root / f"recovery_quality_{scope_id}.csv"
+    report_path = quality_root / f"recovery_report_{scope_id}.md"
+    manifest_path = quality_root / "recovery_manifest.json"
+    destinations = [quality_path, report_path, manifest_path]
+    for root in (output_root, mirror_output_root):
+        if root is not None:
+            destinations.extend(root / f"{day}.csv" for day in days)
+    existing = [str(path) for path in destinations if path.exists()]
+    if existing:
+        raise FileExistsError(f"preserve existing recovery artifacts; choose new output/quality roots: {existing[0]}")
+    legacy_by_day, legacy_inputs = _read_legacy_utc_days(legacy_root, start, end, ZoneInfo(legacy_source_timezone))
     quality_rows: list[dict[str, str]] = []
     class_counts: Counter[str] = Counter()
     output_rows = 0
@@ -254,8 +330,15 @@ def build_recovered_feed_gap(
 
     for day in days:
         shi_rows = _read_csv_map(shi_root / f"{day}.csv")
-        legacy_rows = _read_csv_map(legacy_root / f"{day}.csv")
-        timestamps = sorted(set(shi_rows) | set(legacy_rows), key=_parse_ts)
+        legacy_rows = legacy_by_day.get(day, {})
+        # Audit missing minutes even when both archives lack a row.
+        first_minute = max(start, _parse_ts(f"{day} 00:00:00"))
+        last_minute = min(end, _parse_ts(f"{day} 23:59:00"))
+        expected = {
+            (first_minute + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S")
+            for i in range(int((last_minute - first_minute).total_seconds() // 60) + 1)
+        }
+        timestamps = sorted(set(shi_rows) | set(legacy_rows) | expected, key=_parse_ts)
         day_out: list[dict[str, str]] = []
 
         for ts in timestamps:
@@ -330,11 +413,21 @@ def build_recovered_feed_gap(
             output_rows += len(day_out)
             daily_files += 1
 
-    scope_id = f"{start:%Y-%m-%d_%H%M}_to_{end:%Y-%m-%d_%H%M}"
-    quality_path = quality_root / f"recovery_quality_{scope_id}.csv"
-    report_path = quality_root / f"recovery_report_{scope_id}.md"
     _write_csv(quality_path, QUALITY_COLUMNS, quality_rows)
-    _write_report(report_path, start, end, output_root, mirror_output_root, output_rows, daily_files, class_counts)
+    _write_report(report_path, start, end, output_root, mirror_output_root, output_rows, daily_files, class_counts, legacy_source_timezone)
+    source_paths = legacy_inputs + [shi_root / f"{day}.csv" for day in days if (shi_root / f"{day}.csv").exists()]
+    manifest = {
+        "schema_version": "RECOVERY_CLOCK_V2",
+        "legacy_source_timezone": legacy_source_timezone,
+        "output_timezone": "UTC",
+        "minute_key_policy": "nearest_completed_aggregation_minute; no kline-open relabeling",
+        "recovery_start_utc": str(start), "recovery_end_utc": str(end),
+        "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "inputs": [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in source_paths],
+        "outputs": [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in destinations if path.exists()],
+        "class_counts": dict(class_counts),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     return BuildStats(
         output_root=output_root,
@@ -356,6 +449,7 @@ def _write_report(
     output_rows: int,
     daily_files: int,
     class_counts: Counter[str],
+    legacy_source_timezone: str,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -366,6 +460,9 @@ def _write_report(
         f"- Mirror output root: `{mirror_output_root}`" if mirror_output_root else "- Mirror output root: none",
         f"- Daily files written: {daily_files}",
         f"- Output rows written: {output_rows}",
+        f"- Legacy clock: `{legacy_source_timezone}` converted to UTC before joining SHI; SHI timestamps are already UTC.",
+        "- Legacy seconds are rounded to the nearest completed-aggregation minute, matching the existing normalizer; these are not exchange kline open-time labels.",
+        "- Per-row legacy timestamp, offset, file and row are recorded in the quality sidecar; source hashes are in `recovery_manifest.json`.",
         "",
         "## Recovery Classes",
         "",
@@ -400,6 +497,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=material / "recovered_feed")
     parser.add_argument("--quality-root", type=Path, default=material / "recovery_reports")
     parser.add_argument("--mirror-output-root", type=Path, default=None)
+    parser.add_argument("--legacy-source-timezone", default="Europe/Bratislava")
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END)
     return parser.parse_args()
@@ -413,6 +511,7 @@ def main() -> None:
         output_root=args.output_root,
         quality_root=args.quality_root,
         mirror_output_root=args.mirror_output_root,
+        legacy_source_timezone=args.legacy_source_timezone,
         start=_parse_ts(args.start),
         end=_parse_ts(args.end),
     )

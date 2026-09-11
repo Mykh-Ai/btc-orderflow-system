@@ -372,6 +372,21 @@ def replay_candidate(
         _finalize_economics(result, config)
         return result, events
 
+    protective_stop = (
+        plan.initial_stop_price < entry_price if candidate.side == "LONG"
+        else plan.initial_stop_price > entry_price
+    )
+    if not protective_stop:
+        # A fill has occurred in the model. Treating this as NO_TRADE would hide
+        # exposure and free a portfolio slot; filling the wrong-side SL would
+        # manufacture profit. Fail the run until data/execution is reconciled.
+        raise BacktestContractError(
+            f"INITIAL_STOP_WRONG_SIDE_AFTER_FILL candidate={candidate.candidate_id} "
+            f"side={candidate.side} fill_ts={bars[entry_index].ts.isoformat()} "
+            f"fill={entry_price} stop={plan.initial_stop_price} "
+            f"planned_entry={plan.planned_entry_price} ratio={plan.conversion_ratio}"
+        )
+
     result.entry_status = "FILLED"
     result.entry_fill_ts = bars[entry_index].ts
     result.entry_fill_price = entry_price
