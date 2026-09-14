@@ -33,6 +33,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from executor_mod.state_store import load_state, save_state, has_open_position, in_cooldown, locked
 from executor_mod import baseline_policy
 from executor_mod.notifications import log_event, send_webhook
+from executor_mod.trade_open_summary import build_trade_open_payload
 from executor_mod.event_dedup import stable_event_key, dedup_fingerprint, bootstrap_seen_keys_from_tail
 from executor_mod import margin_guard 
 import executor_mod.trail as trail
@@ -2552,7 +2553,7 @@ def main() -> None:
                     log_event("BASELINE_TAKEN", **baseline_log)
 
                 log_event("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
-                send_webhook({"event": "OPEN", "mode": "live", "symbol": ENV["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
+                send_webhook(build_trade_open_payload(st["position"], symbol=ENV["SYMBOL"], order=order))
             except Exception as e:
                 log_event("LIVE_OPEN_ERROR", error=str(e))
                     
