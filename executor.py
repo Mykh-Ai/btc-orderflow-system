@@ -27,6 +27,7 @@ import atexit
 import signal
 from collections import deque
 from contextlib import suppress
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
@@ -145,6 +146,12 @@ ENV: Dict[str, Any] = {
 # risk model
 "SL_PCT": _get_float("SL_PCT", 0.002),
 "SWING_MINS": _get_int("SWING_MINS", 180),
+"INITIAL_STOP_POLICY": _get_str("INITIAL_STOP_POLICY", "VOLUME_SWING_24H_LR25"),
+"INITIAL_SWING_LOOKBACK": _get_int("INITIAL_SWING_LOOKBACK", 1440),
+"INITIAL_SWING_LR": _get_int("INITIAL_SWING_LR", 25),
+"INITIAL_SWING_BUFFER_USD": _get_float("INITIAL_SWING_BUFFER_USD", 50.0),
+"INITIAL_SWING_MAX_DISTANCE_USD": _get_float("INITIAL_SWING_MAX_DISTANCE_USD", 1200.0),
+"INITIAL_SWING_REQUIRE_FULL_WINDOW": _get_bool("INITIAL_SWING_REQUIRE_FULL_WINDOW", True),
 "TP_R_LIST": [float(x) for x in os.getenv("TP_R_LIST", "1,2").split(",") if x.strip()],
 
 # polling
@@ -196,6 +203,8 @@ ENV: Dict[str, Any] = {
 "TRAIL_SWING_LOOKBACK": _get_int("TRAIL_SWING_LOOKBACK", 240),   # rows
 "TRAIL_SWING_LR": _get_int("TRAIL_SWING_LR", 2),                 # fractal L/R
 "TRAIL_SWING_BUFFER_USD": _get_float("TRAIL_SWING_BUFFER_USD", 15.0),
+"USDT_USDC_RATIO_MIN": _get_float("USDT_USDC_RATIO_MIN", 0.95),
+"USDT_USDC_RATIO_MAX": _get_float("USDT_USDC_RATIO_MAX", 1.05),
 # invariants (detector-only)
 "INVAR_ENABLED": _get_bool("INVAR_ENABLED", 1),
 "INVAR_EVERY_SEC": _get_int("INVAR_EVERY_SEC", 20),
@@ -611,13 +620,197 @@ def load_df_sorted() -> pd.DataFrame:
     return market_data.load_df_sorted()
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    return market_data.locate_index_by_ts(df, ts)
+    # V8 must resolve the exact signal minute. The previous helper fell back to
+    # the newest row and could therefore introduce lookahead on a missing minute.
+    try:
+        target = pd.to_datetime(ts, utc=True, errors="coerce")
+        if pd.isna(target):
+            return -1
+        target = target.tz_convert(None).floor("min")
+        series = pd.to_datetime(df["Timestamp"], utc=True, errors="coerce")
+        series = series.dt.tz_convert(None).dt.floor("min")
+        matched = df.index[series == target]
+        return int(matched[0]) if len(matched) else -1
+    except Exception:
+        return -1
 
 
 def latest_price(df: pd.DataFrame) -> float:
     return market_data.latest_price(df)
 
-# ===================== Stop / TP ("far" stop logic) =====================
+# ===================== Stop / TP (V8 structural initial stop) =====================
+
+
+class InitialStopSelectionError(RuntimeError):
+    """A candidate cannot satisfy the frozen V8 initial-stop contract."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+
+
+@dataclass(frozen=True)
+class InitialSwingSelection:
+    stop_usdt: float
+    swing_ts: datetime
+    swing_price_usdt: float
+    swing_volume: float
+    eligible_count: int
+    confirmed_count: int
+    window_gap_count: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "policy": str(ENV.get("INITIAL_STOP_POLICY") or ""),
+            "stop_usdt": self.stop_usdt,
+            "swing_ts": self.swing_ts.isoformat(),
+            "swing_price_usdt": self.swing_price_usdt,
+            "swing_volume": self.swing_volume,
+            "eligible_count": self.eligible_count,
+            "confirmed_count": self.confirmed_count,
+            "window_gap_count": self.window_gap_count,
+        }
+
+
+def _initial_stop_from_swing_usdt(side: str, entry_usdt: float, swing_price_usdt: float) -> float:
+    """Apply the structural buffer and the existing 0.2% far-stop floor."""
+
+    pct_stop = (
+        entry_usdt * (1 - float(ENV["SL_PCT"]))
+        if side == "BUY"
+        else entry_usdt * (1 + float(ENV["SL_PCT"]))
+    )
+    buffer_usd = float(ENV["INITIAL_SWING_BUFFER_USD"])
+    tick = ENV["TICK_SIZE"]
+    tick_f = float(tick)
+    if side == "BUY":
+        stop = min(pct_stop, swing_price_usdt - buffer_usd, entry_usdt - tick_f)
+        return floor_to_step(stop, tick)
+    if side == "SELL":
+        stop = max(pct_stop, swing_price_usdt + buffer_usd, entry_usdt + tick_f)
+        return ceil_to_step(stop, tick)
+    raise InitialStopSelectionError("INVALID_SIDE", str(side))
+
+
+def select_volume_confirmed_initial_stop(
+    df: pd.DataFrame,
+    signal_index: int,
+    side: str,
+    entry_usdt: float,
+) -> InitialSwingSelection:
+    """Select the highest-volume confirmed 25/25 swing in the prior 24 hours."""
+
+    policy = str(ENV.get("INITIAL_STOP_POLICY") or "").strip().upper()
+    if policy != "VOLUME_SWING_24H_LR25":
+        raise InitialStopSelectionError("UNSUPPORTED_INITIAL_STOP_POLICY", policy)
+
+    lookback = int(ENV["INITIAL_SWING_LOOKBACK"])
+    lr = int(ENV["INITIAL_SWING_LR"])
+    if lookback <= 0 or lr <= 0 or lookback < 2 * lr + 1:
+        raise InitialStopSelectionError(
+            "INVALID_INITIAL_STOP_CONFIG",
+            f"lookback={lookback} lr={lr}",
+        )
+    if signal_index < 0 or signal_index >= len(df):
+        raise InitialStopSelectionError("MISSING_EXACT_SIGNAL_MINUTE")
+
+    start = signal_index + 1 - lookback
+    if start < 0:
+        raise InitialStopSelectionError(
+            "NO_FULL_INITIAL_SWING_WINDOW",
+            f"bars={signal_index + 1} required={lookback}",
+        )
+    window = df.iloc[start:signal_index + 1].copy()
+    if bool(ENV.get("INITIAL_SWING_REQUIRE_FULL_WINDOW", True)) and len(window) != lookback:
+        raise InitialStopSelectionError(
+            "NO_FULL_INITIAL_SWING_WINDOW",
+            f"bars={len(window)} required={lookback}",
+        )
+
+    required = {
+        "Timestamp",
+        "low_usdt",
+        "high_usdt",
+        "volume_1m",
+        "swing_row_real",
+    }
+    missing = sorted(required.difference(window.columns))
+    if missing:
+        raise InitialStopSelectionError("INITIAL_SWING_SCHEMA_MISSING", ",".join(missing))
+
+    timestamps = pd.to_datetime(window["Timestamp"], utc=True, errors="coerce")
+    if timestamps.isna().any():
+        raise InitialStopSelectionError("INVALID_INITIAL_SWING_TIMESTAMPS")
+    deltas = timestamps.diff().dropna().dt.total_seconds()
+    window_gap_count = int(deltas.ne(60.0).sum())
+    rows = window.reset_index(drop=True)
+    confirmed_count = 0
+    eligible: list[tuple[float, datetime, float, float]] = []
+    cap = float(ENV["INITIAL_SWING_MAX_DISTANCE_USD"])
+
+    for index in range(lr, len(rows) - lr):
+        neighborhood = rows.iloc[index - lr:index + lr + 1]
+        if not bool(neighborhood["swing_row_real"].all()):
+            continue
+        row = rows.iloc[index]
+        if side == "BUY":
+            swing_price = float(row["low_usdt"])
+            if swing_price >= entry_usdt:
+                continue
+            comparisons = neighborhood["low_usdt"].tolist()
+            center = comparisons.pop(lr)
+            is_swing = all(center < float(value) for value in comparisons)
+        elif side == "SELL":
+            swing_price = float(row["high_usdt"])
+            if swing_price <= entry_usdt:
+                continue
+            comparisons = neighborhood["high_usdt"].tolist()
+            center = comparisons.pop(lr)
+            is_swing = all(center > float(value) for value in comparisons)
+        else:
+            raise InitialStopSelectionError("INVALID_SIDE", str(side))
+        if not is_swing:
+            continue
+
+        confirmed_count += 1
+        stop_usdt = _initial_stop_from_swing_usdt(side, entry_usdt, swing_price)
+        if cap > 0 and abs(entry_usdt - stop_usdt) > cap:
+            continue
+        swing_ts = pd.Timestamp(row["Timestamp"])
+        if swing_ts.tzinfo is None:
+            swing_ts = swing_ts.tz_localize("UTC")
+        else:
+            swing_ts = swing_ts.tz_convert("UTC")
+        eligible.append(
+            (
+                float(row["volume_1m"]),
+                swing_ts.to_pydatetime(),
+                swing_price,
+                stop_usdt,
+            )
+        )
+
+    if not eligible:
+        reason = "NO_SWING_WITHIN_INITIAL_STOP_CAP" if confirmed_count else "NO_CONFIRMED_VOLUME_SWING"
+        raise InitialStopSelectionError(reason, f"confirmed={confirmed_count} cap={cap}")
+
+    swing_volume, swing_ts, swing_price, stop_usdt = max(
+        eligible,
+        key=lambda item: (item[0], item[1]),
+    )
+    return InitialSwingSelection(
+        stop_usdt=stop_usdt,
+        swing_ts=swing_ts,
+        swing_price_usdt=swing_price,
+        swing_volume=swing_volume,
+        eligible_count=len(eligible),
+        confirmed_count=confirmed_count,
+        window_gap_count=window_gap_count,
+    )
+
+
+# Retained for rollback/debug comparison only; V8 entry planning never calls it.
 
 def swing_stop_far(df: pd.DataFrame, i: int, side: str, entry: float) -> float:
     """Return a stop that is FARTHER from entry (vs near).
@@ -1207,9 +1400,17 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # replace current SL with trailing SL for remaining qty (qty3, or qty1+qty3 if TP2 filled first)
                 sl_now = int((pos.get("orders") or {}).get("sl") or 0)
 
-               # Primary: trailing stop from aggregated.csv swings (low API usage).
-                desired = _trail_desired_stop_from_agg(pos)
-                if desired is None:
+               # Primary: calculate the swing in BTCUSDT, then synchronize it to
+                # the BTCUSDC execution contour before any cancel/replace action.
+                trail_quote = None
+                trail_sync_failed = False
+                try:
+                    trail_quote = _trail_stop_quote_from_agg(pos)
+                except QuoteSyncError as exc:
+                    trail_sync_failed = True
+                    log_event("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+                desired = trail_quote.stop_usdc if trail_quote is not None else None
+                if desired is None and not trail_sync_failed:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
                     mid = 0.0
                     with suppress(Exception):
@@ -1255,6 +1456,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             pos["trail_pending_cancel_sl"] = sl_now
                             pos["trail_active"] = True
                             pos["trail_qty"] = open_qty
+                            _set_trail_confirmation_reference_from_agg(pos)
                             # Force quick retry via trailing maintenance (still rate-limited).
                             pos["trail_last_update_s"] = 0.0
                             st["position"] = pos
@@ -1307,6 +1509,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         # Keep trail flags so we retry on next manage tick
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        _set_trail_confirmation_reference_from_agg(pos)
                         pos["trail_last_update_s"] = now_s
                         st["position"] = pos
                         save_state(st)
@@ -1315,6 +1518,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        _set_trail_confirmation_reference_from_agg(pos)
+                        if trail_quote is not None:
+                            _store_trail_quote_audit(pos, trail_quote)
                         pos["trail_sl_price"] = float(fmt_price(stop_p))
                         pos["trail_last_update_s"] = now_s
                         pos["status"] = "OPEN"
@@ -1327,6 +1533,7 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                 # No price right now -> mark trailing active and retry next tick
                 pos["trail_active"] = True
                 pos["trail_qty"] = open_qty
+                _set_trail_confirmation_reference_from_agg(pos)
                 pos["trail_last_update_s"] = now_s
                 st["position"] = pos
                 save_state(st)
@@ -1372,9 +1579,21 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         last_u = float(pos.get("trail_last_update_s") or 0.0)
         every = float(ENV.get("TRAIL_UPDATE_EVERY_SEC") or 20)
         if now_s - last_u >= every:
-            # Primary: aggregated.csv swings (no Binance polling).
-            desired = _trail_desired_stop_from_agg(pos)
-            if desired is None and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
+            # Primary: calculate in BTCUSDT and convert with a fresh same-cycle
+            # BTCUSDC/BTCUSDT ratio. A sync error keeps the existing SL intact.
+            trail_quote = None
+            trail_sync_failed = False
+            try:
+                trail_quote = _trail_stop_quote_from_agg(pos)
+            except QuoteSyncError as exc:
+                trail_sync_failed = True
+                log_event("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+            desired = trail_quote.stop_usdc if trail_quote is not None else None
+            if (
+                desired is None
+                and not trail_sync_failed
+                and str(ENV.get("TRAIL_SOURCE") or "AGG").upper() != "AGG"
+            ):
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
                 mid = 0.0
                 with suppress(Exception):
@@ -1466,6 +1685,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                         else:
                             pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                             pos["trail_sl_price"] = float(sl_stop_s)
+                            if trail_quote is not None:
+                                _store_trail_quote_audit(pos, trail_quote)
                             pos["trail_last_update_s"] = now_s
                             st["position"] = pos
                             save_state(st)
@@ -1516,6 +1737,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
                             else:
                                 pos["orders"]["sl"] = _oid_int(sl_new.get("orderId"))
                                 pos["trail_sl_price"] = float(sl_stop_s)
+                                if trail_quote is not None:
+                                    _store_trail_quote_audit(pos, trail_quote)
                                 pos["trail_last_update_s"] = now_s
                                 st["position"] = pos
                                 save_state(st)
@@ -1568,20 +1791,139 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 # ===================== State =====================
 
-def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
-    """
-    Compute desired trailing stop based on last swing from aggregated.csv v2:
-    LONG uses LowPrice swings; SHORT uses HiPrice swings.
-    trail_wait_confirm uses ClosePrice (bar close) for confirmation only.
-    LONG: stop = swing_low - buffer
-    SHORT: stop = swing_high + buffer
-    """
+def _set_trail_confirmation_reference_from_agg(pos: dict) -> None:
+    """Store the trailing confirmation reference explicitly in BTCUSDT units."""
+
+    df = load_df_sorted()
+    ref = latest_price(df) if not df.empty else float("nan")
+    if math.isfinite(ref) and ref > 0:
+        pos["trail_ref_price_usdt"] = float(ref)
+        # executor_mod.trail still consumes the legacy key; keep it as a
+        # compatibility mirror with the same explicit USDT value.
+        pos["trail_ref_price"] = float(ref)
+        pos["trail_wait_confirm"] = True
+        pos["trail_confirmed"] = False
+    else:
+        pos["trail_ref_price_usdt"] = 0.0
+        pos["trail_ref_price"] = 0.0
+        pos["trail_wait_confirm"] = False
+        pos["trail_confirmed"] = False
+
+
+def _trail_desired_stop_from_agg_usdt(pos: dict) -> Optional[float]:
+    """Compute the desired trailing stop in the BTCUSDT feed contour."""
+
+    if "trail_ref_price_usdt" in pos:
+        pos["trail_ref_price"] = pos.get("trail_ref_price_usdt")
     return trail._trail_desired_stop_from_agg(pos)
 
+
+def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
+    """Compatibility alias returning an unconverted BTCUSDT source level."""
+
+    return _trail_desired_stop_from_agg_usdt(pos)
+
+
+class QuoteSyncError(RuntimeError):
+    """BTCUSDT structural price could not be safely synchronized to BTCUSDC."""
+
+
+@dataclass(frozen=True)
+class UsdtUsdcQuoteSnapshot:
+    mid_usdt: float
+    mid_usdc: float
+    ratio: float
+    observed_at_utc: str
+
+
+@dataclass(frozen=True)
+class TrailingStopQuote:
+    stop_usdt: float
+    stop_usdc: float
+    snapshot: UsdtUsdcQuoteSnapshot
+
+
+def get_mid_price(symbol: str) -> float:
+    """Testable public-mid adapter over the current VPS Binance module."""
+
+    return float(binance_api.get_mid_price(symbol))
+
+
+def get_usdt_usdc_quote_snapshot() -> UsdtUsdcQuoteSnapshot:
+    """Read a same-cycle BTCUSDT/BTCUSDC ratio and enforce a sanity band."""
+
+    mid_usdt = get_mid_price("BTCUSDT")
+    mid_usdc = get_mid_price("BTCUSDC")
+    if not math.isfinite(mid_usdt) or not math.isfinite(mid_usdc) or mid_usdt <= 0 or mid_usdc <= 0:
+        raise QuoteSyncError(f"invalid mids: BTCUSDT={mid_usdt} BTCUSDC={mid_usdc}")
+    ratio = mid_usdc / mid_usdt
+    ratio_min = float(ENV.get("USDT_USDC_RATIO_MIN") or 0.95)
+    ratio_max = float(ENV.get("USDT_USDC_RATIO_MAX") or 1.05)
+    if not math.isfinite(ratio) or ratio < ratio_min or ratio > ratio_max:
+        raise QuoteSyncError(
+            f"ratio outside sanity band: ratio={ratio} band=[{ratio_min},{ratio_max}]"
+        )
+    return UsdtUsdcQuoteSnapshot(
+        mid_usdt=mid_usdt,
+        mid_usdc=mid_usdc,
+        ratio=ratio,
+        observed_at_utc=iso_utc(),
+    )
+
+
+def convert_stop_usdt_to_usdc(stop_usdt: float, side: str, ratio: float) -> float:
+    """Convert a structural stop and round outward in the BTCUSDC quote space."""
+
+    raw = float(Decimal(str(stop_usdt)) * Decimal(str(ratio)))
+    if not math.isfinite(raw) or raw <= 0:
+        raise QuoteSyncError(f"invalid converted stop: stop_usdt={stop_usdt} ratio={ratio}")
+    if side == "LONG":
+        return floor_to_step(raw, ENV["TICK_SIZE"])
+    if side == "SHORT":
+        return ceil_to_step(raw, ENV["TICK_SIZE"])
+    raise QuoteSyncError(f"invalid side={side}")
+
+
+def _validate_stop_against_usdc_mid(side: str, stop_usdc: float, mid_usdc: float) -> None:
+    tick = float(ENV["TICK_SIZE"])
+    if side == "LONG" and stop_usdc > mid_usdc - tick:
+        raise QuoteSyncError(
+            f"LONG stop not below BTCUSDC mid: stop={stop_usdc} mid={mid_usdc}"
+        )
+    if side == "SHORT" and stop_usdc < mid_usdc + tick:
+        raise QuoteSyncError(
+            f"SHORT stop not above BTCUSDC mid: stop={stop_usdc} mid={mid_usdc}"
+        )
+    if side not in ("LONG", "SHORT"):
+        raise QuoteSyncError(f"invalid side={side}")
+
+
+def _trail_stop_quote_from_agg(pos: dict) -> Optional[TrailingStopQuote]:
+    """Convert the current USDT trailing swing to a validated BTCUSDC stop."""
+
+    stop_usdt = _trail_desired_stop_from_agg_usdt(pos)
+    if stop_usdt is None:
+        return None
+    snapshot = get_usdt_usdc_quote_snapshot()
+    stop_usdc = convert_stop_usdt_to_usdc(stop_usdt, str(pos.get("side") or ""), snapshot.ratio)
+    _validate_stop_against_usdc_mid(str(pos.get("side") or ""), stop_usdc, snapshot.mid_usdc)
+    return TrailingStopQuote(
+        stop_usdt=float(stop_usdt),
+        stop_usdc=stop_usdc,
+        snapshot=snapshot,
+    )
+
+
+def _store_trail_quote_audit(pos: dict, quote: TrailingStopQuote) -> None:
+    pos["trail_sl_price_usdt"] = quote.stop_usdt
+    pos["trail_conversion_ratio"] = quote.snapshot.ratio
+    pos["trail_conversion_mid_usdt"] = quote.snapshot.mid_usdt
+    pos["trail_conversion_mid_usdc"] = quote.snapshot.mid_usdc
+    pos["trail_conversion_ts"] = quote.snapshot.observed_at_utc
+
+
 def get_usdt_usdc_k() -> float:
-    mid_usdt = binance_api.get_mid_price("BTCUSDT")
-    mid_usdc = binance_api.get_mid_price("BTCUSDC")
-    return mid_usdc / mid_usdt
+    return get_usdt_usdc_quote_snapshot().ratio
 
 def sync_from_binance(st: Dict[str, Any]) -> None:
     """Best-effort reconciliation of executor state with Binance.
@@ -2398,7 +2740,7 @@ def main() -> None:
 
                 # locate candle index by event timestamp (in USDT feed)
                 ts = evt.get("ts")
-                i = len(df_local) - 1
+                i = -1
                 try:
                     if ts:
                         _ts = ts
@@ -2406,9 +2748,25 @@ def main() -> None:
                             _ts = _ts[:-1] + "+00:00"
                         i = locate_index_by_ts(df_local, pd.to_datetime(_ts, utc=True).to_pydatetime())
                 except Exception:
-                    i = len(df_local) - 1
+                    i = -1
 
-                sl_usdt = swing_stop_far(df_local, i, side, entry_usdt)
+                try:
+                    initial_swing = select_volume_confirmed_initial_stop(
+                        df_local,
+                        i,
+                        side,
+                        entry_usdt,
+                    )
+                except InitialStopSelectionError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason=exc.reason,
+                        detail=exc.detail,
+                        entry_usdt=entry_usdt,
+                        evt_ts=evt.get("ts"),
+                    )
+                    continue
+                sl_usdt = initial_swing.stop_usdt
                 tps_usdt = compute_tps(entry_usdt, sl_usdt, side)
                 if len(tps_usdt) < 2:
                     log_event("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
@@ -2416,7 +2774,18 @@ def main() -> None:
                 tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
 
                 # --- USDT -> USDC conversion (k_entry fixed once per position) ---
-                k_entry = get_usdt_usdc_k()
+                try:
+                    entry_quote = get_usdt_usdc_quote_snapshot()
+                except QuoteSyncError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason="USDT_USDC_SYNC_FAILED",
+                        detail=str(exc),
+                        entry_usdt=entry_usdt,
+                        sl_usdt=sl_usdt,
+                    )
+                    continue
+                k_entry = entry_quote.ratio
 
                 # Convert prices, then apply *directional* rounding to keep logic stable.
                 tick = ENV["TICK_SIZE"]
@@ -2447,6 +2816,19 @@ def main() -> None:
                     sl = ceil_to_step(raw_sl, tick)
                     tp1 = ceil_to_step(raw_tp1, tick)
                     tp2 = ceil_to_step(raw_tp2, tick)
+
+                try:
+                    _validate_stop_against_usdc_mid(side_txt, sl, entry_quote.mid_usdc)
+                except QuoteSyncError as exc:
+                    log_event(
+                        "SKIP_OPEN",
+                        reason="INITIAL_STOP_INVALID_ON_USDC",
+                        detail=str(exc),
+                        sl_usdt=sl_usdt,
+                        sl_usdc=sl,
+                        mid_usdc=entry_quote.mid_usdc,
+                    )
+                    continue
 
                 qty = notional_to_qty(entry, ENV["QTY_USD"])
 
@@ -2490,6 +2872,13 @@ def main() -> None:
                     "entry_mode": str(ENV.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
                     "entry_actual": entry_actual0,
                     "k_entry": k_entry,
+                    "entry_conversion": {
+                        "mid_usdt": entry_quote.mid_usdt,
+                        "mid_usdc": entry_quote.mid_usdc,
+                        "ratio": entry_quote.ratio,
+                        "observed_at_utc": entry_quote.observed_at_utc,
+                    },
+                    "initial_swing": initial_swing.to_dict(),
                     "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
                     "src_evt": {
                         "ts": evt.get("ts"),
