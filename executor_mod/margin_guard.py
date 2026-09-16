@@ -293,12 +293,6 @@ def on_after_position_closed(state: Dict[str, Any], trade_key: Optional[str] = N
                     except Exception as exc:
                         if log_event:
                             log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_ALERT_ERROR", trade_key=tk, error=str(exc))
-            if save_state_fn:
-                try:
-                    save_state_fn(state)
-                except Exception as exc:
-                    if log_event:
-                        log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_SAVE_ERROR", trade_key=tk, error=str(exc))
         except Exception as exc:
             if log_event:
                 log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_ERROR", trade_key=tk, error=str(exc))
@@ -314,6 +308,14 @@ def on_after_position_closed(state: Dict[str, Any], trade_key: Optional[str] = N
     if isinstance(margin, dict):
         margin["active_trade_key"] = None
         state["margin"] = margin
+    # Persist the completed hook, including cleared lifecycle flags, even when
+    # cleanup failed. Keep repayment dedup and debt evidence intact for restart.
+    if save_state_fn:
+        try:
+            save_state_fn(state)
+        except Exception as exc:
+            if log_event:
+                log_event("POST_CLOSE_MARGIN_DEBT_CLEANUP_SAVE_ERROR", trade_key=tk, error=str(exc))
     return
 
 
