@@ -25,6 +25,7 @@ import time
 import math
 import atexit
 import signal
+from uuid import uuid4
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
@@ -1206,6 +1207,8 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
       - Verifies missing orders via order status (FILLED) before acting
     """
     pos = st.get("position") or {}
+    if "failsafe_flatten" in pos:
+        return  # confirmation/recovery owns this position; do not create exits
     if pos.get("mode") != "live" or pos.get("status") not in ("OPEN", "OPEN_FILLED"):
         return
     if not pos.get("orders") or not pos.get("prices"):
@@ -1940,6 +1943,9 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
 
     This avoids accidental double-opening after restarts.
     """
+    if "failsafe_flatten" in (st.get("position") or {}):
+        # Empty openOrders cannot prove that an in-flight MARKET closed exposure.
+        return
     if str(ENV.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
 
@@ -2306,9 +2312,76 @@ def sync_from_binance(st: Dict[str, Any]) -> None:
     log_event("SYNC_ATTACHED", side=side_txt, tagged_orders=len(tagged))
 
 # ===================== Main loop =====================
+def _confirm_failsafe_flatten(st: dict) -> None:
+    """Read-only recovery of a durable flatten intent; never resubmit MARKET."""
+    pos = st.get("position") or {}
+    intent = pos.get("failsafe_flatten")
+    if not isinstance(intent, dict):
+        log_event("FAILSAFE_FLATTEN_UNCONFIRMED", reason="invalid_intent")
+        return
+    now = _now_s()
+    if now < float(intent.get("next_check_s") or 0.0):
+        return
+    intent["next_check_s"] = now + max(1.0, float(ENV["LIVE_STATUS_POLL_EVERY"]))
+    save_state(st)  # persist the read throttle across restarts
+    reason = "order_not_fully_filled"
+    try:
+        qty = Decimal(str(intent["qty"]))
+        if (not qty.is_finite() or qty <= 0 or qty != Decimal(str(pos.get("qty")))
+                or intent["symbol"] != ENV["SYMBOL"]
+                or intent["position_side"] != pos.get("side")
+                or intent["trade_mode"] != ENV["TRADE_MODE"]
+                or intent["is_isolated"] != str(ENV.get("MARGIN_ISOLATED", "FALSE"))):
+            raise ValueError("flatten intent does not match current position/config")
+        od = binance_api.get_order_by_client_id(intent["symbol"], intent["client_id"])
+        if not isinstance(od, dict):
+            raise ValueError("invalid flatten order response")
+        exq = Decimal(str(od.get("executedQty")))
+        original = Decimal(str(od.get("origQty")))
+        if (od.get("clientOrderId") != intent["client_id"]
+                or od.get("symbol") != intent["symbol"]
+                or od.get("side") != ("SELL" if intent["position_side"] == "LONG" else "BUY")
+                or od.get("type") != "MARKET"
+                or not exq.is_finite() or exq < 0 or exq > qty
+                or not original.is_finite() or original != qty
+                or (_oid_int(od.get("orderId")) or 0) <= 0):
+            raise ValueError("flatten order identity or quantity mismatch")
+        intent["order_id"] = _oid_int(od["orderId"])
+        intent["order_status"] = str(od.get("status") or "").upper()
+        intent["executed_qty"] = str(exq)
+        confirmed = intent["order_status"] == "FILLED" and exq == qty
+    except Exception as exc:
+        confirmed = False
+        reason = str(exc)
+    if confirmed:
+        intent["status"] = "CONFIRMED"
+        intent["confirmed_at"] = iso_utc()
+        save_state(st)
+        _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=pos.get("exits_tries"),
+                             flatten_confirmation=dict(intent))
+        log_event("FAILSAFE_FLATTEN_CONFIRMED", order_id=intent["order_id"],
+                  client_id=intent["client_id"], executedQty=intent["executed_qty"])
+        return
+    intent["status"] = "UNCONFIRMED"
+    notice = f"{intent.get('order_status', 'UNKNOWN')}:{reason}"
+    changed = intent.get("last_notice") != notice
+    intent["last_notice"] = notice
+    save_state(st)
+    log_event("FAILSAFE_FLATTEN_UNCONFIRMED", client_id=intent.get("client_id"), reason=reason,
+              status=intent.get("order_status", "UNKNOWN"))
+    if changed:
+        with suppress(Exception):
+            send_webhook({"event": "FAILSAFE_FLATTEN_UNCONFIRMED", "symbol": ENV["SYMBOL"],
+                          "client_id": intent.get("client_id"), "reason": reason,
+                          "status": intent.get("order_status", "UNKNOWN"), "requires_review": True})
+
+
 def handle_open_filled_exits_retry(st: dict) -> None:
     """Retry exits placement for a live position stuck in OPEN_FILLED without exits."""
     pos = st.get("position") or {}
+    if "failsafe_flatten" in pos:
+        _confirm_failsafe_flatten(st)
+        return
     if pos.get("mode") != "live" or pos.get("status") != "OPEN_FILLED":
         return
     if pos.get("orders") or not pos.get("prices"):
@@ -2336,9 +2409,24 @@ def handle_open_filled_exits_retry(st: dict) -> None:
     grace = float(ENV.get("FAILSAFE_EXITS_GRACE_SEC") or 0.0)
     first_fail_s = float(pos.get("exits_first_fail_s") or now)
     if max_tries and tries >= max_tries and (now - first_fail_s) >= grace:
-        with suppress(Exception):
-            binance_api.flatten_market(ENV["SYMBOL"], pos.get("side"), float(pos.get("qty") or 0.0), client_id=f"EX_FLAT_{int(time.time())}")
-        _clear_position_slot(st, "FAILSAFE_FLATTEN", tries=tries)
+        qty = float(pos.get("qty") or 0.0)
+        if (pos.get("side") not in ("LONG", "SHORT") or not math.isfinite(qty)
+                or qty <= 0 or Decimal(str(round_qty(qty))) != Decimal(str(qty))):
+            log_event("FAILSAFE_FLATTEN_UNCONFIRMED", reason="invalid_position_qty_or_side")
+            return
+        intent = {"client_id": "EX_FLAT_" + uuid4().hex[:28], "symbol": ENV["SYMBOL"],
+                  "position_side": pos["side"], "qty": str(qty), "status": "SUBMITTING",
+                  "trade_mode": ENV["TRADE_MODE"],
+                  "is_isolated": str(ENV.get("MARGIN_ISOLATED", "FALSE")),
+                  "started_at": iso_utc(), "next_check_s": 0.0}
+        pos["failsafe_flatten"] = intent
+        save_state(st)  # MUST succeed before an irreversible exchange mutation
+        try:
+            binance_api.flatten_market(ENV["SYMBOL"], pos["side"], qty, client_id=intent["client_id"])
+        except Exception as exc:
+            # Rejection/timeout is not proof of closure or permission to resubmit.
+            log_event("FAILSAFE_FLATTEN_SUBMIT_ERROR", client_id=intent["client_id"], error=str(exc))
+        _confirm_failsafe_flatten(st)
 def main() -> None:
     _validate_trade_mode()
     st = load_state()
@@ -2354,6 +2442,9 @@ def main() -> None:
         _shutdown_ran = True
         with suppress(Exception):
             st2 = load_state()
+            if "failsafe_flatten" in (st2.get("position") or {}):
+                log_event("FAILSAFE_FLATTEN_SHUTDOWN_PENDING")
+                return
             margin_guard.on_shutdown(st2)
 
     with suppress(Exception):
