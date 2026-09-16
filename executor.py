@@ -2444,8 +2444,16 @@ def main() -> None:
                         save_state(st)
 
                         stt = str(od.get("status", "")).upper()
-                        if stt in ("FILLED",):
-                            # ENTRY filled -> place exits V1.5 once
+                        terminal_entry = stt in ("CANCELED", "REJECTED", "EXPIRED")
+                        terminal_exq = 0.0
+                        if terminal_entry:
+                            # Terminal order status alone does not prove zero exposure.
+                            # Unknown quantity stays PENDING for another poll.
+                            terminal_exq = float(od.get("executedQty"))
+                            if not math.isfinite(terminal_exq) or terminal_exq < 0.0:
+                                raise ValueError("Invalid executedQty for terminal entry")
+                        if stt == "FILLED" or (terminal_entry and terminal_exq > 0.0):
+                            # Preserve executed exposure before hooks or exit placement.
                             posi["status"] = "OPEN_FILLED"
                             posi["filled_at"] = iso_utc()
                             posi["executedQty"] = od.get("executedQty")
@@ -2457,17 +2465,21 @@ def main() -> None:
                                 posi["entry_actual"] = float(fmt_price(avgp))
 
                             posi["cummulativeQuoteQty"] = od.get("cummulativeQuoteQty")
+                            if terminal_entry and posi["cummulativeQuoteQty"] is None:
+                                posi["cummulativeQuoteQty"] = od.get("cumulativeQuoteQty")
                             st["position"] = posi
                             save_state(st)
-                            log_event("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
-                            send_webhook({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
+                            fill_event = "ENTRY_TERMINAL_PARTIAL_FILLED" if terminal_entry else "FILLED"
+                            fill_fields = {"status": stt} if terminal_entry else {}
+                            log_event(fill_event, mode="live", order_id=oid, executedQty=od.get("executedQty"), **fill_fields)
+                            send_webhook({"event": fill_event, "mode": "live", "order_id": oid, "order": od, **fill_fields})
                             with suppress(Exception):
                                 margin_guard.on_after_entry_opened(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                             # Place TP1/TP2/SL (no OCO) right after fill confirmation
                             if not posi.get("orders") and posi.get("prices"):
                                 exits_flow.ensure_exits(st, posi, reason="filled", best_effort=True)
 
-                        elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
+                        elif terminal_entry:
                             _clear_position_slot(st, f"ENTRY_{stt}", order_id=oid, status=stt)
                             log_event("ENTRY_DONE", mode="live", status=stt, order_id=oid)
                             continue
