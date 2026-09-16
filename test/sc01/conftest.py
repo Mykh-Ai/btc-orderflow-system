@@ -63,7 +63,7 @@ def executor_harness(monkeypatch, tmp_path):
             raise AssertionError("unconfigured exchange call: " + name)
         return call
     api = Mock(spec=ex.binance_api)
-    for name in ("open_orders", "check_order_status", "get_order", "cancel_order",
+    for name in ("open_orders", "check_order_status", "get_order", "get_order_by_client_id", "cancel_order",
                  "place_order_raw", "place_spot_market", "place_spot_limit", "flatten_market",
                  "get_mid_price", "_planb_exec_price", "margin_account", "margin_borrow",
                  "margin_repay", "get_margin_debt_snapshot", "margin_my_trades"):

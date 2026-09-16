@@ -142,6 +142,13 @@ def _do_request(method: str, url: str, *, headers: Dict[str, Any], req_params: D
     timeout = _http_timeout()
     delays = [0.0, 0.3, 1.0, 2.0]
     transient_statuses = {429, 500, 502, 503, 504}
+    # A filled MARKET can accept the same client ID again. Never replay an
+    # ambiguous failsafe submission; executor reconciles its persisted ID by GET.
+    if (method == "POST" and req_params.get("type") == "MARKET"
+            and str(req_params.get("newClientOrderId") or "").startswith("EX_FLAT_")
+            and urlsplit(url).path in ("/api/v3/order", "/sapi/v1/margin/order")):
+        bases = bases[:1]
+        delays = [0.0]
 
     last_exception: Optional[Exception] = None
     last_status: Optional[int] = None
@@ -340,6 +347,16 @@ def check_order_status(symbol: str, order_id: int) -> Dict[str, Any]:
 
 def get_order(symbol: str, order_id: int) -> Dict[str, Any]:
     return check_order_status(symbol, order_id)
+
+
+def get_order_by_client_id(symbol: str, client_id: str) -> Dict[str, Any]:
+    """Resolve a persisted order identity even when its POST response was lost."""
+    env = _env()
+    params = {"symbol": symbol, "origClientOrderId": client_id}
+    if str(env.get("TRADE_MODE", "spot")).strip().lower() == "margin":
+        params["isIsolated"] = _tf(env.get("MARGIN_ISOLATED", "FALSE"))
+        return _binance_signed_request("GET", "/sapi/v1/margin/order", params)
+    return _binance_signed_request("GET", "/api/v3/order", params)
 
 
 def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
