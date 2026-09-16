@@ -70,7 +70,9 @@ class CleanupApi:
     def margin_account(self, is_isolated=False, symbols=None):
         self.account_calls += 1
         assets = []
-        keys = set(self.free) | set(self.borrowed) | set(self.interest)
+        # Successful cleanup fixtures provide explicit zero evidence for the
+        # whole default scope. Missing-asset uncertainty is tested in SC-04.
+        keys = {"BTC", "USDC", "BNB"} | set(self.free) | set(self.borrowed) | set(self.interest)
         for asset in sorted(keys):
             assets.append(
                 {
