@@ -3,6 +3,7 @@
 """Pending entry order handling for the executor runtime loop."""
 from __future__ import annotations
 
+from executor_mod.order_utils import validated_executed_qty
 from contextlib import suppress
 from typing import Any, Callable, Dict
 
@@ -34,6 +35,8 @@ def handle_pending_position(
     matching the old inline continue points.
     """
     posi = st.get("position") or {}
+    if "failsafe_flatten" in posi:
+        return False
     if posi.get("mode") != "live" or posi.get("status") != "PENDING":
         return False
 
@@ -49,8 +52,14 @@ def handle_pending_position(
                 save_state_fn(st)
 
                 stt = str(od.get("status", "")).upper()
-                if stt in ("FILLED",):
-                    # ENTRY filled -> place exits V1.5 once
+                terminal_entry = stt in ("CANCELED", "REJECTED", "EXPIRED")
+                terminal_exq = 0.0
+                if terminal_entry:
+                    # Terminal order status alone does not prove zero exposure.
+                    # Unknown quantity stays PENDING for another poll.
+                    terminal_exq = float(validated_executed_qty(od))
+                if stt == "FILLED" or (terminal_entry and terminal_exq > 0.0):
+                    # Preserve executed exposure before hooks or exit placement.
                     posi["status"] = "OPEN_FILLED"
                     posi["filled_at"] = iso_utc_fn()
                     posi["executedQty"] = od.get("executedQty")
@@ -62,17 +71,21 @@ def handle_pending_position(
                         posi["entry_actual"] = float(fmt_price_fn(avgp))
 
                     posi["cummulativeQuoteQty"] = od.get("cummulativeQuoteQty")
+                    if terminal_entry and posi["cummulativeQuoteQty"] is None:
+                        posi["cummulativeQuoteQty"] = od.get("cumulativeQuoteQty")
                     st["position"] = posi
                     save_state_fn(st)
-                    log_event_fn("FILLED", mode="live", order_id=oid, executedQty=od.get("executedQty"))
-                    send_webhook_fn({"event": "FILLED", "mode": "live", "order_id": oid, "order": od})
+                    fill_event = "ENTRY_TERMINAL_PARTIAL_FILLED" if terminal_entry else "FILLED"
+                    fill_fields = {"status": stt} if terminal_entry else {}
+                    log_event_fn(fill_event, mode="live", order_id=oid, executedQty=od.get("executedQty"), **fill_fields)
+                    send_webhook_fn({"event": fill_event, "mode": "live", "order_id": oid, "order": od, **fill_fields})
                     with suppress(Exception):
                         margin_after_entry_opened_fn(st, trade_key=str(posi.get("trade_key") or posi.get("client_id") or posi.get("order_id") or oid))
                     # Place TP1/TP2/SL (no OCO) right after fill confirmation
                     if not posi.get("orders") and posi.get("prices"):
                         ensure_exits_fn(st, posi, reason="filled", best_effort=True)
 
-                elif stt in ("CANCELED", "REJECTED", "EXPIRED"):
+                elif terminal_entry:
                     clear_position_slot_fn(st, f"ENTRY_{stt}", order_id=oid, status=stt)
                     log_event_fn("ENTRY_DONE", mode="live", status=stt, order_id=oid)
                     return True
@@ -96,7 +109,11 @@ def handle_pending_position(
             if oid and posi.get("status") == "PENDING":
                 # Plan B: timeout -> cancel LIMIT and fall back to MARKET (unless ENTRY_MODE=LIMIT_ONLY).
                 od_t = binance_api.check_order_status(env["SYMBOL"], oid)
-                exq_t = float(od_t.get("executedQty") or 0.0)
+                exq_t = (
+                    float(validated_executed_qty(od_t))
+                    if str(od_t.get("status", "")).upper() in ("CANCELED", "EXPIRED", "REJECTED")
+                    else float(od_t.get("executedQty") or 0.0)
+                )
 
                 def _try_place_exits_now() -> None:
                     # Best-effort immediate exits placement (reduces naked exposure window).
@@ -133,7 +150,11 @@ def handle_pending_position(
                     with suppress(Exception):
                         od_after = binance_api.check_order_status(env["SYMBOL"], oid)
                     if od_after:
-                        exq_after = float(od_after.get("executedQty") or 0.0)
+                        exq_after = (
+                            float(validated_executed_qty(od_after))
+                            if str(od_after.get("status", "")).upper() in ("CANCELED", "EXPIRED", "REJECTED")
+                            else float(od_after.get("executedQty") or 0.0)
+                        )
                         st_after = str(od_after.get("status", "")).upper()
                         if st_after == "FILLED" or exq_after > 0.0:
                             posi["status"] = "OPEN_FILLED"

@@ -1,9 +1,12 @@
-import json
+﻿import json
 import os
 import tempfile
 import unittest
 
+import pandas as pd
+
 from executor_mod import llm_trade_judge as judge
+from market_monitor import snapshot_builder
 
 
 def _pos(**overrides):
@@ -108,6 +111,21 @@ class TestCutoffAndEvidence(unittest.TestCase):
         self.assertIn("baseline", pack)
         self.assertEqual(pack["market_context"]["enabled"], False)
         self.assertIn("context_disabled", pack["market_context"]["data_gaps"])
+        self.assertNotIn("market_monitor_snapshot", pack)
+
+    def test_build_pretrade_evidence_pack_can_attach_market_monitor_snapshot_gap(self):
+        judge.configure({
+            "SYMBOL": "BTCUSDC",
+            "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": "missing-market-monitor-feed.csv",
+        })
+        pack = judge.build_pretrade_evidence_pack(_pos(), {}, "EXITS_PLACED_V15")
+        snapshot = pack["market_monitor_snapshot"]
+        self.assertTrue(snapshot["enabled"])
+        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v1")
+        self.assertIn("market_monitor_snapshot_current_feed_not_found", snapshot["data_gaps"])
+        self.assertIn("market_monitor_snapshot_current_feed_not_found", pack["data_gaps"])
 
     def test_build_pretrade_evidence_pack_preserves_raw_peak_fields(self):
         src_evt = {
@@ -318,13 +336,112 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertIn("agg_csv_missing", ctx["data_gaps"])
         self.assertTrue(ctx["enabled"])
 
+    def test_build_market_monitor_snapshot_disabled_and_missing_feed(self):
+        disabled = judge.build_market_monitor_snapshot_until_cutoff(
+            {"analysis_cutoff_ts": "2026-01-01T00:00:00Z"},
+            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": False},
+        )
+        self.assertFalse(disabled["enabled"])
+        self.assertIn("market_monitor_snapshot_disabled", disabled["data_gaps"])
+
+        missing = judge.build_market_monitor_snapshot_until_cutoff(
+            {"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "symbol": "BTCUSDC"},
+            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True},
+        )
+        self.assertTrue(missing["enabled"])
+        self.assertIn("market_monitor_snapshot_current_feed_missing", missing["data_gaps"])
+
+    def test_build_market_monitor_snapshot_resolves_current_feed_dir_from_cutoff(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing = judge.build_market_monitor_snapshot_until_cutoff(
+                {"analysis_cutoff_ts": "2026-06-07T19:17:00Z", "symbol": "BTCUSDC"},
+                {
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": td,
+                },
+            )
+            self.assertTrue(missing["enabled"])
+            self.assertIn("market_monitor_snapshot_current_feed_not_found", missing["data_gaps"])
+            self.assertEqual(
+                missing["source_paths"]["resolved_current_feed"],
+                os.path.join(td, "2026-06-07.csv"),
+            )
+
+    def test_market_structure_state_marks_seller_dominance_above_support_not_range(self):
+        feed = pd.DataFrame(
+            [
+                {
+                    "Timestamp": pd.Timestamp("2026-06-01T00:00:00Z"),
+                    "OpenPrice": 81000.0,
+                    "HiPrice": 81200.0,
+                    "LowPrice": 80600.0,
+                    "ClosePrice": 80950.0,
+                    "TotalQty": 1000.0,
+                    "BuyQty": 420.0,
+                    "SellQty": 580.0,
+                    "OpenInterest": 100000.0,
+                },
+                {
+                    "Timestamp": pd.Timestamp("2026-06-01T23:59:00Z"),
+                    "OpenPrice": 80950.0,
+                    "HiPrice": 81150.0,
+                    "LowPrice": 78500.0,
+                    "ClosePrice": 78800.0,
+                    "TotalQty": 3000.0,
+                    "BuyQty": 900.0,
+                    "SellQty": 2100.0,
+                    "OpenInterest": 101500.0,
+                },
+            ]
+        )
+        zones = pd.DataFrame(
+            [
+                {
+                    "zone_id": "support_1",
+                    "price_lower": 77000.0,
+                    "price_upper": 78000.0,
+                    "significance_score": 92.0,
+                    "confidence_tier": "HIGH",
+                    "status": "ACTIVE",
+                },
+                {
+                    "zone_id": "resistance_1",
+                    "price_lower": 82000.0,
+                    "price_upper": 83000.0,
+                    "significance_score": 75.0,
+                    "confidence_tier": "HIGH",
+                    "status": "ACTIVE",
+                },
+            ]
+        )
+
+        state = snapshot_builder._market_structure_state(
+            current=feed,
+            significant_market_zones=zones,
+        )
+
+        self.assertIn(state["market_state"], {"MARKDOWN_ABOVE_SUPPORT", "EXPANSION_DOWN"})
+        self.assertNotIn("RANGE", state["market_state"])
+        self.assertEqual(state["candidate_bias"], "DOWN")
+        self.assertIn("dominant_side=SELLER", state["evidence_summary"])
+        self.assertIn("range_quality=BIASED", state["evidence_summary"])
+        self.assertLessEqual(state["metrics"]["close_position"], 0.35)
+
     def test_prompt_mentions_market_context_and_no_hindsight(self):
         prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
         self.assertIn("market_context.deltascout", prompt)
+        self.assertIn("market_monitor_snapshot", prompt)
+        self.assertIn("descriptive pre-cutoff Market Monitor snapshot", prompt)
+        self.assertIn("market_structure_state", prompt)
+        self.assertIn("avoid misreading bearish expansion as range/support", prompt)
         self.assertIn("Do not infer future outcome", prompt)
         self.assertIn("normalized UTC", prompt)
         self.assertIn("Do not use raw timestamps for filtering", prompt)
         self.assertIn("use REJECT", prompt)
+        self.assertIn("Calibrate verdict strictly", prompt)
+        self.assertIn("late chase", prompt)
+        self.assertIn("local 60m/240m extreme", prompt)
+        self.assertIn("Prefer UNCLEAR when broad 1d/3d/7d context", prompt)
 
 
 class TestVerdictJournal(unittest.TestCase):
@@ -399,6 +516,7 @@ class TestRealOpenAIMode(unittest.TestCase):
                 "LLM_TRADE_JUDGE_MODEL": "gpt-5.5",
                 "LLM_TRADE_JUDGE_TIMEOUT_SEC": 20,
                 "LLM_TRADE_JUDGE_MAX_RETRIES": 1,
+                "LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": 2000,
                 "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": notify,
                 "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
             },
@@ -519,6 +637,35 @@ class TestRealOpenAIMode(unittest.TestCase):
                 record = self._records(journal)[0]
                 self.assertEqual(record["competitive_side"], "LLM_REJECT")
 
+    def test_invalid_json_retries_before_error_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = os.path.join(td, "v.jsonl")
+            responses = [
+                "not-json",
+                json.dumps({
+                    "verdict": "UNCLEAR",
+                    "competitive_side": "BOT",
+                    "confidence": 0.42,
+                    "setup_class": "unknown",
+                    "reason_codes": ["retry_recovered_json"],
+                    "risk_flags": [],
+                    "summary_ua": None,
+                }),
+            ]
+            calls = []
+
+            def flaky_client(**kwargs):
+                calls.append(kwargs)
+                return responses.pop(0)
+
+            self._configure(journal, client=flaky_client, notify=False)
+            result = judge.maybe_record_llm_pretrade_judge({}, _pos())
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(calls), 2)
+            record = self._records(journal)[0]
+            self.assertEqual(record["llm_call_status"], "success")
+            self.assertEqual(record["verdict"], "UNCLEAR")
+            self.assertEqual(record["competitive_side"], "LLM_REJECT")
     def test_invalid_json_appends_error_record_no_raise(self):
         with tempfile.TemporaryDirectory() as td:
             journal = os.path.join(td, "v.jsonl")

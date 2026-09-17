@@ -140,16 +140,18 @@ class TestOpenEntryFlow(unittest.TestCase):
             return build_entry
 
         def fake_swing_stop(frame, idx, side, entry):
-            order.append(("swing_stop_far", idx, side, entry))
-            return swing_stop
+            order.append(("select_initial_stop", idx, side, entry))
+            if idx < 0:
+                raise executor.InitialStopSelectionError("MISSING_EXACT_SIGNAL_MINUTE")
+            return SimpleNamespace(stop_usdt=swing_stop, to_dict=lambda: {"stop_usdt": swing_stop})
 
         def fake_compute_tps(entry, sl, side):
             order.append(("compute_tps", entry, sl, side))
             return list(tps)
 
         def fake_k():
-            order.append(("get_usdt_usdc_k",))
-            return k_entry
+            order.append(("get_quote_snapshot",))
+            return executor.UsdtUsdcQuoteSnapshot(100.0, 100.0 * k_entry, k_entry, "2026-01-01T00:00:05Z")
 
         def fake_qty(entry, usd):
             order.append(("notional_to_qty", entry, usd))
@@ -224,9 +226,9 @@ class TestOpenEntryFlow(unittest.TestCase):
             stack.enter_context(patch.object(executor, "load_df_sorted", return_value=df))
             stack.enter_context(patch.object(executor, "locate_index_by_ts", side_effect=fake_locate))
             build_entry_mock = stack.enter_context(patch.object(executor, "build_entry_price", side_effect=fake_build_entry))
-            swing_stop_mock = stack.enter_context(patch.object(executor, "swing_stop_far", side_effect=fake_swing_stop))
+            swing_stop_mock = stack.enter_context(patch.object(executor, "select_volume_confirmed_initial_stop", side_effect=fake_swing_stop))
             compute_tps_mock = stack.enter_context(patch.object(executor, "compute_tps", side_effect=fake_compute_tps))
-            get_k_mock = stack.enter_context(patch.object(executor, "get_usdt_usdc_k", side_effect=fake_k))
+            get_k_mock = stack.enter_context(patch.object(executor, "get_usdt_usdc_quote_snapshot", side_effect=fake_k))
             notional_mock = stack.enter_context(patch.object(executor, "notional_to_qty", side_effect=fake_qty))
             validate_mock = stack.enter_context(patch.object(executor, "validate_qty", side_effect=fake_validate_qty))
             margin_before_mock = stack.enter_context(patch.object(executor.margin_guard, "on_before_entry", side_effect=fake_margin_before))
@@ -312,14 +314,14 @@ class TestOpenEntryFlow(unittest.TestCase):
         h.place_market.assert_not_called()
         h.place_limit.assert_not_called()
 
-    def test_timestamp_parse_failure_falls_back_to_latest_row(self):
+    def test_timestamp_parse_failure_skips_without_latest_row_fallback(self):
         h = self._run_one_open_cycle(events=[_peak(ts="not-a-timestamp")], df=_df(rows=4))
-
         self.assertEqual(h.locate_calls, [])
-        swing_calls = [item for item in h.order if item[0] == "swing_stop_far"]
-        self.assertEqual(swing_calls[0][1], 3)
-        self.assertFalse(self._events(h, "LIVE_OPEN_ERROR"))
-        h.place_limit.assert_called_once()
+        selection_calls = [item for item in h.order if item[0] == "select_initial_stop"]
+        self.assertEqual(selection_calls[0][1], -1)
+        self.assertIn("MISSING_EXACT_SIGNAL_MINUTE", [e["reason"] for e in self._events(h, "SKIP_OPEN")])
+        h.place_market.assert_not_called()
+        h.place_limit.assert_not_called()
 
     def test_tps_not_ready_and_qty_invalid_skip_without_order(self):
         cases = [

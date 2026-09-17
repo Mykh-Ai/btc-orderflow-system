@@ -7,6 +7,7 @@ Hard rule: moved functions below are verbatim copies from executor.py.
 """
 from contextlib import suppress
 import csv
+import math
 from collections import deque
 from typing import Any, Dict, List, Optional, Callable
 ENV: Dict[str, Any] = {}
@@ -324,3 +325,42 @@ def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
         return float(swing - buf)
     else:
         return float(swing + buf)
+
+
+def set_confirmation_reference_from_agg(pos: dict, *, load_df_sorted_fn, latest_price_fn) -> None:
+    """Store the trailing confirmation reference explicitly in BTCUSDT units."""
+
+    df = load_df_sorted_fn()
+    ref = latest_price_fn(df) if not df.empty else float("nan")
+    if math.isfinite(ref) and ref > 0:
+        pos["trail_ref_price_usdt"] = float(ref)
+        # executor_mod.trail still consumes the legacy key; keep it as a
+        # compatibility mirror with the same explicit USDT value.
+        pos["trail_ref_price"] = float(ref)
+        pos["trail_wait_confirm"] = True
+        pos["trail_confirmed"] = False
+    else:
+        pos["trail_ref_price_usdt"] = 0.0
+        pos["trail_ref_price"] = 0.0
+        pos["trail_wait_confirm"] = False
+        pos["trail_confirmed"] = False
+
+def store_quote_audit(pos: dict, quote: Any) -> None:
+    pos["trail_sl_price_usdt"] = quote.stop_usdt
+    pos["trail_conversion_ratio"] = quote.snapshot.ratio
+    pos["trail_conversion_mid_usdt"] = quote.snapshot.mid_usdt
+    pos["trail_conversion_mid_usdc"] = quote.snapshot.mid_usdc
+    pos["trail_conversion_ts"] = quote.snapshot.observed_at_utc
+
+
+def stop_quote_from_agg(pos: dict, *, source_stop_fn, quote_snapshot_fn, convert_stop_fn, validate_stop_fn):
+    """Synchronize a source swing before the manager can cancel protective orders."""
+    from executor_mod.quote_sync import TrailingStopQuote
+    stop_usdt = source_stop_fn(pos)
+    if stop_usdt is None:
+        return None
+    snapshot = quote_snapshot_fn()
+    side = str(pos.get("side") or "")
+    stop_usdc = convert_stop_fn(stop_usdt, side, snapshot.ratio)
+    validate_stop_fn(side, stop_usdc, snapshot.mid_usdc)
+    return TrailingStopQuote(stop_usdt=stop_usdt, stop_usdc=stop_usdc, snapshot=snapshot)

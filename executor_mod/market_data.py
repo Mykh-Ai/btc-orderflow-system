@@ -70,23 +70,19 @@ def load_df_sorted() -> pd.DataFrame:
 
 
 def locate_index_by_ts(df: pd.DataFrame, ts: datetime) -> int:
-    # normalize to minute resolution; be tolerant to tz formats
+    # V8 must resolve the exact signal minute. The previous helper fell back to
+    # the newest row and could therefore introduce lookahead on a missing minute.
     try:
         target = pd.to_datetime(ts, utc=True, errors="coerce")
         if pd.isna(target):
-            return len(df) - 1
+            return -1
         target = target.tz_convert(None).floor("min")
-    except Exception:
-        return len(df) - 1
-
-    try:
         series = pd.to_datetime(df["Timestamp"], utc=True, errors="coerce")
         series = series.dt.tz_convert(None).dt.floor("min")
-        m = df.index[series == target]
-        return int(m[0]) if len(m) else len(df) - 1
+        matched = df.index[series == target]
+        return int(matched[0]) if len(matched) else -1
     except Exception:
-        return len(df) - 1
-
+        return -1
 
 
 def latest_price(df: pd.DataFrame) -> float:

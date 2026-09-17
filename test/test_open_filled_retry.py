@@ -63,6 +63,10 @@ class TestOrderUtilityHelpers(unittest.TestCase):
 class TestOpenFilledExitsRetry(unittest.TestCase):
     def setUp(self):
         self.env_snapshot = deepcopy(executor.ENV)
+        for target, name, kwargs in ((executor.binance_api, "get_order_by_client_id", {"return_value": {}}), (executor, "log_event", {}), (executor, "send_webhook", {})):
+            patcher = patch.object(target, name, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         executor.ENV.clear()
@@ -228,48 +232,29 @@ class TestOpenFilledExitsRetry(unittest.TestCase):
         flatten_market.assert_not_called()
         clear_position_slot.assert_not_called()
 
-    def test_failsafe_flatten_path_calls_flatten_and_clear_position_slot(self):
-        self._set_retry_env(
-            retry_every=15,
-            failsafe=True,
-            max_tries=3,
-            grace=60,
-            symbol="ETHUSDC",
-        )
-        pos = _base_open_filled_pos(exits_tries=2, exits_first_fail_s=900.0, side="SHORT", qty="0.75")
+    def test_failsafe_post_success_without_confirmation_retains_position(self):
+        self._set_retry_env(failsafe=True, max_tries=1, grace=0)
+        pos = _base_open_filled_pos()
         st = {"position": pos}
-
-        with patch.object(executor, "save_state") as save_state, \
-             patch.object(executor.exits_flow, "ensure_exits", return_value=False) as ensure_exits, \
-             patch.object(executor.binance_api, "flatten_market") as flatten_market, \
-             patch.object(executor, "_clear_position_slot") as clear_position_slot, \
-             patch.object(executor, "_now_s", return_value=1000.0), \
-             patch.object(executor.time, "time", return_value=1234.9):
+        with patch.object(executor, "save_state") as save, patch.object(executor.exits_flow, "ensure_exits", return_value=False), patch.object(executor.binance_api, "flatten_market") as flatten, patch.object(executor, "_clear_position_slot") as clear, patch.object(executor, "_now_s", return_value=1000.0):
             executor.handle_open_filled_exits_retry(st)
+        self.assertGreaterEqual(save.call_count, 3)
+        flatten.assert_called_once_with("BTCUSDC", "LONG", 0.25, client_id=pos["failsafe_flatten"]["client_id"])
+        self.assertEqual(pos["failsafe_flatten"]["status"], "UNCONFIRMED")
+        self.assertIs(st["position"], pos)
+        clear.assert_not_called()
 
-        self.assertEqual(pos["exits_tries"], 3)
-        save_state.assert_called_once_with(st)
-        ensure_exits.assert_called_once_with(st, pos, reason="retry", best_effort=True, attempt=3)
-        flatten_market.assert_called_once_with("ETHUSDC", "SHORT", 0.75, client_id="EX_FLAT_1234")
-        clear_position_slot.assert_called_once_with(st, "FAILSAFE_FLATTEN", tries=3)
-
-    def test_flatten_exception_is_suppressed_and_clear_position_slot_still_runs(self):
-        self._set_retry_env(retry_every=15, failsafe=True, max_tries=3, grace=60)
-        pos = _base_open_filled_pos(exits_tries=2, exits_first_fail_s=900.0)
+    def test_flatten_exception_retains_intent_and_does_not_clear(self):
+        self._set_retry_env(failsafe=True, max_tries=1, grace=0)
+        pos = _base_open_filled_pos()
         st = {"position": pos}
-
-        with patch.object(executor, "save_state") as save_state, \
-             patch.object(executor.exits_flow, "ensure_exits", return_value=False) as ensure_exits, \
-             patch.object(executor.binance_api, "flatten_market", side_effect=RuntimeError("network")) as flatten_market, \
-             patch.object(executor, "_clear_position_slot") as clear_position_slot, \
-             patch.object(executor, "_now_s", return_value=1000.0), \
-             patch.object(executor.time, "time", return_value=5678.0):
+        with patch.object(executor, "save_state"), patch.object(executor.exits_flow, "ensure_exits", return_value=False), patch.object(executor.binance_api, "flatten_market", side_effect=TimeoutError("network")) as flatten, patch.object(executor, "_clear_position_slot") as clear, patch.object(executor, "_now_s", return_value=1000.0):
             executor.handle_open_filled_exits_retry(st)
-
-        save_state.assert_called_once_with(st)
-        ensure_exits.assert_called_once_with(st, pos, reason="retry", best_effort=True, attempt=3)
-        flatten_market.assert_called_once_with("BTCUSDC", "LONG", 0.25, client_id="EX_FLAT_5678")
-        clear_position_slot.assert_called_once_with(st, "FAILSAFE_FLATTEN", tries=3)
+            executor.handle_open_filled_exits_retry(st)
+        flatten.assert_called_once()
+        self.assertTrue(pos["failsafe_flatten"]["client_id"].startswith("EX_FLAT_"))
+        self.assertIs(st["position"], pos)
+        clear.assert_not_called()
 
 
 if __name__ == "__main__":

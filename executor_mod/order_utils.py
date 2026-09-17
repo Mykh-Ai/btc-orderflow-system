@@ -3,6 +3,8 @@
 """Small order payload helpers shared by executor wrappers."""
 from __future__ import annotations
 
+import math
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 
@@ -25,3 +27,20 @@ def avg_fill_price(order: Any) -> Optional[float]:
     except Exception:
         return None
     return None
+
+
+def validated_executed_qty(order: Any) -> Decimal:
+    """A terminal order can release ownership only with explicit quantity evidence."""
+    value = order.get("executedQty") if isinstance(order, dict) else None
+    if value is None or isinstance(value, bool):
+        raise ValueError("Unknown executedQty for terminal entry")
+    try:
+        quantity = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError("Invalid executedQty for terminal entry") from exc
+    if not quantity.is_finite() or quantity < 0:
+        raise ValueError("Invalid executedQty for terminal entry")
+    approximate = float(quantity)
+    if not math.isfinite(approximate) or (quantity > 0 and approximate == 0):
+        raise ValueError("Unrepresentable executedQty for terminal entry")
+    return quantity

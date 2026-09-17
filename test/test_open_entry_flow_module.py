@@ -149,9 +149,10 @@ class TestOpenEntryFlowModule(unittest.TestCase):
             load_df_sorted_fn=lambda: _Frame(),
             locate_index_by_ts_fn=lambda *_args: 0,
             build_entry_price_fn=lambda kind, price: 101.0,
-            swing_stop_far_fn=lambda frame, idx, side, entry: 90.0,
+            select_initial_stop_fn=lambda frame, idx, side, entry: SimpleNamespace(stop_usdt=90.0, to_dict=lambda: {}),
             compute_tps_fn=lambda entry, sl, side: [111.0, 121.0],
-            get_usdt_usdc_k_fn=lambda: 1.0,
+            get_quote_snapshot_fn=lambda: executor.UsdtUsdcQuoteSnapshot(100.0, 100.0, 1.0, "2026-01-01T00:00:05Z"),
+            validate_stop_against_mid_fn=lambda *args: None,
             floor_to_step_fn=lambda value, step: float(value),
             ceil_to_step_fn=lambda value, step: float(value),
             notional_to_qty_fn=lambda entry, usd: 0.5,
@@ -234,9 +235,10 @@ class TestOpenEntryFlowModule(unittest.TestCase):
             load_df = stack.enter_context(patch.object(executor, "load_df_sorted"))
             locate = stack.enter_context(patch.object(executor, "locate_index_by_ts"))
             build = stack.enter_context(patch.object(executor, "build_entry_price"))
-            swing = stack.enter_context(patch.object(executor, "swing_stop_far"))
+            swing = stack.enter_context(patch.object(executor, "select_volume_confirmed_initial_stop"))
             tps = stack.enter_context(patch.object(executor, "compute_tps"))
-            k = stack.enter_context(patch.object(executor, "get_usdt_usdc_k"))
+            stop_validation = stack.enter_context(patch.object(executor, "_validate_stop_against_usdc_mid"))
+            k = stack.enter_context(patch.object(executor, "get_usdt_usdc_quote_snapshot"))
             floor = stack.enter_context(patch.object(executor, "floor_to_step"))
             ceil = stack.enter_context(patch.object(executor, "ceil_to_step"))
             notional = stack.enter_context(patch.object(executor, "notional_to_qty"))
@@ -277,9 +279,10 @@ class TestOpenEntryFlowModule(unittest.TestCase):
             "load_df_sorted_fn": load_df,
             "locate_index_by_ts_fn": locate,
             "build_entry_price_fn": build,
-            "swing_stop_far_fn": swing,
+            "select_initial_stop_fn": swing,
             "compute_tps_fn": tps,
-            "get_usdt_usdc_k_fn": k,
+            "get_quote_snapshot_fn": k,
+            "validate_stop_against_mid_fn": stop_validation,
             "floor_to_step_fn": floor,
             "ceil_to_step_fn": ceil,
             "notional_to_qty_fn": notional,

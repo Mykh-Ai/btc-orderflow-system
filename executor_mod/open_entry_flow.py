@@ -3,6 +3,10 @@
 """Open-entry event handling for the executor runtime loop."""
 from __future__ import annotations
 
+from decimal import Decimal
+from executor_mod.entry_math import InitialStopSelectionError
+from executor_mod.quote_sync import QuoteSyncError
+from executor_mod.trade_open_summary import build_trade_open_payload
 from contextlib import suppress
 from typing import Any, Callable, Dict
 
@@ -28,9 +32,10 @@ def handle_open_entry_event(
     load_df_sorted_fn: Callable[[], Any],
     locate_index_by_ts_fn: Callable[[Any, Any], int],
     build_entry_price_fn: Callable[[str, float], float],
-    swing_stop_far_fn: Callable[[Any, int, str, float], float],
+    select_initial_stop_fn: Callable[..., Any],
     compute_tps_fn: Callable[[float, float, str], Any],
-    get_usdt_usdc_k_fn: Callable[[], float],
+    get_quote_snapshot_fn: Callable[[], Any],
+    validate_stop_against_mid_fn: Callable[..., None],
     floor_to_step_fn: Callable[[float, Any], float],
     ceil_to_step_fn: Callable[[float, Any], float],
     notional_to_qty_fn: Callable[[float, float], float],
@@ -45,6 +50,9 @@ def handle_open_entry_event(
     llm_pretrade_fn: Callable[..., Any],
 ) -> None:
     """Handle one fresh PEAK event and return to the caller's event loop."""
+    if "failsafe_flatten" in (st.get("position") or {}):
+        log_event_fn("SKIP_PEAK", reason="failsafe_flatten_pending")
+        return
     # Safety: ignore very old PEAKs (e.g., after restarts / log replays)
     max_age = float(env.get("MAX_PEAK_AGE_SEC") or 0)
     if max_age > 0:
@@ -83,10 +91,9 @@ def handle_open_entry_event(
         if df_local.empty:
             log_event_fn("SKIP_OPEN", reason="agg_unavailable")
             return
-
         # locate candle index by event timestamp (in USDT feed)
         ts = evt.get("ts")
-        i = len(df_local) - 1
+        i = -1
         try:
             if ts:
                 _ts = ts
@@ -94,9 +101,25 @@ def handle_open_entry_event(
                     _ts = _ts[:-1] + "+00:00"
                 i = locate_index_by_ts_fn(df_local, to_datetime_fn(_ts, utc=True).to_pydatetime())
         except Exception:
-            i = len(df_local) - 1
+            i = -1
 
-        sl_usdt = swing_stop_far_fn(df_local, i, side, entry_usdt)
+        try:
+            initial_swing = select_initial_stop_fn(
+                df_local,
+                i,
+                side,
+                entry_usdt,
+            )
+        except InitialStopSelectionError as exc:
+            log_event_fn(
+                "SKIP_OPEN",
+                reason=exc.reason,
+                detail=exc.detail,
+                entry_usdt=entry_usdt,
+                evt_ts=evt.get("ts"),
+            )
+            return
+        sl_usdt = initial_swing.stop_usdt
         tps_usdt = compute_tps_fn(entry_usdt, sl_usdt, side)
         if len(tps_usdt) < 2:
             log_event_fn("SKIP_OPEN", reason="tps_not_ready", entry_usdt=entry_usdt, sl_usdt=sl_usdt, tps=tps_usdt)
@@ -104,16 +127,27 @@ def handle_open_entry_event(
         tp1_usdt, tp2_usdt = tps_usdt[0], tps_usdt[1]
 
         # --- USDT -> USDC conversion (k_entry fixed once per position) ---
-        k_entry = get_usdt_usdc_k_fn()
+        try:
+            entry_quote = get_quote_snapshot_fn()
+        except QuoteSyncError as exc:
+            log_event_fn(
+                "SKIP_OPEN",
+                reason="USDT_USDC_SYNC_FAILED",
+                detail=str(exc),
+                entry_usdt=entry_usdt,
+                sl_usdt=sl_usdt,
+            )
+            return
+        k_entry = entry_quote.ratio
 
         # Convert prices, then apply *directional* rounding to keep logic stable.
         tick = env["TICK_SIZE"]
-        close_usdc = float(close_price_usdt) * float(k_entry)
+        close_usdc = float(Decimal(str(close_price_usdt)) * Decimal(str(k_entry)))
 
-        raw_entry = float(entry_usdt) * float(k_entry)
-        raw_sl = float(sl_usdt) * float(k_entry)
-        raw_tp1 = float(tp1_usdt) * float(k_entry)
-        raw_tp2 = float(tp2_usdt) * float(k_entry)
+        raw_entry = float(Decimal(str(entry_usdt)) * Decimal(str(k_entry)))
+        raw_sl = float(Decimal(str(sl_usdt)) * Decimal(str(k_entry)))
+        raw_tp1 = float(Decimal(str(tp1_usdt)) * Decimal(str(k_entry)))
+        raw_tp2 = float(Decimal(str(tp2_usdt)) * Decimal(str(k_entry)))
 
         if kind == "long":
             # entry must be >= close_usdc + 1 tick
@@ -136,12 +170,23 @@ def handle_open_entry_event(
             tp1 = ceil_to_step_fn(raw_tp1, tick)
             tp2 = ceil_to_step_fn(raw_tp2, tick)
 
+        try:
+            validate_stop_against_mid_fn(side_txt, sl, entry_quote.mid_usdc)
+        except QuoteSyncError as exc:
+            log_event_fn(
+                "SKIP_OPEN",
+                reason="INITIAL_STOP_INVALID_ON_USDC",
+                detail=str(exc),
+                sl_usdt=sl_usdt,
+                sl_usdc=sl,
+                mid_usdc=entry_quote.mid_usdc,
+            )
+            return
         qty = notional_to_qty_fn(entry, env["QTY_USD"])
 
         if not validate_qty_fn(qty, entry):
             log_event_fn("SKIP_OPEN", reason="qty_too_small", entry=entry, qty=qty, k_entry=k_entry)
             return
-
         client_id = f"EX_EN_{int(time_fn())}"
         entry_mode = str(env.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper()
         if entry_mode == "MARKET_ONLY":
@@ -178,6 +223,13 @@ def handle_open_entry_event(
             "entry_mode": str(env.get("ENTRY_MODE", "LIMIT_THEN_MARKET")).strip().upper(),
             "entry_actual": entry_actual0,
             "k_entry": k_entry,
+            "entry_conversion": {
+                "mid_usdt": entry_quote.mid_usdt,
+                "mid_usdc": entry_quote.mid_usdc,
+                "ratio": entry_quote.ratio,
+                "observed_at_utc": entry_quote.observed_at_utc,
+            },
+            "initial_swing": initial_swing.to_dict(),
             "prices": {"entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2},
             "src_evt": {
                 "ts": evt.get("ts"),
@@ -241,6 +293,6 @@ def handle_open_entry_event(
             log_event_fn("BASELINE_TAKEN", **baseline_log)
 
         log_event_fn("OPEN", mode="live", side=st["position"]["side"], entry=entry, qty=qty, order_id=st["position"]["order_id"])
-        send_webhook_fn({"event": "OPEN", "mode": "live", "symbol": env["SYMBOL"], "side": st["position"]["side"], "entry": entry, "qty": qty, "order": order})
+        send_webhook_fn(build_trade_open_payload(st["position"], symbol=env["SYMBOL"], order=order))
     except Exception as e:
         log_event_fn("LIVE_OPEN_ERROR", error=str(e))

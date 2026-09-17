@@ -51,6 +51,9 @@ import executor_mod.entry_math as entry_math
 import executor_mod.close_reporting as close_reporting
 import executor_mod.exit_orders as exit_orders
 import executor_mod.reconciliation as reconciliation
+from executor_mod import quote_sync
+from executor_mod.quote_sync import QuoteSyncError, UsdtUsdcQuoteSnapshot, TrailingStopQuote
+from executor_mod.entry_math import InitialStopSelectionError, InitialSwingSelection
 from executor_mod.risk_math import (
     floor_to_step,
     ceil_to_step,
@@ -215,6 +218,19 @@ ENV: Dict[str, Any] = {
 "ORPHAN_CANCEL_EVERY_SEC": _get_int("ORPHAN_CANCEL_EVERY_SEC", 30),
 "SEEN_KEYS_MAX": _get_int("SEEN_KEYS_MAX", 500),
 "RECON_THROTTLE_SEC": _get_int("RECON_THROTTLE_SEC", 600),
+"LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": _get_int("LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS", 2000),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": _get_bool("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": _get_str("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED", ""),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": _get_str("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED", ""),
+"LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES": _get_int("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES", 5),
+"INITIAL_STOP_POLICY": _get_str("INITIAL_STOP_POLICY", "VOLUME_SWING_24H_LR25"),
+"INITIAL_SWING_LOOKBACK": _get_int("INITIAL_SWING_LOOKBACK", 1440),
+"INITIAL_SWING_LR": _get_int("INITIAL_SWING_LR", 25),
+"INITIAL_SWING_BUFFER_USD": _get_float("INITIAL_SWING_BUFFER_USD", 50.0),
+"INITIAL_SWING_MAX_DISTANCE_USD": _get_float("INITIAL_SWING_MAX_DISTANCE_USD", 1200.0),
+"INITIAL_SWING_REQUIRE_FULL_WINDOW": _get_bool("INITIAL_SWING_REQUIRE_FULL_WINDOW", True),
+"USDT_USDC_RATIO_MIN": _get_float("USDT_USDC_RATIO_MIN", 0.95),
+"USDT_USDC_RATIO_MAX": _get_float("USDT_USDC_RATIO_MAX", 1.05),
 }
 
 
@@ -518,7 +534,9 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
         fmt_qty_fn=fmt_qty,
         fmt_price_fn=fmt_price,
         oid_int_fn=_oid_int,
-        trail_desired_stop_fn=_trail_desired_stop_from_agg,
+        trail_stop_quote_fn=_trail_stop_quote_from_agg,
+        set_trail_confirmation_reference_fn=_set_trail_confirmation_reference_from_agg,
+        store_trail_quote_audit_fn=trail.store_quote_audit,
         record_trade_execution_snapshot_fn=_record_trade_execution_snapshot,
         send_trade_closed_summary_fn=_send_trade_closed_summary,
         build_live_close_last_closed_fn=position_finalization.build_live_close_last_closed,
@@ -529,20 +547,46 @@ def manage_v15_position(symbol: str, st: Dict[str, Any]) -> None:
 
 # ===================== State =====================
 
+def select_volume_confirmed_initial_stop(df, signal_index, side, entry_usdt):
+    return entry_math.select_volume_confirmed_initial_stop(df, signal_index, side, entry_usdt)
+
+
+def _set_trail_confirmation_reference_from_agg(pos: dict) -> None:
+    trail.set_confirmation_reference_from_agg(pos, load_df_sorted_fn=load_df_sorted, latest_price_fn=latest_price)
+
+
 def _trail_desired_stop_from_agg(pos: dict) -> Optional[float]:
-    """
-    Compute desired trailing stop based on last swing from aggregated.csv v2:
-    LONG uses LowPrice swings; SHORT uses HiPrice swings.
-    trail_wait_confirm uses ClosePrice (bar close) for confirmation only.
-    LONG: stop = swing_low - buffer
-    SHORT: stop = swing_high + buffer
-    """
+    if "trail_ref_price_usdt" in pos:
+        pos["trail_ref_price"] = pos.get("trail_ref_price_usdt")
     return trail._trail_desired_stop_from_agg(pos)
 
+
+def get_mid_price(symbol: str) -> float:
+    return float(binance_api.get_mid_price(symbol))
+
+
+def get_usdt_usdc_quote_snapshot() -> UsdtUsdcQuoteSnapshot:
+    return quote_sync.get_usdt_usdc_quote_snapshot(env=ENV, get_mid_price_fn=get_mid_price, iso_utc_fn=iso_utc)
+
+
+def convert_stop_usdt_to_usdc(stop_usdt: float, side: str, ratio: float) -> float:
+    return quote_sync.convert_stop_usdt_to_usdc(stop_usdt, side, ratio, env=ENV)
+
+
+def _validate_stop_against_usdc_mid(side: str, stop_usdc: float, mid_usdc: float) -> None:
+    quote_sync.validate_stop_against_usdc_mid(side, stop_usdc, mid_usdc, env=ENV)
+
+
+def _trail_stop_quote_from_agg(pos: dict) -> Optional[TrailingStopQuote]:
+    return trail.stop_quote_from_agg(pos, source_stop_fn=_trail_desired_stop_from_agg,
+                                    quote_snapshot_fn=get_usdt_usdc_quote_snapshot,
+                                    convert_stop_fn=convert_stop_usdt_to_usdc,
+                                    validate_stop_fn=_validate_stop_against_usdc_mid)
+
+
 def get_usdt_usdc_k() -> float:
-    mid_usdt = binance_api.get_mid_price("BTCUSDT")
-    mid_usdc = binance_api.get_mid_price("BTCUSDC")
-    return mid_usdc / mid_usdt
+    return get_usdt_usdc_quote_snapshot().ratio
+
 
 def sync_from_binance(st: Dict[str, Any]) -> None:
     reconciliation.sync_from_binance(
@@ -572,6 +616,12 @@ def handle_open_filled_exits_retry(st: dict) -> None:
         clear_position_slot_fn=_clear_position_slot,
         now_fn=_now_s,
         time_fn=time.time,
+        get_order_by_client_id_fn=binance_api.get_order_by_client_id,
+        log_event_fn=log_event,
+        send_webhook_fn=send_webhook,
+        round_qty_fn=round_qty,
+        iso_utc_fn=iso_utc,
+        oid_int_fn=_oid_int,
     )
 
 def main() -> None:
@@ -589,6 +639,9 @@ def main() -> None:
         _shutdown_ran = True
         with suppress(Exception):
             st2 = load_state()
+            if "failsafe_flatten" in (st2.get("position") or {}):
+                log_event("FAILSAFE_FLATTEN_SHUTDOWN_PENDING")
+                return
             margin_guard.on_shutdown(st2)
 
     with suppress(Exception):
@@ -653,7 +706,7 @@ def main() -> None:
                 invariants.run(st)
             next_invar_s = loop_now_s + float(ENV.get("INVAR_EVERY_SEC") or 20)
         posi = st.get("position") or {}
-        if posi and posi.get("mode") == "live" and str(posi.get("status", "")).upper() in (
+        if "failsafe_flatten" not in posi and posi and posi.get("mode") == "live" and str(posi.get("status", "")).upper() in (
             "ENTRY_TIMEOUT_CANCELED",
             "ENTRY_TIMEOUT",
             "ENTRY_CANCELED",
@@ -739,7 +792,7 @@ def main() -> None:
 
         # 2) Live V1.5 management (TP1 -> SL to BE) — throttled
         pos_live = st.get("position") or {}
-        if pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED"):
+        if "failsafe_flatten" in pos_live or (pos_live.get("mode") == "live" and pos_live.get("status") in ("OPEN", "OPEN_FILLED")):
             now_s = _now_s()
             if now_s - last_manage_s >= float(ENV["MANAGE_EVERY_SEC"]):
                 last_manage_s = now_s
@@ -776,9 +829,10 @@ def main() -> None:
                 load_df_sorted_fn=load_df_sorted,
                 locate_index_by_ts_fn=locate_index_by_ts,
                 build_entry_price_fn=build_entry_price,
-                swing_stop_far_fn=swing_stop_far,
+                select_initial_stop_fn=select_volume_confirmed_initial_stop,
                 compute_tps_fn=compute_tps,
-                get_usdt_usdc_k_fn=get_usdt_usdc_k,
+                get_quote_snapshot_fn=get_usdt_usdc_quote_snapshot,
+                validate_stop_against_mid_fn=_validate_stop_against_usdc_mid,
                 floor_to_step_fn=floor_to_step,
                 ceil_to_step_fn=ceil_to_step,
                 notional_to_qty_fn=notional_to_qty,

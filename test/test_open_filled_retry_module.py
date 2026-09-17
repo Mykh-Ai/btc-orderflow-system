@@ -72,6 +72,8 @@ class TestExtractedModulePurity(unittest.TestCase):
             "FAILSAFE_EXITS_MAX_TRIES": 1,
             "FAILSAFE_EXITS_GRACE_SEC": 0,
             "SYMBOL": "BTCUSDC",
+            "TRADE_MODE": "spot",
+            "LIVE_STATUS_POLL_EVERY": 10,
         }
         pos = _base_open_filled_pos()
         st = {"position": pos}
@@ -100,18 +102,28 @@ class TestExtractedModulePurity(unittest.TestCase):
             clear_position_slot_fn=clear_position_slot_fn,
             now_fn=lambda: 1000.0,
             time_fn=lambda: 1234.0,
+            get_order_by_client_id_fn=lambda *args: {},
+            log_event_fn=lambda *args, **kwargs: None,
+            send_webhook_fn=lambda payload: None,
+            round_qty_fn=lambda qty: qty,
+            iso_utc_fn=lambda: "2026-01-01T00:00:00Z",
+            oid_int_fn=lambda value: int(value) if value else None,
         )
 
-        self.assertEqual([call[0] for call in calls], ["save", "ensure", "flatten", "clear"])
-        self.assertEqual(calls[2][1], ("BTCUSDC", "LONG", 0.25))
-        self.assertEqual(calls[2][2], {"client_id": "EX_FLAT_1234"})
-        self.assertEqual(calls[3][1], (st, "FAILSAFE_FLATTEN"))
-        self.assertEqual(calls[3][2], {"tries": 1})
+        self.assertEqual([call[0] for call in calls], ["save", "ensure", "save", "flatten", "save", "save"])
+        self.assertEqual(calls[3][1], ("BTCUSDC", "LONG", 0.25))
+        self.assertEqual(calls[3][2], {"client_id": pos["failsafe_flatten"]["client_id"]})
+        self.assertIs(st["position"], pos)
+        self.assertEqual(pos["failsafe_flatten"]["status"], "UNCONFIRMED")
 
 
 class TestExecutorWrapperCompatibility(unittest.TestCase):
     def setUp(self):
         self.env_snapshot = deepcopy(executor.ENV)
+        for target, name, kwargs in ((executor.binance_api, "get_order_by_client_id", {"return_value": {}}), (executor, "log_event", {}), (executor, "send_webhook", {})):
+            patcher = patch.object(target, name, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         executor.ENV.clear()
@@ -149,29 +161,19 @@ class TestExecutorWrapperCompatibility(unittest.TestCase):
         flatten_market.assert_not_called()
         clear_position_slot.assert_not_called()
 
-    def test_wrapper_uses_patched_flatten_market_and_clear_position_slot(self):
-        self._set_retry_env(
-            retry_every=15,
-            failsafe=True,
-            max_tries=1,
-            grace=0,
-            symbol="ETHUSDC",
-        )
+    def test_wrapper_uses_live_flatten_and_lookup_then_confirmed_clear(self):
+        self._set_retry_env(failsafe=True, max_tries=1, grace=0, symbol="ETHUSDC")
         pos = _base_open_filled_pos(side="SHORT", qty="0.75")
         st = {"position": pos}
-
-        with patch.object(executor, "save_state") as save_state, \
-             patch.object(executor.exits_flow, "ensure_exits", return_value=False) as ensure_exits, \
-             patch.object(executor.binance_api, "flatten_market") as flatten_market, \
-             patch.object(executor, "_clear_position_slot") as clear_position_slot, \
-             patch.object(executor, "_now_s", return_value=1000.0), \
-             patch.object(executor.time, "time", return_value=1234.0):
+        def lookup(symbol, client_id):
+            return {"symbol": symbol, "clientOrderId": client_id, "orderId": 42, "side": "BUY", "type": "MARKET", "origQty": ".75", "executedQty": ".75", "status": "FILLED"}
+        with patch.object(executor, "save_state") as save, patch.object(executor.exits_flow, "ensure_exits", return_value=False), patch.object(executor.binance_api, "flatten_market") as flatten, patch.object(executor.binance_api, "get_order_by_client_id", side_effect=lookup) as get, patch.object(executor, "_clear_position_slot") as clear, patch.object(executor, "_now_s", return_value=1000.0):
             executor.handle_open_filled_exits_retry(st)
-
-        save_state.assert_called_once_with(st)
-        ensure_exits.assert_called_once_with(st, pos, reason="retry", best_effort=True, attempt=1)
-        flatten_market.assert_called_once_with("ETHUSDC", "SHORT", 0.75, client_id="EX_FLAT_1234")
-        clear_position_slot.assert_called_once_with(st, "FAILSAFE_FLATTEN", tries=1)
+        cid = pos["failsafe_flatten"]["client_id"]
+        flatten.assert_called_once_with("ETHUSDC", "SHORT", .75, client_id=cid)
+        get.assert_called_once_with("ETHUSDC", cid)
+        self.assertGreaterEqual(save.call_count, 3)
+        clear.assert_called_once_with(st, "FAILSAFE_FLATTEN", tries=1, flatten_confirmation=pos["failsafe_flatten"])
 
 
 if __name__ == "__main__":

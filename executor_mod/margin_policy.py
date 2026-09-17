@@ -338,6 +338,64 @@ def repay_if_any(st: Dict[str, Any], api: Any, symbol: str) -> None:
             margin["borrowed_by_trade"].pop(trade_key, None)
 
 
+def _validated_cleanup_snapshot(
+    account: Any, assets: list[str], symbol: str, is_isolated: bool,
+) -> Dict[str, tuple[Decimal, Decimal, Decimal, Decimal]]:
+    """Require explicit finite balances for the entire configured cleanup scope.
+
+    Deliberately separate from the permissive legacy borrow/repay parsers.
+    Missing evidence must not become a zero balance or a clean certificate.
+    """
+    if not assets:
+        raise ValueError("empty cleanup asset scope")
+    if not isinstance(account, dict):
+        raise ValueError("account response must be an object")
+    if is_isolated:
+        pairs = account.get("assets")
+        if not isinstance(pairs, list) or any(not isinstance(p, dict) for p in pairs):
+            raise ValueError("isolated account assets must be a list of pairs")
+        matches = [p for p in pairs if p.get("symbol") == symbol]
+        if len(matches) != 1:
+            raise ValueError("missing or duplicate isolated pair")
+        pair = matches[0]
+        rows = [pair.get("baseAsset"), pair.get("quoteAsset")]
+        if any(not isinstance(r, dict) or not isinstance(r.get("asset"), str) for r in rows):
+            raise ValueError("incomplete isolated pair assets")
+        if rows[0]["asset"] + rows[1]["asset"] != symbol:
+            raise ValueError("isolated assets do not match requested symbol")
+    else:
+        rows = account.get("userAssets")
+        if not isinstance(rows, list):
+            raise ValueError("cross account userAssets must be a list")
+    indexed = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("asset"), str) or not row["asset"]:
+            raise ValueError("invalid account asset row")
+        name = row["asset"]
+        if name in indexed:
+            raise ValueError(f"duplicate account asset: {name}")
+        indexed[name] = row
+    validated = {}
+    for asset in assets:
+        if asset not in indexed:
+            raise ValueError(f"missing account asset: {asset}")
+        values = []
+        for field in ("borrowed", "interest", "free"):
+            value = _to_decimal(indexed[asset].get(field))
+            if value is None or not value.is_finite() or value < 0:
+                raise ValueError(f"invalid or missing {asset}.{field}")
+            values.append(value)
+        borrowed, interest, free = values
+        try:
+            liability = borrowed + interest
+        except ArithmeticError as exc:
+            raise ValueError(f"invalid {asset} liability sum") from exc
+        if not liability.is_finite():
+            raise ValueError(f"invalid {asset} liability sum")
+        validated[asset] = (borrowed, interest, liability, free)
+    return validated
+
+
 def cleanup_post_close_margin_debt(
     st: Dict[str, Any],
     api: Any,
@@ -361,19 +419,27 @@ def cleanup_post_close_margin_debt(
     env = _get_env(api)
     if ttl_sec is None:
         ttl_sec = float(env.get("MARGIN_POST_CLOSE_CLEANUP_TTL_SEC", 300) or 300)
+    assets = _cleanup_assets_from_env(api, allowlist)
+    is_isolated = _is_true(margin.get("is_isolated", env.get("MARGIN_ISOLATED")))
 
     prev = by_trade.get(tk)
     if isinstance(prev, dict):
         prev_status = str(prev.get("cleanup_status") or "")
-        prev_started = _to_decimal(prev.get("started_at_s")) or Decimal("0")
-        age = Decimal(str(now_s)) - prev_started
-        if prev_status == "clean":
+        same_scope = (prev.get("symbol") == symbol and prev.get("is_isolated") == is_isolated
+                      and prev.get("allowlist") == assets)
+        # Legacy 'clean' may have been inferred from absent/malformed data.
+        # Only reuse a certificate from validated pre/post snapshots in this scope.
+        if (prev_status == "clean" and same_scope and prev.get("version") == 2
+                and prev.get("validated_phases") == ["pre", "post"]):
             result = dict(prev)
             result["dedup"] = True
             result["cleanup_status"] = "skipped_clean"
             cleanup["last_result"] = result
             return result
-        if ttl_sec > 0 and age >= 0 and age < Decimal(str(ttl_sec)):
+        prev_started = _to_decimal(prev.get("started_at_s"))
+        age = Decimal(str(now_s)) - prev_started if prev_started is not None and prev_started.is_finite() else None
+        if (prev_status != "clean" and same_scope and ttl_sec > 0
+                and age is not None and age >= 0 and age < Decimal(str(ttl_sec))):
             result = dict(prev)
             result["dedup"] = True
             result["cleanup_status"] = "skipped_recent"
@@ -381,16 +447,15 @@ def cleanup_post_close_margin_debt(
             cleanup["last_result"] = result
             return result
 
-    assets = _cleanup_assets_from_env(api, allowlist)
-    is_isolated = _is_true(margin.get("is_isolated", env.get("MARGIN_ISOLATED")))
     result: Dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "trade_key": tk,
         "symbol": symbol,
         "is_isolated": is_isolated,
         "allowlist": assets,
         "started_at_s": now_s,
-        "checked_assets": list(assets),
+        "checked_assets": [],
+        "validated_phases": [],
         "attempted_assets": [],
         "repaid_amounts": {},
         "failed_assets": [],
@@ -408,11 +473,17 @@ def cleanup_post_close_margin_debt(
         result["binance_errors"].append({"stage": "pre_margin_account", "error": str(exc)})
         return result
 
+    try:
+        pre_snapshot = _validated_cleanup_snapshot(account, assets, symbol, is_isolated)
+    except ValueError as exc:
+        result["cleanup_status"] = "error"
+        result["binance_errors"].append({"stage": "pre_account_validation", "error": str(exc)})
+        return result
+    result["checked_assets"] = list(assets)
+    result["validated_phases"].append("pre")
     pre_debts = []
     for asset in assets:
-        snap = _asset_snapshot(account, asset)
-        borrowed, interest, liability = _asset_liability(snap)
-        free = _asset_free(snap)
+        borrowed, interest, liability, free = pre_snapshot[asset]
         if liability <= 0:
             continue
         repayable = min(liability, free)
@@ -453,11 +524,16 @@ def cleanup_post_close_margin_debt(
         result["binance_errors"].append({"stage": "post_margin_account", "error": str(exc)})
         return result
 
+    try:
+        post_snapshot = _validated_cleanup_snapshot(post_account, assets, symbol, is_isolated)
+    except ValueError as exc:
+        result["cleanup_status"] = "error"
+        result["binance_errors"].append({"stage": "post_account_validation", "error": str(exc)})
+        return result
+    result["validated_phases"].append("post")
     residual = []
     for asset in assets:
-        snap = _asset_snapshot(post_account, asset)
-        borrowed, interest, liability = _asset_liability(snap)
-        free = _asset_free(snap)
+        borrowed, interest, liability, free = post_snapshot[asset]
         if liability > 0:
             residual.append(
                 {

@@ -3,6 +3,7 @@
 """Live position manager for V1.5 exit lifecycle."""
 from __future__ import annotations
 
+from executor_mod.quote_sync import QuoteSyncError
 from contextlib import suppress
 from typing import Any, Callable, Dict
 
@@ -23,7 +24,9 @@ def manage_v15_position(
     fmt_qty_fn: Callable[[Any], str],
     fmt_price_fn: Callable[[Any], str],
     oid_int_fn: Callable[[Any], Any],
-    trail_desired_stop_fn: Callable[[dict], Any],
+    trail_stop_quote_fn: Callable[[dict], Any],
+    set_trail_confirmation_reference_fn: Callable[[dict], None],
+    store_trail_quote_audit_fn: Callable[..., None],
     record_trade_execution_snapshot_fn: Callable[..., Any],
     send_trade_closed_summary_fn: Callable[..., None],
     build_live_close_last_closed_fn: Callable[..., Dict[str, Any]],
@@ -38,6 +41,8 @@ def manage_v15_position(
       - Verifies missing orders via order status (FILLED) before acting
     """
     pos = st.get("position") or {}
+    if "failsafe_flatten" in pos:
+        return  # confirmation/recovery owns this position; do not create exits
     if pos.get("mode") != "live" or pos.get("status") not in ("OPEN", "OPEN_FILLED"):
         return
     if not pos.get("orders") or not pos.get("prices"):
@@ -206,9 +211,19 @@ def manage_v15_position(
                 # replace current SL with trailing SL for remaining qty (qty3, or qty1+qty3 if TP2 filled first)
                 sl_now = int((pos.get("orders") or {}).get("sl") or 0)
 
-               # Primary: trailing stop from aggregated.csv swings (low API usage).
-                desired = trail_desired_stop_fn(pos)
-                if desired is None:
+               # Primary: calculate the swing in BTCUSDT, then synchronize it to
+                # the BTCUSDC execution contour before any cancel/replace action.
+                trail_quote = None
+                trail_sync_failed = False
+                try:
+                    trail_quote = trail_stop_quote_fn(pos)
+                except QuoteSyncError as exc:
+                    trail_sync_failed = True
+                    log_event_fn("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+                    with suppress(Exception):
+                        send_webhook_fn({"event": "TRAIL_USDC_SYNC_ERROR", "error": str(exc), "mode": "live", "symbol": symbol})
+                desired = trail_quote.stop_usdc if trail_quote is not None else None
+                if desired is None and not trail_sync_failed:
                     # Fallback (only if CSV unavailable): public mid-price +/- buffer
                     mid = 0.0
                     with suppress(Exception):
@@ -254,6 +269,7 @@ def manage_v15_position(
                             pos["trail_pending_cancel_sl"] = sl_now
                             pos["trail_active"] = True
                             pos["trail_qty"] = open_qty
+                            set_trail_confirmation_reference_fn(pos)
                             # Force quick retry via trailing maintenance (still rate-limited).
                             pos["trail_last_update_s"] = 0.0
                             st["position"] = pos
@@ -306,6 +322,7 @@ def manage_v15_position(
                         # Keep trail flags so we retry on next manage tick
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        set_trail_confirmation_reference_fn(pos)
                         pos["trail_last_update_s"] = now_s
                         st["position"] = pos
                         save_state_fn(st)
@@ -314,6 +331,9 @@ def manage_v15_position(
                         pos["orders"]["sl"] = oid_int_fn(sl_new.get("orderId"))
                         pos["trail_active"] = True
                         pos["trail_qty"] = open_qty
+                        set_trail_confirmation_reference_fn(pos)
+                        if trail_quote is not None:
+                            store_trail_quote_audit_fn(pos, trail_quote)
                         pos["trail_sl_price"] = float(fmt_price_fn(stop_p))
                         pos["trail_last_update_s"] = now_s
                         pos["status"] = "OPEN"
@@ -326,6 +346,7 @@ def manage_v15_position(
                 # No price right now -> mark trailing active and retry next tick
                 pos["trail_active"] = True
                 pos["trail_qty"] = open_qty
+                set_trail_confirmation_reference_fn(pos)
                 pos["trail_last_update_s"] = now_s
                 st["position"] = pos
                 save_state_fn(st)
@@ -371,9 +392,23 @@ def manage_v15_position(
         last_u = float(pos.get("trail_last_update_s") or 0.0)
         every = float(env.get("TRAIL_UPDATE_EVERY_SEC") or 20)
         if now_s - last_u >= every:
-            # Primary: aggregated.csv swings (no Binance polling).
-            desired = trail_desired_stop_fn(pos)
-            if desired is None and str(env.get("TRAIL_SOURCE") or "AGG").upper() != "AGG":
+            # Primary: calculate in BTCUSDT and convert with a fresh same-cycle
+            # BTCUSDC/BTCUSDT ratio. A sync error keeps the existing SL intact.
+            trail_quote = None
+            trail_sync_failed = False
+            try:
+                trail_quote = trail_stop_quote_fn(pos)
+            except QuoteSyncError as exc:
+                trail_sync_failed = True
+                log_event_fn("TRAIL_USDC_SYNC_ERROR", error=str(exc), mode="live")
+                with suppress(Exception):
+                    send_webhook_fn({"event": "TRAIL_USDC_SYNC_ERROR", "error": str(exc), "mode": "live", "symbol": symbol})
+            desired = trail_quote.stop_usdc if trail_quote is not None else None
+            if (
+                desired is None
+                and not trail_sync_failed
+                and str(env.get("TRAIL_SOURCE") or "AGG").upper() != "AGG"
+            ):
                 # Optional fallback if user forces BINANCE source and CSV is unavailable.
                 mid = 0.0
                 with suppress(Exception):
@@ -465,6 +500,8 @@ def manage_v15_position(
                         else:
                             pos["orders"]["sl"] = oid_int_fn(sl_new.get("orderId"))
                             pos["trail_sl_price"] = float(sl_stop_s)
+                            if trail_quote is not None:
+                                store_trail_quote_audit_fn(pos, trail_quote)
                             pos["trail_last_update_s"] = now_s
                             st["position"] = pos
                             save_state_fn(st)
@@ -515,6 +552,8 @@ def manage_v15_position(
                             else:
                                 pos["orders"]["sl"] = oid_int_fn(sl_new.get("orderId"))
                                 pos["trail_sl_price"] = float(sl_stop_s)
+                                if trail_quote is not None:
+                                    store_trail_quote_audit_fn(pos, trail_quote)
                                 pos["trail_last_update_s"] = now_s
                                 st["position"] = pos
                                 save_state_fn(st)

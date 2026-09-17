@@ -282,7 +282,8 @@ class TestSyncP5NegativePaths(SyncHarness, unittest.TestCase):
         self.assertEqual(st["last_closed"], {"trade_key": "STALE"})
         self.assertEqual(events[0][0], "POSITION_CLEAR_CHECK_FAILED")
         self.assertEqual(webhooks, [])
-        self.assertEqual(saves, [])
+        self.assertEqual(len(saves), 1)
+        self.assertIsNotNone(saves[0]["position"])
 
     def test_p5_does_not_clear_if_exchange_position_exists_true(self):
         st = self._p5_st()
@@ -315,4 +316,5 @@ class TestSyncP5NegativePaths(SyncHarness, unittest.TestCase):
         self.assertEqual(events[1][0], "SYNC_KEEP_NO_TAGGED_ENTRY_NOT_CANCELED")
         self.assertEqual(events[1][1]["status"], "UNKNOWN")
         self.assertEqual(webhooks, [])
-        self.assertEqual(saves, [])
+        self.assertEqual(len(saves), 1)
+        self.assertIsNotNone(saves[0]["position"])

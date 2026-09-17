@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from executor_mod.order_utils import validated_executed_qty
 from contextlib import suppress
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
@@ -130,6 +131,8 @@ def sync_from_binance(
     build_sync_last_closed_fn: Callable[..., Dict[str, Any]],
 ) -> None:
     """Best-effort reconciliation of executor state with Binance."""
+    if "failsafe_flatten" in (st.get("position") or {}):
+        return
     if str(env.get("TRADE_MODE", "spot")).strip().lower() != "margin":
         return
 
@@ -159,6 +162,7 @@ def sync_from_binance(
                     if now_s - last_ts < throttle_sec:
                         return False
                     last_emit[event_key] = now_s
+                    save_state_fn(st)
                     return True
 
                 try:
@@ -207,8 +211,15 @@ def sync_from_binance(
             with suppress(Exception):
                 od = binance_api.check_order_status(env["SYMBOL"], oid)
             st_o = str((od or {}).get("status", "")).upper()
-            exq = float((od or {}).get("executedQty") or 0.0)
-            if st_o not in ("CANCELED", "REJECTED", "EXPIRED") or exq > 0.0:
+            if st_o not in ("CANCELED", "REJECTED", "EXPIRED"):
+                log_event_fn("SYNC_KEEP_NO_TAGGED_ENTRY_NOT_CANCELED", prev_status=pos.get("status"), order_id=oid, status=st_o or "UNKNOWN", executedQty=0.0)
+                return
+            try:
+                exq = float(validated_executed_qty(od))
+            except (TypeError, ValueError, OverflowError):
+                log_event_fn("SYNC_KEEP_ENTRY_QTY_UNKNOWN", order_id=oid, status=st_o or "UNKNOWN")
+                return
+            if exq > 0.0:
                 log_event_fn("SYNC_KEEP_NO_TAGGED_ENTRY_NOT_CANCELED",
                              prev_status=pos.get("status"), order_id=oid,
                              status=st_o or "UNKNOWN", executedQty=exq)
