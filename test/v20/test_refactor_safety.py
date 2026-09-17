@@ -25,6 +25,19 @@ def frame(end="2026-01-02T00:00:00Z"):
     })
 
 
+def raw_frame(end="2026-01-02T00:00:00Z"):
+    """Existing integration fixture now enters through the real raw CSV contract."""
+    df = frame(end)
+    df["Trades"] = 10
+    df["TotalQty"] = df["volume_1m"]
+    df["AvgSize"] = df["TotalQty"] / 10
+    df["BuyQty"] = df["TotalQty"] / 2
+    df["SellQty"] = df["TotalQty"] / 2
+    df["AvgPrice"] = df["ClosePrice"]
+    return df[["Timestamp", "Trades", "TotalQty", "AvgSize", "BuyQty", "SellQty",
+               "AvgPrice", "ClosePrice", "HiPrice", "LowPrice"]]
+
+
 @pytest.fixture
 def math_env(monkeypatch):
     env = deepcopy(ex.ENV)
@@ -152,7 +165,7 @@ def prepare_entry(h):
     h.env.update(INITIAL_SWING_LOOKBACK=7, INITIAL_SWING_LR=1,
                  INITIAL_SWING_BUFFER_USD=.05, INITIAL_SWING_MAX_DISTANCE_USD=10.,
                  TICK_SIZE=Decimal("0.1"))
-    frame(ex.iso_utc()).to_csv(h.env["AGG_CSV"], index=False)
+    raw_frame(ex.iso_utc()).to_csv(h.env["AGG_CSV"], index=False)
     h.api.open_orders.side_effect = lambda *args: []
     h.api.place_spot_limit.side_effect = lambda *args, **kwargs: {"orderId": 123}
     h.api.get_mid_price.side_effect = lambda symbol: 101. if symbol == "BTCUSDC" else 100.
@@ -185,7 +198,7 @@ def test_real_entry_pipeline_persists_stop_quote_and_open_text(executor_harness,
     h.api.place_spot_limit.assert_called_once()
 
 
-@pytest.mark.parametrize("issue,reason", [("missing_minute", "MISSING_EXACT_SIGNAL_MINUTE"), ("invalid_ts", "MISSING_EXACT_SIGNAL_MINUTE"), ("quote_ratio", "USDT_USDC_SYNC_FAILED"), ("quote_lookup", "USDT_USDC_SYNC_FAILED"), ("invalid_sl", "INITIAL_STOP_INVALID_ON_USDC"), ("missing_schema", "INITIAL_SWING_SCHEMA_MISSING")])
+@pytest.mark.parametrize("issue,reason", [("missing_minute", "MISSING_EXACT_SIGNAL_MINUTE"), ("invalid_ts", "MISSING_EXACT_SIGNAL_MINUTE"), ("quote_ratio", "USDT_USDC_SYNC_FAILED"), ("quote_lookup", "USDT_USDC_SYNC_FAILED"), ("invalid_sl", "INITIAL_STOP_INVALID_ON_USDC"), ("invalid_volume", "NO_CONFIRMED_VOLUME_SWING")])
 def test_real_entry_skips_unsafe_context_before_order(executor_harness, issue, reason):
     h = executor_harness
     event = prepare_entry(h)
@@ -201,8 +214,10 @@ def test_real_entry_skips_unsafe_context_before_order(executor_harness, issue, r
         h.api.get_mid_price.side_effect = TimeoutError("quote unavailable")
     elif issue == "invalid_sl":
         h.api.get_mid_price.side_effect = lambda symbol: 80.
-    elif issue == "missing_schema":
-        frame(ex.iso_utc()).drop(columns="volume_1m").to_csv(h.env["AGG_CSV"], index=False)
+    elif issue == "invalid_volume":
+        invalid = raw_frame(ex.iso_utc())
+        invalid["TotalQty"] = "bad"
+        invalid.to_csv(h.env["AGG_CSV"], index=False)
     result = h.run_ticks({"position": None}, events=[event])
     assert result["position"] is None
     assert any(t[:2] == ("log", "SKIP_OPEN") and t[2]["reason"] == reason for t in h.trace)
@@ -228,7 +243,7 @@ def test_trailing_sync_failure_keeps_protective_sl_on_restart(executor_harness, 
     else:
         h.api.get_mid_price.side_effect = lambda symbol: 90.
     # Reference can be recorded from the USDT feed; no source/execution mixing.
-    frame(ex.iso_utc()).to_csv(h.env["AGG_CSV"], index=False)
+    raw_frame(ex.iso_utc()).to_csv(h.env["AGG_CSV"], index=False)
     result = h.run_ticks({"position": position})
     assert result["position"]["orders"]["sl"] == 333
     assert result["position"]["trail_sl_price"] == 90.
