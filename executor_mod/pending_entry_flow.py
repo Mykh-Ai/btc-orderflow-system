@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from executor_mod.order_utils import validated_executed_qty
 from contextlib import suppress
-from typing import Any, Callable, Dict
+import math
+from typing import Any, Callable, Dict, Optional
 
 
 def handle_pending_position(
@@ -40,6 +41,43 @@ def handle_pending_position(
     if posi.get("mode") != "live" or posi.get("status") != "PENDING":
         return False
 
+    def _entry_executed_qty(order: Dict[str, Any], phase: str) -> Optional[float]:
+        status = str(order.get("status", "")).upper()
+        if status not in ("CANCELED", "EXPIRED", "REJECTED"):
+            return float(order.get("executedQty") or 0.0)
+        try:
+            return float(validated_executed_qty(order))
+        except ValueError as exc:
+            # Terminal status is not proof of zero exposure. Reuse the existing
+            # persisted reconciliation alert map, scoped to this owned order.
+            event = "ENTRY_TERMINAL_QTY_UNKNOWN"
+            key = f"entry_terminal_qty_unknown:{posi.get('order_id')}"
+            last_emit = posi.setdefault("recon", {}).setdefault("last_emit", {})
+            throttle_sec = int(env.get("RECON_THROTTLE_SEC") or env.get("INVAR_THROTTLE_SEC", 600) or 600)
+            now = now_fn()
+            try:
+                last_ts = float(last_emit[key])
+            except (KeyError, TypeError, ValueError):
+                last_ts = None
+            emit = last_ts is None or not math.isfinite(last_ts) or now - last_ts >= throttle_sec
+            fields = {
+                "severity": "CRITICAL", "mode": "live", "symbol": env["SYMBOL"],
+                "order_id": posi.get("order_id"), "status": status, "phase": phase,
+                "trade_key": posi.get("trade_key") or posi.get("client_id"),
+                "error": str(exc), "executedQty_present": "executedQty" in order,
+                "alert_suppressed": not emit, "throttle_sec": throttle_sec,
+            }
+            log_event_fn(event, **fields)
+            if emit:
+                last_emit[key] = now
+            st["position"] = posi
+            # Persist ownership and alert reservation before calling the webhook.
+            # Repeated polls/reloads do not slide the original throttle window.
+            save_state_fn(st)
+            if emit:
+                send_webhook_fn({"event": event, **fields})
+            return None
+
     try:
         last_poll = float(posi.get("last_poll_s", 0.0))
         now_s = now_fn()
@@ -57,7 +95,9 @@ def handle_pending_position(
                 if terminal_entry:
                     # Terminal order status alone does not prove zero exposure.
                     # Unknown quantity stays PENDING for another poll.
-                    terminal_exq = float(validated_executed_qty(od))
+                    terminal_exq = _entry_executed_qty(od, "poll")
+                    if terminal_exq is None:
+                        return False
                 if stt == "FILLED" or (terminal_entry and terminal_exq > 0.0):
                     # Preserve executed exposure before hooks or exit placement.
                     posi["status"] = "OPEN_FILLED"
@@ -109,11 +149,9 @@ def handle_pending_position(
             if oid and posi.get("status") == "PENDING":
                 # Plan B: timeout -> cancel LIMIT and fall back to MARKET (unless ENTRY_MODE=LIMIT_ONLY).
                 od_t = binance_api.check_order_status(env["SYMBOL"], oid)
-                exq_t = (
-                    float(validated_executed_qty(od_t))
-                    if str(od_t.get("status", "")).upper() in ("CANCELED", "EXPIRED", "REJECTED")
-                    else float(od_t.get("executedQty") or 0.0)
-                )
+                exq_t = _entry_executed_qty(od_t, "timeout")
+                if exq_t is None:
+                    return False
 
                 def _try_place_exits_now() -> None:
                     # Best-effort immediate exits placement (reduces naked exposure window).
@@ -150,11 +188,9 @@ def handle_pending_position(
                     with suppress(Exception):
                         od_after = binance_api.check_order_status(env["SYMBOL"], oid)
                     if od_after:
-                        exq_after = (
-                            float(validated_executed_qty(od_after))
-                            if str(od_after.get("status", "")).upper() in ("CANCELED", "EXPIRED", "REJECTED")
-                            else float(od_after.get("executedQty") or 0.0)
-                        )
+                        exq_after = _entry_executed_qty(od_after, "after_cancel")
+                        if exq_after is None:
+                            return False
                         st_after = str(od_after.get("status", "")).upper()
                         if st_after == "FILLED" or exq_after > 0.0:
                             posi["status"] = "OPEN_FILLED"
