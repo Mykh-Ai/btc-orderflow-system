@@ -27,7 +27,11 @@ class TestTradeOpenSummary(unittest.TestCase):
         self.assertEqual(payload["tp2_r"], 2.0)
         self.assertIn("Stop-loss: 94000", payload["telegram_text"])
         self.assertIn("R (entry to SL): 1000 (1.05%)", payload["telegram_text"])
-        self.assertIn("Take profit 2: 97000 (2.00R)", payload["telegram_text"])
+        self.assertIn("Take profit 2: 97000", payload["telegram_text"])
+        for key in ("telegram_text", "message", "text"):
+            self.assertNotRegex(payload[key], r"Take profit [12]:.*[0-9]R")
+        self.assertIn("Entry: 95000", payload["text"])
+        self.assertIn("Take profit 1: 96000", payload["text"])
         self.assertEqual(payload["telegram_text"], payload["message"])
         self.assertEqual(payload["telegram_text"], payload["text"])
 

@@ -57,7 +57,7 @@ def has_open_position(st: Dict[str, Any]) -> bool:
     pos = st.get("position")
     if not pos:
         return False
-    return pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED")
+    return "failsafe_flatten" in pos or pos.get("status") in ("PENDING", "OPEN", "OPEN_FILLED")
 
 
 def in_cooldown(st: Dict[str, Any]) -> bool:

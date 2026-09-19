@@ -17,4 +17,3 @@ class MonitorConfig:
     input_path: Path
     output_dir: Path
     run_timestamp: str
-

@@ -60,8 +60,6 @@ def build_trade_open_payload(
     tp2_text = _plain(tp2) or "not_available"
     risk_text = _plain(risk) or "not_available"
     risk_pct_text = f"{risk_percent:.2f}%" if risk_percent is not None else "not_available"
-    tp1_r_text = f"{tp1_r:.2f}R" if tp1_r is not None else "not_available"
-    tp2_r_text = f"{tp2_r:.2f}R" if tp2_r is not None else "not_available"
 
     side = str(position.get("side") or "")
     qty = position.get("qty")
@@ -74,8 +72,8 @@ def build_trade_open_payload(
         f"Entry: {entry_text}",
         f"Stop-loss: {sl_text}",
         f"R (entry to SL): {risk_text} ({risk_pct_text})",
-        f"Take profit 1: {tp1_text} ({tp1_r_text})",
-        f"Take profit 2: {tp2_text} ({tp2_r_text})",
+        f"Take profit 1: {tp1_text}",
+        f"Take profit 2: {tp2_text}",
     ]
     text = "\n".join(lines)
 

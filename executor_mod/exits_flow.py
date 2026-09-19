@@ -51,6 +51,8 @@ def ensure_exits(
 
     reason is used only to preserve original logging variations.
     """
+    if "failsafe_flatten" in pos:
+        return False
     try:
         validated = validate_exit_plan(ENV["SYMBOL"], pos["side"], float(pos["qty"]), pos["prices"])
         pos["qty"] = float(validated["qty_total_r"])

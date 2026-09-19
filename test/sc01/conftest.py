@@ -10,7 +10,7 @@ import pytest
 import requests
 
 import executor as ex
-from executor_mod import event_dedup, exits_flow, market_data, risk_math, state_store
+from executor_mod import entry_math, event_dedup, exits_flow, market_data, risk_math, state_store
 
 
 BASE_ENV = deepcopy(ex.ENV)
@@ -41,7 +41,7 @@ def executor_harness(monkeypatch, tmp_path):
         STRICT_SOURCE=True, DEDUP_PRICE_DECIMALS=2, MAX_PEAK_AGE_SEC=120,
         USDT_USDC_RATIO_MIN=.95, USDT_USDC_RATIO_MAX=1.05,
     )
-    for mod in (ex, risk_math, market_data, exits_flow):
+    for mod in (ex, entry_math, risk_math, market_data, exits_flow):
         monkeypatch.setattr(mod, "ENV", env)
     monkeypatch.setenv("STATE_FN", env["STATE_FN"])
     # Modules may read these environment paths directly; all remain temporary.
