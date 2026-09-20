@@ -55,7 +55,8 @@ def test_1440m_crosses_feed_files_with_exact_rows(tmp_path: Path) -> None:
     window = snapshot["windows"]["1440"]
     assert (window["expected_rows"], window["rows_used"], window["complete"]) == (1440, 1440, True)
     assert window["start_timestamp"] == "2026-09-13T02:13:00Z"
-    assert snapshot["quality"]["readiness"] == "READY"
+    assert snapshot["quality"]["readiness"] == "READY_WITH_PARTIAL_CONTEXT"
+    assert snapshot["quality"]["incomplete_broad_horizons"] == ["3d", "7d", "30d"]
     validate_canonical_monitor_snapshot(snapshot)
 
 
@@ -87,7 +88,8 @@ def test_recovered_data_has_explicit_readiness() -> None:
     feed["DataQuality"] = "RAW"
     feed.loc[100, "DataQuality"] = "RECOVERED_DEGRADED"
     snapshot = build_market_monitor_snapshot_v39a(feed, cutoff_ts=CUTOFF)
-    assert snapshot["quality"]["readiness"] == "READY_WITH_DEGRADED_DATA"
+    assert snapshot["quality"]["readiness"] == "READY_WITH_PARTIAL_CONTEXT"
+    assert snapshot["quality"]["recovered_degraded_present"] is True
     assert snapshot["windows"]["1440"]["recovered_degraded"] is True
 
 
@@ -177,6 +179,6 @@ def test_judge_boundary_uses_single_canonical_builder_and_file_hashes(tmp_path: 
         {"LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": str(tmp_path), "LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH": str(state_path)},
     )
     validate_canonical_monitor_snapshot(result)
-    assert result["quality"]["readiness"] == "READY"
+    assert result["quality"]["readiness"] == "READY_WITH_PARTIAL_CONTEXT"
     assert set(result["lineage"]["source_hashes"]) == {"2026-09-13.csv", "2026-09-14.csv"}
     assert state_path.exists()

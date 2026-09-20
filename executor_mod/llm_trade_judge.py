@@ -1355,6 +1355,9 @@ def maybe_record_llm_pretrade_judge(st: Dict[str, Any], pos: Dict[str, Any], tri
             result = append_stub_pretrade_verdict(journal_path, evidence_pack)
         elif mode == "openai":
             try:
+                # Durable pre-call boundary for future post-fill research.
+                # The current V2 prompt and PEAK-cutoff snapshot stay unchanged.
+                evidence_pack["judge_invocation_started_at_utc"] = _now_iso()
                 validated = None
                 errors: List[str] = []
                 validation_retries = max(0, _as_int(ENV.get("LLM_TRADE_JUDGE_MAX_RETRIES"), 1))

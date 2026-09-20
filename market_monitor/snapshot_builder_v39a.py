@@ -79,7 +79,12 @@ def build_market_monitor_snapshot_v39a(
         str(minutes): _window_metrics(current, minutes=minutes, cutoff=cutoff)
         for minutes in LOCAL_WINDOWS_MINUTES
     }
-    quality = _quality_summary(frame, current, context, windows, cutoff)
+    horizons = {f"{minutes}m": windows[str(minutes)] for minutes in LOCAL_WINDOWS_MINUTES}
+    horizons.update({
+        f"{days}d": _window_metrics(context, minutes=days * 1440, cutoff=cutoff)
+        for days in (3, 7, 30)
+    })
+    quality = _quality_summary(frame, current, context, windows, horizons, cutoff)
     current_price = float(current.iloc[-1]["ClosePrice"])
     complete = quality["readiness"] != "INCOMPLETE"
     if complete:
@@ -126,6 +131,7 @@ def build_market_monitor_snapshot_v39a(
             "closed_rows_only": True,
             "cutoff_inclusive": True,
             "windows_minutes": list(LOCAL_WINDOWS_MINUTES),
+            "horizon_aliases": {"1d": "1440m"},
         },
         "current": {
             "price": round(current_price, 8),
@@ -144,6 +150,7 @@ def build_market_monitor_snapshot_v39a(
             "poc": "unavailable_without_price_volume_distribution",
         },
         "windows": windows,
+        "horizons": horizons,
         "market_state": features["market_state"],
         "market_structure_state": features["market_structure_state"],
         "structure": structure,
@@ -235,12 +242,16 @@ def _window_metrics(frame: pd.DataFrame, *, minutes: int, cutoff: pd.Timestamp) 
             "metrics_valid": False,
             "status": "EMPTY",
             "missing_timestamps": [_format_ts(ts) for ts in expected[:10]],
+            "missing_timestamp_count": int(len(expected)),
             "duplicate_rows": 0,
             "data_quality_counts": {},
         }
     total_qty = float(window["TotalQty"].sum())
     open_price = float(window.iloc[0]["OpenPrice"])
     close_price = float(window.iloc[-1]["ClosePrice"])
+    high_price = float(window["HiPrice"].max())
+    low_price = float(window["LowPrice"].min())
+    vwap_approx = float(((((window["HiPrice"] + window["LowPrice"] + window["ClosePrice"]) / 3.0) * window["TotalQty"]).sum()) / total_qty) if total_qty > 0 else None
     return {
         "start_timestamp": _format_ts(start),
         "end_timestamp": _format_ts(cutoff),
@@ -250,21 +261,25 @@ def _window_metrics(frame: pd.DataFrame, *, minutes: int, cutoff: pd.Timestamp) 
         "metrics_valid": bool(complete),
         "status": status,
         "missing_timestamps": [_format_ts(ts) for ts in missing[:10]],
+        "missing_timestamp_count": int(len(missing)),
         "duplicate_rows": duplicate_count,
         "data_quality_counts": quality_counts,
         "recovered_degraded": bool(recovered),
         "open": round(open_price, 8),
         "close": round(close_price, 8),
-        "high": round(float(window["HiPrice"].max()), 8),
-        "low": round(float(window["LowPrice"].min()), 8),
+        "high": round(high_price, 8),
+        "low": round(low_price, 8),
+        "price_change": round(close_price - open_price, 8),
         "price_change_pct": round((close_price / open_price - 1.0) * 100.0, 8) if open_price else None,
         "total_qty": round(total_qty, 8),
         "delta": round(float((window["BuyQty"] - window["SellQty"]).sum()), 8),
         "delta_pct": round(float((window["BuyQty"] - window["SellQty"]).sum()) / total_qty, 10) if total_qty else 0.0,
         "open_interest_change": round(float(window.iloc[-1]["OpenInterest"] - window.iloc[0]["OpenInterest"]), 8),
         "funding_last": round(float(window.iloc[-1]["FundingRate"]), 12),
-        "range_position": round((close_price - float(window["LowPrice"].min())) / (float(window["HiPrice"].max()) - float(window["LowPrice"].min())), 8) if float(window["HiPrice"].max()) != float(window["LowPrice"].min()) else 0.5,
-        "vwap_approx": round(float((((window["HiPrice"] + window["LowPrice"] + window["ClosePrice"]) / 3.0) * window["TotalQty"]).sum()) / total_qty, 8) if total_qty > 0 else None,
+        "range_position": round((close_price - low_price) / (high_price - low_price), 8) if high_price != low_price else 0.5,
+        "vwap_approx": round(vwap_approx, 8) if vwap_approx is not None else None,
+        "price_minus_vwap_approx": round(close_price - vwap_approx, 8) if vwap_approx is not None else None,
+        "price_minus_vwap_approx_pct": round((close_price / vwap_approx - 1.0) * 100.0, 8) if vwap_approx else None,
         "poc": None,
         "poc_status": "UNAVAILABLE_PRICE_VOLUME_DISTRIBUTION_MISSING",
     }
@@ -275,10 +290,12 @@ def _quality_summary(
     current: pd.DataFrame,
     context: pd.DataFrame,
     windows: Mapping[str, Mapping[str, Any]],
+    horizons: Mapping[str, Mapping[str, Any]],
     cutoff: pd.Timestamp,
 ) -> dict[str, Any]:
     future_rows = int((input_frame["Timestamp"] > cutoff).sum())
     missing_windows = [key for key, value in windows.items() if not value.get("complete")]
+    missing_broad_horizons = [key for key in ("3d", "7d", "30d") if not horizons[key].get("complete")]
     context_duplicate_rows = int(context["Timestamp"].duplicated().sum())
     counts = {
         str(key): int(value)
@@ -294,7 +311,8 @@ def _quality_summary(
         "context_data_quality_counts": counts,
         "recovered_degraded_present": "RECOVERED_DEGRADED" in counts,
         "incomplete_windows": missing_windows,
-        "readiness": "INCOMPLETE" if missing_windows or context_duplicate_rows else "READY_WITH_DEGRADED_DATA" if degraded else "READY",
+        "incomplete_broad_horizons": missing_broad_horizons,
+        "readiness": "INCOMPLETE" if missing_windows or context_duplicate_rows else "READY_WITH_PARTIAL_CONTEXT" if missing_broad_horizons else "READY_WITH_DEGRADED_DATA" if degraded else "READY",
     }
 
 

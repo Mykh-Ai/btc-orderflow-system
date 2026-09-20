@@ -630,6 +630,10 @@ class TestRealOpenAIMode(unittest.TestCase):
             self.assertEqual(record["verdict"], "SUPPORT")
             self.assertEqual(record["competitive_side"], "BOT")
             self.assertEqual(record["evidence_pack"]["analysis_cutoff_ts"], "2026-01-01T00:00:00Z")
+            started = pd.Timestamp(record["evidence_pack"]["judge_invocation_started_at_utc"])
+            self.assertLessEqual(started, pd.Timestamp(record["created_at"]))
+            self.assertGreaterEqual(started, pd.Timestamp(record["evidence_pack"]["filled_at"]))
+            self.assertNotIn("judge_invocation_started_at_utc", calls[0]["evidence_pack"]["entry_snapshot"])
 
     def test_duplicate_trade_key_does_not_call_fake_client(self):
         with tempfile.TemporaryDirectory() as td:

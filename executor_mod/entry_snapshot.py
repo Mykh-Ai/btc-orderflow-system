@@ -213,7 +213,7 @@ def validate_canonical_monitor_snapshot(monitor: Any) -> None:
     if not isinstance(monitor, Mapping) or monitor.get("schema_version") != "market_monitor_snapshot_v39a":
         raise EntrySnapshotError("canonical_market_monitor_snapshot_required")
     quality = monitor.get("quality")
-    if not isinstance(quality, Mapping) or quality.get("readiness") not in {"READY", "READY_WITH_DEGRADED_DATA"} or quality.get("incomplete_windows") != []:
+    if not isinstance(quality, Mapping) or quality.get("readiness") not in {"READY", "READY_WITH_DEGRADED_DATA", "READY_WITH_PARTIAL_CONTEXT"} or quality.get("incomplete_windows") != []:
         raise EntrySnapshotError("canonical_market_monitor_quality_invalid")
     lineage = monitor.get("lineage")
     if not isinstance(lineage, Mapping) or not {"structure_levels", "market_structure_state", "significant_market_zones"}.issubset(set(lineage.get("feature_algorithms") or [])):
