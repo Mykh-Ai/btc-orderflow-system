@@ -2,11 +2,50 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
 from executor_mod import llm_trade_judge as judge
-from market_monitor import snapshot_builder
+from market_monitor import canonical_features
+from market_monitor.snapshot_builder_v39a import build_market_monitor_snapshot_v39a
+
+
+def _canonical_monitor():
+    timestamps = pd.date_range("2026-09-13T02:13:00Z", periods=1440, freq="min")
+    feed = pd.DataFrame({
+        "Timestamp": timestamps,
+        "OpenPrice": 100.0,
+        "HiPrice": 101.0,
+        "LowPrice": 99.0,
+        "ClosePrice": 100.0,
+        "TotalQty": 10.0,
+        "BuyQty": 5.0,
+        "SellQty": 5.0,
+        "OpenInterest": 1000.0,
+        "FundingRate": 0.0,
+    })
+    return build_market_monitor_snapshot_v39a(feed)
+
+
+def _write_entry_feed(directory):
+    root = Path(directory)
+    timestamps = pd.date_range(end="2026-01-01T00:00:00Z", periods=1440, freq="min")
+    feed = pd.DataFrame({
+        "Timestamp": timestamps,
+        "OpenPrice": 95000.0,
+        "HiPrice": 95100.0,
+        "LowPrice": 94900.0,
+        "ClosePrice": 95000.0,
+        "TotalQty": 10.0,
+        "BuyQty": 5.0,
+        "SellQty": 5.0,
+        "OpenInterest": 1000.0,
+        "FundingRate": 0.0,
+    })
+    for day, rows in feed.groupby(feed["Timestamp"].dt.date):
+        rows.to_csv(root / f"{day.isoformat()}.csv", index=False)
+    return str(root)
 
 
 def _pos(**overrides):
@@ -116,16 +155,16 @@ class TestCutoffAndEvidence(unittest.TestCase):
     def test_build_pretrade_evidence_pack_can_attach_market_monitor_snapshot_gap(self):
         judge.configure({
             "SYMBOL": "BTCUSDC",
+            "LLM_TRADE_JUDGE_ENABLED": True,
             "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
-            "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
-            "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": "missing-market-monitor-feed.csv",
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": "missing-market-monitor-feed.csv",
         })
         pack = judge.build_pretrade_evidence_pack(_pos(), {}, "EXITS_PLACED_V15")
         snapshot = pack["market_monitor_snapshot"]
         self.assertTrue(snapshot["enabled"])
-        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v1")
-        self.assertIn("market_monitor_snapshot_current_feed_not_found", snapshot["data_gaps"])
-        self.assertIn("market_monitor_snapshot_current_feed_not_found", pack["data_gaps"])
+        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v39a")
+        self.assertIn("market_monitor_snapshot_context_feed_not_found", snapshot["data_gaps"])
+        self.assertIn("market_monitor_snapshot_context_feed_not_found", pack["data_gaps"])
 
     def test_build_pretrade_evidence_pack_preserves_raw_peak_fields(self):
         src_evt = {
@@ -336,36 +375,24 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertIn("agg_csv_missing", ctx["data_gaps"])
         self.assertTrue(ctx["enabled"])
 
-    def test_build_market_monitor_snapshot_disabled_and_missing_feed(self):
-        disabled = judge.build_market_monitor_snapshot_until_cutoff(
-            {"analysis_cutoff_ts": "2026-01-01T00:00:00Z"},
-            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": False},
-        )
-        self.assertFalse(disabled["enabled"])
-        self.assertIn("market_monitor_snapshot_disabled", disabled["data_gaps"])
-
+    def test_build_market_monitor_snapshot_missing_feed(self):
         missing = judge.build_market_monitor_snapshot_until_cutoff(
             {"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "symbol": "BTCUSDC"},
-            {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True},
+            {},
         )
         self.assertTrue(missing["enabled"])
-        self.assertIn("market_monitor_snapshot_current_feed_missing", missing["data_gaps"])
+        self.assertIn("market_monitor_snapshot_context_feed_missing", missing["data_gaps"])
 
-    def test_build_market_monitor_snapshot_resolves_current_feed_dir_from_cutoff(self):
+    def test_build_market_monitor_snapshot_missing_context_path(self):
         with tempfile.TemporaryDirectory() as td:
             missing = judge.build_market_monitor_snapshot_until_cutoff(
                 {"analysis_cutoff_ts": "2026-06-07T19:17:00Z", "symbol": "BTCUSDC"},
                 {
-                    "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
-                    "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": td,
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": os.path.join(td, "missing.csv"),
                 },
             )
             self.assertTrue(missing["enabled"])
-            self.assertIn("market_monitor_snapshot_current_feed_not_found", missing["data_gaps"])
-            self.assertEqual(
-                missing["source_paths"]["resolved_current_feed"],
-                os.path.join(td, "2026-06-07.csv"),
-            )
+            self.assertIn("market_monitor_snapshot_context_feed_not_found", missing["data_gaps"])
 
     def test_market_structure_state_marks_seller_dominance_above_support_not_range(self):
         feed = pd.DataFrame(
@@ -415,7 +442,7 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
             ]
         )
 
-        state = snapshot_builder._market_structure_state(
+        state = canonical_features._market_structure_state(
             current=feed,
             significant_market_zones=zones,
         )
@@ -428,7 +455,11 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertLessEqual(state["metrics"]["close_position"], 0.35)
 
     def test_prompt_mentions_market_context_and_no_hindsight(self):
-        prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
+        prompt = judge.build_llm_trade_judge_prompt({
+            "analysis_cutoff_ts": "2026-09-14T02:12:00Z",
+            "market_context": {"enabled": True},
+            "market_monitor_snapshot": _canonical_monitor(),
+        })
         self.assertIn("market_context.deltascout", prompt)
         self.assertIn("market_monitor_snapshot", prompt)
         self.assertIn("descriptive pre-cutoff Market Monitor snapshot", prompt)
@@ -507,6 +538,10 @@ class TestVerdictJournal(unittest.TestCase):
 
 class TestRealOpenAIMode(unittest.TestCase):
     def _configure(self, journal, *, client=None, webhook=None, notify=True, saved=None):
+        feed_dir = Path(journal).parent
+        if not feed_dir.is_dir():
+            feed_dir = feed_dir.parent
+        _write_entry_feed(feed_dir)
         judge.configure(
             {
                 "SYMBOL": "BTCUSDC",
@@ -519,6 +554,8 @@ class TestRealOpenAIMode(unittest.TestCase):
                 "LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS": 2000,
                 "LLM_TRADE_JUDGE_NOTIFY_TELEGRAM": notify,
                 "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
+                "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": str(feed_dir),
+                "LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH": str(feed_dir / "monitor_state.json"),
             },
             save_state_fn=(lambda st: saved.append(dict(st))) if saved is not None else None,
             send_webhook_fn=webhook,
@@ -550,12 +587,15 @@ class TestRealOpenAIMode(unittest.TestCase):
     def test_stub_mode_still_works(self):
         with tempfile.TemporaryDirectory() as td:
             journal = os.path.join(td, "v.jsonl")
+            _write_entry_feed(td)
             judge.configure(
                 {
                     "SYMBOL": "BTCUSDC",
                     "LLM_TRADE_JUDGE_ENABLED": True,
                     "LLM_TRADE_JUDGE_MODE": "stub",
                     "LLM_TRADE_JUDGE_VERDICTS_FN": journal,
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": td,
+                    "LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH": os.path.join(td, "monitor_state.json"),
                 }
             )
             result = judge.maybe_record_llm_pretrade_judge({}, _pos())

@@ -54,7 +54,8 @@ NUMERIC_COLUMNS = [
 ]
 
 
-def load_feed(paths: str | Path | Iterable[str | Path]) -> pd.DataFrame:
+def load_feed(paths: str | Path | Iterable[str | Path], *, deduplicate: bool = False) -> pd.DataFrame:
+    """Load all rows in timestamp order; preserve duplicates for validation by default."""
     files = _resolve_input_paths(paths)
     frames = [_read_one_csv(path) for path in files]
     if not frames:
@@ -64,7 +65,8 @@ def load_feed(paths: str | Path | Iterable[str | Path]) -> pd.DataFrame:
     combined = combined.sort_values(
         ["Timestamp", "SourceFile", "_source_order"], kind="mergesort"
     )
-    combined = combined.drop_duplicates(subset=["Timestamp"], keep="last")
+    if deduplicate:
+        combined = combined.drop_duplicates(subset=["Timestamp"], keep="last")
     combined = combined.sort_values(["Timestamp"], kind="mergesort")
     combined = combined[OUTPUT_COLUMNS].reset_index(drop=True)
     return combined

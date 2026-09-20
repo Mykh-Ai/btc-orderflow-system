@@ -23,6 +23,7 @@ from .entry_snapshot import (
     SNAPSHOT_SCHEMA_VERSION as ENTRY_SNAPSHOT_SCHEMA_VERSION,
     build_entry_prompt,
     build_entry_snapshot,
+    validate_canonical_monitor_snapshot,
 )
 
 ENV: Dict[str, Any] = {
@@ -41,13 +42,10 @@ ENV: Dict[str, Any] = {
     "LLM_TRADE_JUDGE_DELTASCOUT_LOG": os.getenv("LLM_TRADE_JUDGE_DELTASCOUT_LOG", os.getenv("DELTASCOUT_LOG", "/data/logs/deltascout.log")),
     "LLM_TRADE_JUDGE_AGG_CSV": os.getenv("LLM_TRADE_JUDGE_AGG_CSV", os.getenv("AGG_CSV", "/data/feed/aggregated.csv")),
     "LLM_TRADE_JUDGE_FEED_TIMEZONE": os.getenv("LLM_TRADE_JUDGE_FEED_TIMEZONE", os.getenv("FEED_SOURCE_TIMEZONE", "Europe/Bratislava")),
-    "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", "false"),
-    "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED", ""),
     "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED", ""),
     "LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES", "5"),
-    "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED": os.getenv("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", "false"),
-    "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH": os.getenv(
-        "LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH",
+    "LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH": os.getenv(
+        "LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH",
         "/data/state/market_monitor_state_v39a.json",
     ),
 }
@@ -714,31 +712,12 @@ def build_market_context_until_cutoff(evidence_pack: Dict[str, Any], env: Option
     }
 
 
-def _current_price_for_context(evidence_pack: Dict[str, Any]) -> Any:
-    src_evt = evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {}
-    if src_evt.get("price") is not None:
-        return src_evt.get("price")
-    if src_evt.get("price_usdt") is not None:
-        return src_evt.get("price_usdt")
-    if evidence_pack.get("entry_actual") is not None:
-        return evidence_pack.get("entry_actual")
-    return evidence_pack.get("entry")
-
-
-def _resolve_market_monitor_current_feed_path(path: str, cutoff_ts: Any) -> str:
-    if not path:
-        return ""
-    if os.path.isdir(path):
-        cutoff_dt = parse_dt_safe(cutoff_ts)
-        if cutoff_dt is None:
-            return path
-        return os.path.join(path, f"{cutoff_dt.date().isoformat()}.csv")
-    return path
-
-
-def _market_monitor_lineage_hashes(current_feed_path: str, context_feed_path: str) -> Dict[str, str]:
+def _market_monitor_lineage_hashes(context_feed_path: str, source_files: List[str]) -> Dict[str, str]:
     hashes: Dict[str, str] = {}
-    candidates = [current_feed_path, context_feed_path]
+    candidates = [
+        os.path.join(context_feed_path, name) if os.path.isdir(context_feed_path) else context_feed_path
+        for name in sorted(set(source_files))
+    ]
     for candidate in candidates:
         if not candidate or not os.path.isfile(candidate):
             continue
@@ -753,162 +732,78 @@ def _market_monitor_lineage_hashes(current_feed_path: str, context_feed_path: st
     return hashes
 
 
-def _build_v39a_market_monitor_snapshot(
-    *,
-    current_feed: Any,
-    context_feed: Any,
-    cutoff_ts: Any,
-    base_snapshot: Dict[str, Any],
-    evidence_pack: Dict[str, Any],
-    current_feed_path: str,
-    context_feed_path: str,
-    state_path: str,
-) -> Dict[str, Any]:
-    try:
-        from market_monitor.snapshot_builder_v39a import build_market_monitor_snapshot_v39a
-    except ImportError:
-        from .market_monitor_snapshot_v39a import build_market_monitor_snapshot_v39a
-
-    # The legacy hook resolves a directory-valued current feed to only the
-    # cutoff day's CSV.  That is sufficient for v1's local windows but cannot
-    # prove a complete 1440-minute window.  v39A uses the broader context feed
-    # when available; the adapter still applies the exact cutoff and future-row
-    # exclusion before calculating every window.
-    v39a_feed = context_feed if context_feed is not None and not context_feed.empty else current_feed
-    snapshot = build_market_monitor_snapshot_v39a(
-        v39a_feed,
-        context_feed=context_feed,
-        cutoff_ts=cutoff_ts,
-        state_path=state_path,
-        symbol=str(evidence_pack.get("symbol") or ""),
-        base_snapshot=base_snapshot,
-        lineage={
-            "feed_identity": current_feed_path,
-            "source_hashes": _market_monitor_lineage_hashes(current_feed_path, context_feed_path),
-        },
-    )
-    if not isinstance(snapshot, dict):
-        raise TypeError("market_monitor_snapshot_v39a_invalid_result")
-    snapshot["enabled"] = True
-    snapshot["runtime_mode"] = "v39a_opt_in"
-    return snapshot
+def _monitor_input_error(evidence_pack: Dict[str, Any], cutoff_ts: Any, gaps: List[str]) -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "schema_version": "market_monitor_snapshot_error_v39a",
+        "status": "INPUT_ERROR",
+        "cutoff_ts": cutoff_ts,
+        "symbol": evidence_pack.get("symbol") or "",
+        "data_gaps": gaps,
+        "boundary": "advisory assessment unavailable; execution lifecycle independent",
+    }
 
 
 def build_market_monitor_snapshot_until_cutoff(evidence_pack: Dict[str, Any], env: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The sole production route to model-facing Market Monitor evidence."""
     cfg = env if isinstance(env, dict) else ENV
-    v39a_enabled = _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", False), False)
-    if not _as_bool(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False) and not v39a_enabled:
-        return {"enabled": False, "data_gaps": ["market_monitor_snapshot_disabled"]}
-
     cutoff_ts = evidence_pack.get("analysis_cutoff_ts")
-    current_feed_path = str(
-        cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED")
-        or cfg.get("MARKET_MONITOR_CURRENT_FEED")
-        or ""
-    ).strip()
     context_feed_path = str(
         cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED")
         or cfg.get("MARKET_MONITOR_CONTEXT_FEED")
         or ""
     ).strip()
-    resolved_current_feed_path = _resolve_market_monitor_current_feed_path(current_feed_path, cutoff_ts)
-
-    data_gaps: List[str] = []
     if not cutoff_ts:
-        data_gaps.append("market_monitor_snapshot_missing_cutoff_ts")
-    if not current_feed_path:
-        data_gaps.append("market_monitor_snapshot_current_feed_missing")
-    elif not os.path.exists(resolved_current_feed_path):
-        data_gaps.append("market_monitor_snapshot_current_feed_not_found")
-    if context_feed_path and not os.path.exists(context_feed_path):
-        data_gaps.append("market_monitor_snapshot_context_feed_not_found")
+        return _monitor_input_error(evidence_pack, cutoff_ts, ["market_monitor_snapshot_missing_cutoff_ts"])
+    if not context_feed_path:
+        return _monitor_input_error(evidence_pack, cutoff_ts, ["market_monitor_snapshot_context_feed_missing"])
+    if not os.path.exists(context_feed_path):
+        return _monitor_input_error(evidence_pack, cutoff_ts, ["market_monitor_snapshot_context_feed_not_found"])
 
-    if data_gaps:
-        return {
-            "enabled": True,
-            "schema_version": "market_monitor_snapshot_error_v1",
-            "cutoff_ts": cutoff_ts,
-            "symbol": evidence_pack.get("symbol") or "",
-            "source_paths": {
-                "current_feed": current_feed_path,
-                "resolved_current_feed": resolved_current_feed_path,
-                "context_feed": context_feed_path,
-            },
-            "data_gaps": data_gaps,
-            "boundary": "descriptive market-state snapshot only",
-        }
-
+    state_path = str(
+        cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_STATE_PATH")
+        or "/data/state/market_monitor_state_v39a.json"
+    ).strip()
     try:
         from market_monitor.feed_adapter import load_feed
-        from market_monitor.snapshot_builder import build_market_monitor_snapshot
+        from market_monitor.snapshot_builder_v39a import (
+            SNAPSHOT_SCHEMA_VERSION,
+            build_market_monitor_snapshot_v39a,
+        )
 
-        current_feed = load_feed(resolved_current_feed_path)
-        context_feed = load_feed(context_feed_path) if context_feed_path else None
-        snapshot = build_market_monitor_snapshot(
-            current_feed,
+        # Duplicates remain visible to the canonical completeness check.
+        context_feed = load_feed(context_feed_path, deduplicate=False)
+        snapshot = build_market_monitor_snapshot_v39a(
+            context_feed,
             context_feed=context_feed,
             cutoff_ts=cutoff_ts,
-            current_price=_to_float(_current_price_for_context(evidence_pack)),
-            src_event=evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {},
+            state_path=state_path,
             symbol=str(evidence_pack.get("symbol") or ""),
+            src_event=evidence_pack.get("src_evt") if isinstance(evidence_pack.get("src_evt"), dict) else {},
             max_zones=max(1, _as_int(cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_MAX_ZONES"), 5)),
-        )
-        if isinstance(snapshot, dict):
-            snapshot["enabled"] = True
-            if v39a_enabled:
-                state_path = str(
-                    cfg.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_STATE_PATH")
-                    or "/data/state/market_monitor_state_v39a.json"
-                ).strip()
-                try:
-                    snapshot = _build_v39a_market_monitor_snapshot(
-                        current_feed=current_feed,
-                        context_feed=context_feed,
-                        cutoff_ts=cutoff_ts,
-                        base_snapshot=snapshot,
-                        evidence_pack=evidence_pack,
-                        current_feed_path=resolved_current_feed_path,
-                        context_feed_path=context_feed_path,
-                        state_path=state_path,
-                    )
-                except Exception as exc:
-                    return {
-                        "enabled": True,
-                        "schema_version": "market_monitor_snapshot_error_v39a",
-                        "cutoff_ts": cutoff_ts,
-                        "symbol": evidence_pack.get("symbol") or "",
-                        "source_paths": {
-                            "current_feed": current_feed_path,
-                            "resolved_current_feed": resolved_current_feed_path,
-                            "context_feed": context_feed_path,
-                            "state_path": state_path,
-                        },
-                        "data_gaps": [f"market_monitor_snapshot_v39a_error:{type(exc).__name__}"],
-                        "boundary": "descriptive market-state snapshot only",
-                    }
-            return snapshot
-        return {
-            "enabled": True,
-            "schema_version": "market_monitor_snapshot_error_v1",
-            "cutoff_ts": cutoff_ts,
-            "symbol": evidence_pack.get("symbol") or "",
-            "data_gaps": ["market_monitor_snapshot_invalid_result"],
-            "boundary": "descriptive market-state snapshot only",
-        }
-    except Exception as exc:
-        return {
-            "enabled": True,
-            "schema_version": "market_monitor_snapshot_error_v1",
-            "cutoff_ts": cutoff_ts,
-            "symbol": evidence_pack.get("symbol") or "",
-            "source_paths": {
-                "current_feed": current_feed_path,
-                "resolved_current_feed": resolved_current_feed_path,
-                "context_feed": context_feed_path,
+            lineage={
+                "feed_identity": context_feed_path,
             },
-            "data_gaps": [f"market_monitor_snapshot_error:{type(exc).__name__}"],
-            "boundary": "descriptive market-state snapshot only",
-        }
+        )
+        snapshot["lineage"]["source_hashes"] = _market_monitor_lineage_hashes(
+            context_feed_path, snapshot["lineage"]["source_files"]
+        )
+        if snapshot["quality"]["readiness"] == "INCOMPLETE":
+            snapshot["data_gaps"] = [
+                f"market_monitor_incomplete_{minutes}m"
+                for minutes in snapshot["quality"]["incomplete_windows"]
+            ]
+            if snapshot["quality"].get("context_duplicate_rows"):
+                snapshot["data_gaps"].append("market_monitor_context_duplicate_timestamps")
+            return snapshot
+        if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
+            raise ValueError("invalid_canonical_snapshot")
+        return snapshot
+    except Exception as exc:
+        return _monitor_input_error(
+            evidence_pack, cutoff_ts,
+            [f"market_monitor_canonical_error:{type(exc).__name__}:{exc}"],
+        )
 
 
 def _direction(side: Any, src_evt: Dict[str, Any]) -> Optional[str]:
@@ -980,10 +875,7 @@ def build_pretrade_evidence_pack(pos: Dict[str, Any], st: Dict[str, Any], trigge
             "enabled": True,
             "data_gaps": [f"market_context_error:{type(exc).__name__}"],
         }
-    if (
-        _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED", False), False)
-        or _as_bool(ENV.get("LLM_TRADE_JUDGE_MARKET_MONITOR_V39A_ENABLED", False), False)
-    ):
+    if _is_enabled():
         snapshot = build_market_monitor_snapshot_until_cutoff(pack)
         pack["market_monitor_snapshot"] = snapshot
         for gap in snapshot.get("data_gaps") or []:
@@ -1135,6 +1027,8 @@ def build_llm_trade_judge_prompt(evidence_pack: Dict[str, Any]) -> str:
     snapshot = evidence_pack.get("entry_snapshot") if isinstance(evidence_pack, dict) else None
     if not isinstance(snapshot, dict):
         snapshot = build_entry_snapshot(evidence_pack, env=ENV)
+    monitor = (snapshot.get("market") or {}).get("monitor_snapshot")
+    validate_canonical_monitor_snapshot(monitor)
     return build_entry_prompt(snapshot)
 
 
@@ -1450,7 +1344,14 @@ def maybe_record_llm_pretrade_judge(st: Dict[str, Any], pos: Dict[str, Any], tri
         except EntrySnapshotError as exc:
             evidence_pack["entry_prompt_error"] = f"{type(exc).__name__}:{exc}"
         mode = str(ENV.get("LLM_TRADE_JUDGE_MODE") or "stub").strip().lower()
-        if mode == "stub":
+        if evidence_pack.get("entry_prompt_error") or evidence_pack.get("entry_snapshot_error"):
+            record = build_error_verdict_record(
+                evidence_pack,
+                "monitor_input_error",
+                str(evidence_pack.get("entry_prompt_error") or evidence_pack.get("entry_snapshot_error")),
+            )
+            result = append_real_pretrade_verdict(journal_path, record)
+        elif mode == "stub":
             result = append_stub_pretrade_verdict(journal_path, evidence_pack)
         elif mode == "openai":
             try:

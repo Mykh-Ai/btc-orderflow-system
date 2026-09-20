@@ -1,13 +1,18 @@
+"""Direct source algorithms for the canonical 39A monitor.
+
+The monitor composes the research modules here. No legacy snapshot builder is
+called, and all derived fields use the same cutoff and continuous feed.
+"""
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
 
 from market_monitor.accumulation_zones import build_accumulation_zones
-from market_monitor.context_windows import build_market_context_windows
+from market_monitor.context_windows import CONTEXT_WINDOW_DAYS, build_market_context_windows
 from market_monitor.liquidity_zones import build_liquidity_map
 from market_monitor.market_structure_state import _classify_state as classify_market_structure_state
 from market_monitor.market_structure_state import _oi_context as market_structure_oi_context
@@ -18,195 +23,71 @@ from market_monitor.structure import build_structure_levels
 from market_monitor.zone_registry import build_zone_registry, forward_liquidity_from_registry
 
 
-SNAPSHOT_SCHEMA_VERSION = "market_monitor_snapshot_v1"
-LOCAL_WINDOWS_MINUTES = (15, 60, 240)
-
-
-def build_market_monitor_snapshot(
-    feed: pd.DataFrame,
+def build_canonical_features(
+    current: pd.DataFrame,
+    context: pd.DataFrame,
     *,
-    context_feed: pd.DataFrame | None = None,
-    cutoff_ts=None,
-    current_price: float | None = None,
+    cutoff: pd.Timestamp,
+    windows: dict[str, dict[str, Any]],
     src_event: dict[str, Any] | None = None,
-    symbol: str | None = None,
     max_zones: int = 5,
 ) -> dict[str, Any]:
-    cutoff = _resolve_cutoff(feed, cutoff_ts)
-    current = _filter_to_cutoff(feed, cutoff)
-    context = _context_feed(context_feed, current, cutoff)
-    latest_price = _latest_price(current, current_price)
-
-    volume_delta_state = build_volume_delta_state(current)
-    context_volume_delta_state = build_volume_delta_state(context)
-    market_context_windows = build_market_context_windows(context, end_timestamp=cutoff)
-    local_context = _local_context(current)
-    broad_context = _broad_context(market_context_windows)
-
-    structure_levels = build_structure_levels(current)
-    liquidity_map = build_liquidity_map(structure_levels, latest_price)
-    liquidity_zone_registry, registry_stats = build_zone_registry(
-        liquidity_map=liquidity_map,
-        feed=current,
+    """Calculate descriptive features from a validated rolling 1440m slice."""
+    latest_price = float(current.iloc[-1]["ClosePrice"])
+    context_rows = []
+    for days in CONTEXT_WINDOW_DAYS:
+        start = cutoff - pd.Timedelta(minutes=days * 1440 - 1)
+        scoped = context[(context["Timestamp"] >= start) & (context["Timestamp"] <= cutoff)]
+        row = build_market_context_windows(scoped, end_timestamp=cutoff, windows_days=(days,))
+        if row.empty:
+            continue
+        item = row.iloc[0].to_dict()
+        expected = pd.date_range(start, cutoff, freq="min", tz="UTC")
+        actual = pd.DatetimeIndex(scoped["Timestamp"])
+        item["canonical_complete"] = len(scoped) == len(expected) and len(expected.difference(actual)) == 0 and not actual.has_duplicates
+        context_rows.append(item)
+    context_windows = pd.DataFrame(context_rows)
+    levels = build_structure_levels(current)
+    liquidity_map = build_liquidity_map(levels, latest_price)
+    registry, registry_stats = build_zone_registry(liquidity_map=liquidity_map, feed=current)
+    forward_liquidity = forward_liquidity_from_registry(registry, latest_price)
+    context_delta = build_volume_delta_state(context)
+    inventory = build_accumulation_zones(context, context_delta)
+    significant = build_significant_market_zones(
+        inventory_zones=inventory,
+        liquidity_zone_registry=registry,
+        market_context_windows=context_windows,
     )
-    forward_liquidity_map = forward_liquidity_from_registry(liquidity_zone_registry, latest_price)
-    local_inventory_zones = build_accumulation_zones(current, volume_delta_state)
-    context_inventory_zones = build_accumulation_zones(context, context_volume_delta_state)
-    significant_market_zones = build_significant_market_zones(
-        inventory_zones=context_inventory_zones,
-        liquidity_zone_registry=liquidity_zone_registry,
-        market_context_windows=market_context_windows,
-    )
-    market_state = build_market_state_timeline(
+    state_frame = build_market_state_timeline(
         current,
-        market_context_windows=market_context_windows,
-        significant_market_zones=significant_market_zones,
+        market_context_windows=context_windows,
+        significant_market_zones=significant,
     )
-    market_structure_state = _market_structure_state(
-        current=current,
-        significant_market_zones=significant_market_zones,
-    )
-
-    snapshot = {
-        "schema_version": SNAPSHOT_SCHEMA_VERSION,
-        "cutoff_ts": _format_ts(cutoff),
-        "symbol": symbol or "",
-        "data_quality": _snapshot_quality(current=current, context=context),
-        "src_event": src_event or {},
-        "local_context": local_context,
-        "broad_context": broad_context,
-        "market_state": _market_state(market_state),
-        "market_structure_state": market_structure_state,
-        "significant_market_zones": _zone_buckets(
-            significant_market_zones,
-            latest_price=latest_price,
-            max_zones=max_zones,
-        ),
-        "liquidity_zones": _liquidity_buckets(
-            forward_liquidity_map,
-            latest_price=latest_price,
-            max_zones=max_zones,
-        ),
+    broad = _broad_context(context_windows)
+    state = _market_state(state_frame)
+    state.setdefault("evidence", {})["classification_scope"] = "rolling_1440_closed_minutes"
+    state["algorithm"] = "market_state_timeline"
+    structure_state = _market_structure_state(current=current, significant_market_zones=significant)
+    structure_state["state"] = structure_state.pop("market_state", None)
+    structure_state["evidence_summary"] = re.sub(r"delta_pct=[^;]*; ?", "", str(structure_state.get("evidence_summary", "")))
+    structure_state["algorithm"] = "market_structure_state_classifier"
+    structure_state["classification_scope"] = "rolling_1440_closed_minutes_with_canonical_zones"
+    return {
+        "market_state": state,
+        "market_structure_state": structure_state,
+        "broad_context": broad,
+        "significant_market_zones": _zone_buckets(significant, latest_price=latest_price, max_zones=max_zones),
+        "liquidity_zones": _liquidity_buckets(forward_liquidity, latest_price=latest_price, max_zones=max_zones),
         "context_conflicts": _context_conflicts(
             src_event=src_event or {},
-            local_context=local_context,
-            broad_context=broad_context,
+            local_context={"60m": windows["60"]},
+            broad_context=broad,
         ),
-        "monitor_artifacts": {
-            "market_context_windows_csv": "",
-            "significant_market_zones_csv": "",
-            "market_state_timeline_csv": "",
-        },
-        "boundary": "descriptive market-state snapshot only",
         "diagnostics": {
-            "current_rows": int(len(current)),
-            "context_rows": int(len(context)),
-            "local_inventory_zone_count": int(len(local_inventory_zones)),
-            "context_inventory_zone_count": int(len(context_inventory_zones)),
+            "structure_level_count": int(len(levels)),
+            "inventory_zone_count": int(len(inventory)),
             "registry_stats": registry_stats,
         },
-    }
-    return _json_roundtrip(snapshot)
-
-
-def write_market_monitor_snapshot(
-    snapshot: dict[str, Any],
-    path: str | Path,
-) -> None:
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
-def _resolve_cutoff(feed: pd.DataFrame, cutoff_ts) -> pd.Timestamp:
-    if cutoff_ts is not None:
-        return _to_utc(cutoff_ts)
-    if feed.empty:
-        raise ValueError("cutoff_ts is required when feed is empty")
-    return _to_utc(feed["Timestamp"].max())
-
-
-def _filter_to_cutoff(feed: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
-    if feed.empty:
-        return feed.copy()
-    frame = feed.sort_values("Timestamp", kind="mergesort").copy()
-    return frame[frame["Timestamp"] <= cutoff].copy()
-
-
-def _context_feed(
-    context_feed: pd.DataFrame | None,
-    current: pd.DataFrame,
-    cutoff: pd.Timestamp,
-) -> pd.DataFrame:
-    source = context_feed if context_feed is not None and not context_feed.empty else current
-    if source.empty:
-        return source.copy()
-    start = cutoff - pd.Timedelta(days=30)
-    frame = source.sort_values("Timestamp", kind="mergesort").copy()
-    return frame[(frame["Timestamp"] >= start) & (frame["Timestamp"] <= cutoff)].copy()
-
-
-def _latest_price(feed: pd.DataFrame, current_price: float | None) -> float | None:
-    if current_price is not None:
-        return float(current_price)
-    if feed.empty:
-        return None
-    return float(feed.iloc[-1]["ClosePrice"])
-
-
-def _snapshot_quality(*, current: pd.DataFrame, context: pd.DataFrame) -> dict[str, Any]:
-    return {
-        "current": _quality_summary(current),
-        "context": _quality_summary(context),
-        "current_rows": int(len(current)),
-        "context_rows": int(len(context)),
-    }
-
-
-def _local_context(feed: pd.DataFrame) -> dict[str, Any]:
-    result = {}
-    for minutes in LOCAL_WINDOWS_MINUTES:
-        window = feed.tail(minutes).copy()
-        result[f"{minutes}m"] = _window_metrics(window, expected_minutes=minutes)
-    return result
-
-
-def _window_metrics(window: pd.DataFrame, *, expected_minutes: int) -> dict[str, Any]:
-    if window.empty:
-        return {
-            "rows_used": 0,
-            "expected_minutes": expected_minutes,
-            "data_quality": "none",
-            "price_change_pct": 0.0,
-            "total_qty": 0.0,
-            "delta": 0.0,
-            "delta_pct": 0.0,
-            "open_interest_change": 0.0,
-            "funding_last": 0.0,
-            "liq_buy_qty": 0.0,
-            "liq_sell_qty": 0.0,
-        }
-    open_price = float(window.iloc[0]["OpenPrice"])
-    close_price = float(window.iloc[-1]["ClosePrice"])
-    total_qty = float(window["TotalQty"].sum())
-    delta = float((window["BuyQty"] - window["SellQty"]).sum())
-    return {
-        "start_timestamp": _format_ts(window.iloc[0]["Timestamp"]),
-        "end_timestamp": _format_ts(window.iloc[-1]["Timestamp"]),
-        "rows_used": int(len(window)),
-        "expected_minutes": int(expected_minutes),
-        "data_quality": _quality_summary(window),
-        "price_change_pct": _round((close_price / open_price - 1.0) * 100.0 if open_price else 0.0),
-        "total_qty": _round(total_qty),
-        "delta": _round(delta),
-        "delta_pct": _round(delta / total_qty if total_qty > 0 else 0.0, digits=8),
-        "open_interest_change": _round(float(window.iloc[-1]["OpenInterest"] - window.iloc[0]["OpenInterest"])),
-        "funding_last": _round(float(window.iloc[-1]["FundingRate"]), digits=10),
-        "liq_buy_qty": _round(float(window["LiqBuyQty"].sum()) if "LiqBuyQty" in window.columns else 0.0),
-        "liq_sell_qty": _round(float(window["LiqSellQty"].sum()) if "LiqSellQty" in window.columns else 0.0),
     }
 
 
@@ -220,6 +101,8 @@ def _broad_context(context_windows: pd.DataFrame) -> dict[str, Any]:
             "start_timestamp": row["start_timestamp"],
             "end_timestamp": row["end_timestamp"],
             "rows_used": int(row["rows_used"]),
+            "expected_rows": int(row["expected_minutes"]),
+            "complete": bool(row["canonical_complete"]),
             "data_quality": row["data_quality"],
             "data_quality_flags": row["data_quality_flags"],
             "price_change_pct": _round(float(row["price_change_pct"])),
@@ -258,7 +141,7 @@ def _market_structure_state(
 ) -> dict[str, Any]:
     if current.empty:
         return {
-            "schema_version": "market_structure_state_snapshot_v1",
+            "schema_version": "market_structure_state_39a",
             "status": "unavailable",
             "data_gaps": ["market_structure_state_current_feed_empty"],
         }
@@ -266,7 +149,7 @@ def _market_structure_state(
         metrics = market_structure_window_metrics(current)
     except Exception as exc:
         return {
-            "schema_version": "market_structure_state_snapshot_v1",
+            "schema_version": "market_structure_state_39a",
             "status": "unavailable",
             "data_gaps": [f"market_structure_state_metrics_error:{type(exc).__name__}"],
         }
@@ -283,7 +166,7 @@ def _market_structure_state(
         )
     except Exception as exc:
         return {
-            "schema_version": "market_structure_state_snapshot_v1",
+            "schema_version": "market_structure_state_39a",
             "status": "unavailable",
             "data_gaps": [f"market_structure_state_classifier_error:{type(exc).__name__}"],
             "metrics": _market_structure_metrics(metrics),
@@ -297,7 +180,7 @@ def _market_structure_state(
     if resistance.empty:
         data_gaps.append("market_structure_state_resistance_zone_missing")
     return {
-        "schema_version": "market_structure_state_snapshot_v1",
+        "schema_version": "market_structure_state_39a",
         "status": "partial" if data_gaps else "ok",
         "state_version": "SHI_RESET_37E_ONLINE_MARKET_STRUCTURE_STATE_MEMORY_V0",
         "classification_scope": "pre_cutoff_current_feed_window_with_snapshot_zones",
@@ -323,7 +206,9 @@ def _market_structure_metrics(metrics: dict[str, float]) -> dict[str, Any]:
         "price_change_pct": _round(float(metrics.get("price_change_pct", 0.0) or 0.0)),
         "range_pct": _round(float(metrics.get("range_pct", 0.0) or 0.0)),
         "close_position": _round(float(metrics.get("close_position", 0.0) or 0.0), digits=4),
-        "delta_pct": _round(float(metrics.get("delta_pct", 0.0) or 0.0)),
+        # The research classifier consumes percent points internally; the
+        # published monitor contract uses a fraction for every delta_pct.
+        "delta_pct": _round(float(metrics.get("delta_pct", 0.0) or 0.0) / 100.0, digits=8),
         "open_interest_change": _round(float(metrics.get("open_interest_change", 0.0) or 0.0)),
     }
 

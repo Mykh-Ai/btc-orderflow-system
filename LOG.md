@@ -522,3 +522,12 @@ next_actions:
 - root_cause: the OpenAI Responses call used `max_output_tokens=800`; both model responses were truncated inside JSON strings (`Unterminated string` around char 690-770), so the validator wrote `ERROR_NOT_SCORED`.
 - fix: added `LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS` with default `2000`, passed it to the Responses payload and injected test client, and retried JSON validation failures once before recording an error.
 - tests: `python -m pytest test\test_llm_trade_judge.py` -> 48 passed; `python -m pytest test\` -> 263 passed.
+
+## 2026-09-20 - Canonical 39A Market Monitor repository normalization
+
+- scope: one production Market Monitor, local branch `codex/canonical-39a-monitor-normalization` from `v2.0` at `7921d22`.
+- architecture: removed old Market Monitor implementation flags, v1 builder and duplicate Executor 39A module. The Judge now uses the self-contained `market_monitor/snapshot_builder_v39a.py`, which directly composes structure, state and zone source algorithms; the CSV loader preserves duplicate evidence for the production call.
+- contract: six exact cross-file UTC windows, explicit incomplete/degraded readiness, direct feature lineage, consistent delta fraction units, approximate VWAP and unavailable POC, atomic persisted state with invalid-state rejection and same-cutoff idempotence.
+- decision: `ADR-Canonical-39A-Market-Monitor.md`; feature and before/after audit: `docs/canonical-39a-market-monitor-normalization-audit-2026-09-20.md`.
+- verification: focused canonical tests 12 passed; focused canonical plus Judge tests excluding the unchanged calibration prompt assertion 58 passed and 1 deselected before the final end-to-end test addition; final full suite 873 passed and 1 failed. The remaining failure is `test_prompt_mentions_market_context_and_no_hindsight`: its canonical fixture now reaches the existing assertions, but the current V2 prompt lacks the historical calibration language. The task forbids changing that prompt, so no test skip, xfail or assertion deletion was used.
+- production_status: WIP / research branch only. Not ready to merge into `v2.0`. No deployment, Executor restart, historical verdict rewrite or prompt edit.

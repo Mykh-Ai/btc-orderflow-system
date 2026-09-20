@@ -209,6 +209,37 @@ def _geometry(pack: Mapping[str, Any], env: Mapping[str, Any], direction: str | 
     }
 
 
+def validate_canonical_monitor_snapshot(monitor: Any) -> None:
+    if not isinstance(monitor, Mapping) or monitor.get("schema_version") != "market_monitor_snapshot_v39a":
+        raise EntrySnapshotError("canonical_market_monitor_snapshot_required")
+    quality = monitor.get("quality")
+    if not isinstance(quality, Mapping) or quality.get("readiness") not in {"READY", "READY_WITH_DEGRADED_DATA"} or quality.get("incomplete_windows") != []:
+        raise EntrySnapshotError("canonical_market_monitor_quality_invalid")
+    lineage = monitor.get("lineage")
+    if not isinstance(lineage, Mapping) or not {"structure_levels", "market_structure_state", "significant_market_zones"}.issubset(set(lineage.get("feature_algorithms") or [])):
+        raise EntrySnapshotError("canonical_market_monitor_feature_lineage_invalid")
+    if not isinstance(monitor.get("market_state"), Mapping) or not monitor["market_state"].get("state"):
+        raise EntrySnapshotError("canonical_market_state_source_invalid")
+    if not isinstance(monitor.get("market_structure_state"), Mapping) or not monitor["market_structure_state"].get("state"):
+        raise EntrySnapshotError("canonical_market_structure_state_source_invalid")
+    if not isinstance(monitor.get("structure"), Mapping) or not isinstance(monitor.get("significant_market_zones"), Mapping) or not isinstance(monitor.get("liquidity_zones"), Mapping):
+        raise EntrySnapshotError("canonical_market_monitor_structure_zones_invalid")
+    windows = monitor.get("windows")
+    if not isinstance(windows, Mapping):
+        raise EntrySnapshotError("canonical_market_monitor_windows_missing")
+    for minutes in (5, 15, 30, 60, 240, 1440):
+        window = windows.get(str(minutes))
+        if not isinstance(window, Mapping) or (
+            window.get("expected_rows") != minutes
+            or window.get("rows_used") != minutes
+            or window.get("complete") is not True
+            or window.get("metrics_valid") is not True
+            or window.get("missing_timestamps")
+            or window.get("duplicate_rows") != 0
+        ):
+            raise EntrySnapshotError(f"canonical_market_monitor_{minutes}m_incomplete")
+
+
 def build_entry_snapshot(evidence_pack: Mapping[str, Any], *, env: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Select only facts available at entry for the model prompt."""
     if not isinstance(evidence_pack, Mapping):
@@ -243,6 +274,8 @@ def build_entry_snapshot(evidence_pack: Mapping[str, Any], *, env: Mapping[str, 
     admission = _admission(src_evt, evidence_pack, gaps)
     geometry = _geometry(evidence_pack, cfg, direction, gaps)
     monitor_snapshot = evidence_pack.get("market_monitor_snapshot")
+    if str(cfg.get("LLM_TRADE_JUDGE_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}:
+        validate_canonical_monitor_snapshot(monitor_snapshot)
     market_context = evidence_pack.get("market_context")
     if not isinstance(monitor_snapshot, Mapping):
         gaps.append("MARKET_MONITOR_SNAPSHOT_MISSING")

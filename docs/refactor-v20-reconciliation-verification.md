@@ -1,5 +1,9 @@
 # Executor v2.0 reconciliation verification
 
+Historical verification only. The Market Monitor builder inventory in this
+document was superseded by `ADR-Canonical-39A-Market-Monitor.md` on
+2026-09-20; it is not the current production architecture.
+
 Result: READY_FOR_ARCHITECT_REVIEW. This is not a merge or deployment approval.
 
 Starting remote refs after fetch: refactor 46c77e5171995ad60739d4941b754f5377260983; v2.0 71b4af9747f9ba62d09cf4dab9c1f055bce870a9. Merge base bca9ab9dee052fdba72136a965f3cb68142acc4d. See the pre-implementation audit for unique commits, behavior evidence, obsolete test expectations and risks.

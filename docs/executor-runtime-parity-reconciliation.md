@@ -70,6 +70,10 @@ meaningful runtime-only behavior to port.
 | executor_mod/trail.py | identical | different | OBSOLETE_OR_NOT_RELEVANT / CONFIG_OR_DEPLOYMENT_ONLY | Preserved extraction/current safety differs from installed stale module. Active production behavior resides in executor.py or unchanged owner. Detailed mapping below. |
 
 Baseline-only paths:
+- Superseded for Market Monitor architecture by
+  `ADR-Canonical-39A-Market-Monitor.md` (2026-09-20). The duplicate
+  `executor_mod/market_monitor_snapshot_v39a.py` was removed in that task;
+  the observations below describe the earlier parity baseline only.
 - executor_mod/market_monitor_snapshot_v39a.py exists in v2 and refactor but is
   absent from the mounted production tree: CONFIG_OR_DEPLOYMENT_ONLY. Keep it;
   missing deployment artifact is not a strategy or Executor-owner change.
