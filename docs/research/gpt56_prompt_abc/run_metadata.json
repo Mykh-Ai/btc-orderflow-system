@@ -2,7 +2,7 @@
   "adapter": "canonical_snapshot_native_renderer",
   "created_at": "2026-09-24T17:07:18.805546+00:00",
   "eligible_trade_count": 20,
-  "manifest_sha256": "a83ea2476b12411a402571cc58eaf139a917344d1562f2c2663b15215e029511",
+  "manifest_sha256": "d5486915c1801c7bd9af01f8d80cbe477695874ad5b9a2bb417874d857b9d23f",
   "max_output_tokens": 4000,
   "model": "gpt-5.6-sol",
   "output_schema": {
@@ -61,7 +61,8 @@
     "B_CANONICAL": "last pre-V2 calibration semantics recovered from b366e19 and ae10ace^; canonical schema adaptation only",
     "C_CANONICAL": "minimal neutral canonical executed-entry assessor specified by GPT56_CANONICAL_PROMPT_ADAPTER_AND_REAL_TRADE_ABC_V1"
   },
-  "snapshots_file_sha256": "da4832d7be1294dd251cdc6b9c79ea17a8e1bf8b5792fef75a2b8cc83c1051af",
+  "snapshots_file_sha256": "459f1feacf994e04518b7162db54e07206d159fbb1e11ffdd7140bdd2f1ff039",
+  "source_text_hash_contract": "UTF8_LF_NORMALIZED_SHA256_V1",
   "tools_supplied": false,
   "variants": [
     "A_CANONICAL",

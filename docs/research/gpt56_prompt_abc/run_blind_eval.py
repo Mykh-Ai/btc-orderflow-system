@@ -31,12 +31,29 @@ from docs.research.gpt56_prompt_abc.canonical_prompt_variants import (
 MODEL = "gpt-5.6-sol"
 REASONING_EFFORT = "medium"
 MAX_OUTPUT_TOKENS = 4000
+TEXT_FILE_HASH_CONTRACT = "UTF8_LF_NORMALIZED_SHA256_V1"
+
+
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
 def _sha256_text(value: str) -> str:
     return _sha256_bytes(value.encode("utf-8"))
+
+
+def _utf8_lf_normalized_bytes(value: bytes) -> bytes:
+    """Return UTF-8 bytes with every text line ending normalized to LF."""
+    text = value.decode("utf-8")
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
+def _sha256_utf8_lf_normalized_bytes(value: bytes) -> str:
+    return _sha256_bytes(_utf8_lf_normalized_bytes(value))
+
+
+def _sha256_utf8_lf_normalized_file(path: Path) -> str:
+    return _sha256_utf8_lf_normalized_bytes(path.read_bytes())
 
 
 def _utc_now() -> str:
@@ -208,10 +225,11 @@ def main() -> None:
         "created_at": _utc_now(), "model": MODEL, "reasoning_effort": REASONING_EFFORT,
         "max_output_tokens": MAX_OUTPUT_TOKENS, "eligible_trade_count": len(eligible),
         "planned_call_count": len(prompts), "variants": list(VARIANTS), "output_schema": EVAL_SCHEMA,
-        "manifest_sha256": _sha256_bytes(args.manifest.read_bytes()),
-        "snapshots_file_sha256": _sha256_bytes(args.snapshots.read_bytes()),
+        "source_text_hash_contract": TEXT_FILE_HASH_CONTRACT,
+        "manifest_sha256": _sha256_utf8_lf_normalized_file(args.manifest),
+        "snapshots_file_sha256": _sha256_utf8_lf_normalized_file(args.snapshots),
         "renderer_version": RENDERER_VERSION,
-        "renderer_source_sha256": _sha256_bytes(args.renderer.read_bytes()),
+        "renderer_source_sha256": _sha256_utf8_lf_normalized_file(args.renderer),
         "semantic_sources": SEMANTIC_SOURCES,
         "adapter": "canonical_snapshot_native_renderer",
         "previous_response_id_used": False, "tools_supplied": False,

@@ -35,6 +35,12 @@ The production V2 prompt, the last pre-V2 prompt (`ae10ace^` with calibration ad
 
 All arms receive one byte-identical canonical snapshot JSON suffix and one common strict output schema. `prompt_record` records semantic source, renderer version, and exact rendered SHA-256. Every rendered prompt is frozen in `rendered_prompts.jsonl` before the first API request. `run_metadata.json` records source hashes and call settings. Any source or prompt change after freeze aborts the run.
 
+## Source-file hash integrity
+
+Research source text files use `UTF8_LF_NORMALIZED_SHA256_V1`: read raw bytes, decode UTF-8, normalize CRLF to LF, normalize any remaining lone CR to LF, encode UTF-8, and hash the resulting bytes with SHA-256. The contract applies to the blind manifest, frozen snapshot file, and renderer source recorded in `run_metadata.json`. It makes the file-level identity deterministic across LF and CRLF checkouts without changing any file's logical content.
+
+Per-prompt SHA-256 remains the hash of the exact rendered prompt string. Per-snapshot identity in the blind manifest remains the hash of the exact canonical JSON line, so this file-level portability fix does not alter prompt text, the eligible cohort, or snapshot identity.
+
 ## Call integrity
 
 Each eligible trade receives one independent call for A, B, and C with:
