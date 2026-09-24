@@ -1,0 +1,71 @@
+{
+  "adapter": "canonical_snapshot_native_renderer",
+  "created_at": "2026-09-24T17:07:18.805546+00:00",
+  "eligible_trade_count": 20,
+  "manifest_sha256": "a83ea2476b12411a402571cc58eaf139a917344d1562f2c2663b15215e029511",
+  "max_output_tokens": 4000,
+  "model": "gpt-5.6-sol",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "confidence": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "reason_codes": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "risk_flags": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "setup_class": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "verdict": {
+        "enum": [
+          "SUPPORT",
+          "REJECT",
+          "UNCLEAR"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "verdict",
+      "confidence",
+      "setup_class",
+      "reason_codes",
+      "risk_flags",
+      "summary"
+    ],
+    "type": "object"
+  },
+  "planned_call_count": 60,
+  "previous_response_id_used": false,
+  "reasoning_effort": "medium",
+  "renderer_source_sha256": "319ffa0bc4e5c1a7e608981845d12b47df456c6f12e9abc1a55445dcf0c30ffc",
+  "renderer_version": "GPT56_CANONICAL_PROMPT_RENDERER_V1",
+  "schema_version": "GPT56_PROMPT_ABC_RUN_METADATA_V1",
+  "semantic_sources": {
+    "A_CANONICAL": "LLM_ENTRY_PROMPT_V2 current decision semantics at ee30183; canonical schema/timing adaptation only",
+    "B_CANONICAL": "last pre-V2 calibration semantics recovered from b366e19 and ae10ace^; canonical schema adaptation only",
+    "C_CANONICAL": "minimal neutral canonical executed-entry assessor specified by GPT56_CANONICAL_PROMPT_ADAPTER_AND_REAL_TRADE_ABC_V1"
+  },
+  "snapshots_file_sha256": "da4832d7be1294dd251cdc6b9c79ea17a8e1bf8b5792fef75a2b8cc83c1051af",
+  "tools_supplied": false,
+  "variants": [
+    "A_CANONICAL",
+    "B_CANONICAL",
+    "C_CANONICAL"
+  ]
+}
