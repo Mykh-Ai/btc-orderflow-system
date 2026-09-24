@@ -59,3 +59,9 @@ Before each request, the runner durably appends a `STARTED` record. It then stor
 The OpenAI API key is read only from the runner process environment. It is never printed or written to an artifact.
 
 Unblinding and evaluation are performed by a separate script only after all 60 call records exist without errors.
+
+## Completed blind run
+
+The approved isolated run completed 60/60 independent calls with zero recorded errors: 20 calls for each canonical arm, exact returned model `gpt-5.6-sol`, and `reasoning.effort=medium`. The immutable blind checkpoint was committed as `756dde5` before the lifecycle ledger was read. The frozen blind artifacts are `raw_results.jsonl`, `verdicts_blind.csv`, and `attempts.jsonl`.
+
+`evaluate_unblinded.py` performs the later local-only join to the historical lifecycle ledger and writes `unblinded_case_comparison.csv` plus `UNBLINDED_EVALUATION.md`. The 20-trade cohort contains ten `NEGATIVE`, four `MIXED`, and six `STRONG_FAVORABLE` cases. All three arms aligned on 9/16 polar outcomes, but their error profiles differ: B emitted no `SUPPORT` verdicts and therefore has a class-collapse warning. The research does not automatically select a winning prompt or authorize a production prompt change.
