@@ -1,0 +1,222 @@
+[
+  {
+    "trade_key": "EX_EN_1778689753",
+    "v1_snapshot_sha256": "ef0102da96ea38e7f231bebb54635ffcbb86b7b090fccc5a0b8169642de1e107",
+    "signal_time_utc": "2026-05-13T16:29:11+00:00",
+    "v1_market_cutoff_utc": "2026-05-13T16:29:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-05-13T16:29:11+00:00",
+    "fill_time_utc": "2026-05-13T16:29:19.998326+00:00",
+    "market_cutoff_shift_minutes": -0.18333333333333332,
+    "entry_delay_seconds": 8.998326,
+    "signal_minute_aligned": false
+  },
+  {
+    "trade_key": "EX_EN_1779438963",
+    "v1_snapshot_sha256": "c24dbf07b6baf3172ad4ce1ed6f48eec304944f1062b5054e0fb84c4d90c6149",
+    "signal_time_utc": "2026-05-22T08:36:00+00:00",
+    "v1_market_cutoff_utc": "2026-05-22T08:36:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-05-22T08:36:00+00:00",
+    "fill_time_utc": "2026-05-22T08:36:11.176169+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 11.176169,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1779805524",
+    "v1_snapshot_sha256": "5ba7c7917e12459eb2fb358ae9c2c3adc948daed9a91f4621734a7b2f3b5608f",
+    "signal_time_utc": "2026-05-26T14:25:00+00:00",
+    "v1_market_cutoff_utc": "2026-05-26T14:27:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-05-26T14:25:00+00:00",
+    "fill_time_utc": "2026-05-26T14:27:02.546187+00:00",
+    "market_cutoff_shift_minutes": 2.0,
+    "entry_delay_seconds": 122.546187,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1779900918",
+    "v1_snapshot_sha256": "7a42cab1007cdc4ce56c3982f7ecc8d700124deae93e5d2f40a0ea1617923f0d",
+    "signal_time_utc": "2026-05-27T14:55:16+00:00",
+    "v1_market_cutoff_utc": "2026-05-27T16:56:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-05-27T14:55:16+00:00",
+    "fill_time_utc": "2026-05-27T16:56:56.128756+00:00",
+    "market_cutoff_shift_minutes": 120.73333333333333,
+    "entry_delay_seconds": 7300.128756,
+    "signal_minute_aligned": false
+  },
+  {
+    "trade_key": "EX_EN_1780067415",
+    "v1_snapshot_sha256": "483a97f06d4b1aa4d508d5f208532ecf10ab51a958d7179691cd630fdeb342a2",
+    "signal_time_utc": "2026-05-29T15:10:00+00:00",
+    "v1_market_cutoff_utc": "2026-05-29T15:11:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-05-29T15:10:00+00:00",
+    "fill_time_utc": "2026-05-29T15:11:53.311570+00:00",
+    "market_cutoff_shift_minutes": 1.0,
+    "entry_delay_seconds": 113.31157,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1781057890",
+    "v1_snapshot_sha256": "daec2e215e4519bbdd066a924de9253a33defa0e6c9e438dd606c944a1c8c69e",
+    "signal_time_utc": "2026-06-10T02:18:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-10T02:18:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-10T02:18:00+00:00",
+    "fill_time_utc": "2026-06-10T02:18:17.475712+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 17.475712,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1781221266",
+    "v1_snapshot_sha256": "0da828502f726f1770d3931be29f8e7448bcd39ab352de63be0a8cda4ff8733c",
+    "signal_time_utc": "2026-06-11T23:41:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-11T23:42:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-11T23:41:00+00:00",
+    "fill_time_utc": "2026-06-11T23:42:06.493872+00:00",
+    "market_cutoff_shift_minutes": 1.0,
+    "entry_delay_seconds": 66.493872,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1781615351",
+    "v1_snapshot_sha256": "52a020c2dcca78de7f2576d0f56700835d9c52fe6a39f63acd5ebfbe06c85ef3",
+    "signal_time_utc": "2026-06-16T13:09:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-16T13:10:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-16T13:09:00+00:00",
+    "fill_time_utc": "2026-06-16T13:10:49.524238+00:00",
+    "market_cutoff_shift_minutes": 1.0,
+    "entry_delay_seconds": 109.524238,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1782076213",
+    "v1_snapshot_sha256": "4323b2e9dcfcaed4c01363f44bc1c782813471185a3f41c43311ba261740b7fc",
+    "signal_time_utc": "2026-06-21T21:10:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-21T21:10:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-21T21:10:00+00:00",
+    "fill_time_utc": "2026-06-21T21:10:20.358432+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 20.358432,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1782306796",
+    "v1_snapshot_sha256": "6878ad058e0b633b873156883498269e7e0fd9d45d7867c856f926f9509d3f6e",
+    "signal_time_utc": "2026-06-24T13:13:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-24T13:13:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-24T13:13:00+00:00",
+    "fill_time_utc": "2026-06-24T13:13:34.281648+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 34.281648,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1782477849",
+    "v1_snapshot_sha256": "9eb0bb2fc59c7c61589ee8e91f7bd28cacc89bf7f99665798a6540b99ee9c87c",
+    "signal_time_utc": "2026-06-26T12:44:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-26T12:44:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-26T12:44:00+00:00",
+    "fill_time_utc": "2026-06-26T12:44:16.427082+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 16.427082,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1782740830",
+    "v1_snapshot_sha256": "6273299e52ad269f79b87d56f9ba59a1974843f234c561804d349173c9021504",
+    "signal_time_utc": "2026-06-29T13:47:00+00:00",
+    "v1_market_cutoff_utc": "2026-06-29T13:47:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-06-29T13:47:00+00:00",
+    "fill_time_utc": "2026-06-29T13:47:18.261588+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 18.261588,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1784376441",
+    "v1_snapshot_sha256": "849544465c1d67559198f43e63f22fe544056630d87abc7332cee3f1ea085c19",
+    "signal_time_utc": "2026-07-18T12:07:00+00:00",
+    "v1_market_cutoff_utc": "2026-07-18T12:07:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-07-18T12:07:00+00:00",
+    "fill_time_utc": "2026-07-18T12:07:29.415366+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 29.415366,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1785025567",
+    "v1_snapshot_sha256": "3f2221a9e1c60889c000e684062d748050d6410c4da5eab67d3c617713820673",
+    "signal_time_utc": "2026-07-26T00:26:00+00:00",
+    "v1_market_cutoff_utc": "2026-07-26T00:26:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-07-26T00:26:00+00:00",
+    "fill_time_utc": "2026-07-26T00:26:15.315915+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 15.315915,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1785961338",
+    "v1_snapshot_sha256": "424059c0465c636cc0acc2d50fc6f791b3b280d2b254fdc9a609b54a5f843659",
+    "signal_time_utc": "2026-08-05T20:22:00+00:00",
+    "v1_market_cutoff_utc": "2026-08-05T20:22:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-08-05T20:22:00+00:00",
+    "fill_time_utc": "2026-08-05T20:22:26.160485+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 26.160485,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1786107369",
+    "v1_snapshot_sha256": "f65cf3b24299ab4886db0f6e422f0c0d782828ddbd1a692b81e2630de807b189",
+    "signal_time_utc": "2026-08-07T12:56:00+00:00",
+    "v1_market_cutoff_utc": "2026-08-07T12:56:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-08-07T12:56:00+00:00",
+    "fill_time_utc": "2026-08-07T12:56:17.311631+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 17.311631,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1786131443",
+    "v1_snapshot_sha256": "3bf68edb3bda058ee61360ec7d2117a1a97589cbb2476c6dde086a246543336d",
+    "signal_time_utc": "2026-08-07T19:37:00+00:00",
+    "v1_market_cutoff_utc": "2026-08-07T19:37:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-08-07T19:37:00+00:00",
+    "fill_time_utc": "2026-08-07T19:37:31.340568+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 31.340568,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1787063409",
+    "v1_snapshot_sha256": "cbeac5b1af8648ef4a9127e355d0f20b46ce3556c0f70ec814c8e045a201bfca",
+    "signal_time_utc": "2026-08-18T14:30:00+00:00",
+    "v1_market_cutoff_utc": "2026-08-18T14:30:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-08-18T14:30:00+00:00",
+    "fill_time_utc": "2026-08-18T14:30:16.967866+00:00",
+    "market_cutoff_shift_minutes": 0.0,
+    "entry_delay_seconds": 16.967866,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1788166698",
+    "v1_snapshot_sha256": "f8957dd257cc4612ac3f757cff6e1cf80bb317c6ae6491bac11ea5f98aa6ded3",
+    "signal_time_utc": "2026-08-31T08:58:00+00:00",
+    "v1_market_cutoff_utc": "2026-08-31T08:59:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-08-31T08:58:00+00:00",
+    "fill_time_utc": "2026-08-31T08:59:28.724320+00:00",
+    "market_cutoff_shift_minutes": 1.0,
+    "entry_delay_seconds": 88.72432,
+    "signal_minute_aligned": true
+  },
+  {
+    "trade_key": "EX_EN_1789351940",
+    "v1_snapshot_sha256": "3caf9d9fe6d7d4fe015f3c2336eaaca5f4a9c2e9e509069a056a585ff6379396",
+    "signal_time_utc": "2026-09-14T02:12:00+00:00",
+    "v1_market_cutoff_utc": "2026-09-14T02:13:00+00:00",
+    "v2_required_market_cutoff_utc": "2026-09-14T02:12:00+00:00",
+    "fill_time_utc": "2026-09-14T02:13:54.228142+00:00",
+    "market_cutoff_shift_minutes": 1.0,
+    "entry_delay_seconds": 114.228142,
+    "signal_minute_aligned": true
+  }
+]

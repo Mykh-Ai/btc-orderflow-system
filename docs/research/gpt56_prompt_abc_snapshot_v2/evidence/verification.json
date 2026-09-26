@@ -1,0 +1,16 @@
+{
+  "status": "BLOCKED_BY_INPUT_RECONSTRUCTION",
+  "audited_head": "f716d54d7a58867e74eb1062d2d0960e00d92f32",
+  "evidence_commands_verified": 31,
+  "old_files_byte_identical": 25,
+  "eligible_trade_count": 20,
+  "raw_feed_files_required": 155,
+  "raw_feed_files_available_at_manifest_paths": 0,
+  "raw_feed_manifest_total_bytes": 31215192,
+  "new_api_calls": 0,
+  "v2_snapshots_created": 0,
+  "new_verdicts_created": 0,
+  "pytest_status": "NOT_RUN_MODULE_NOT_INSTALLED",
+  "research_question_classification": "NOT_EVALUATED",
+  "production_merge": "NO_MERGE"
+}

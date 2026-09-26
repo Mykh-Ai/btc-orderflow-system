@@ -1,0 +1,347 @@
+[
+  {
+    "command": [
+      "git",
+      "status"
+    ],
+    "exit_code": 0,
+    "file": "git-status.txt",
+    "sha256": "f73a3eeafd109dba6f85d574d62418fbd4a9495ed6da16798772566b64755696"
+  },
+  {
+    "command": [
+      "git",
+      "log",
+      "--oneline",
+      "-n",
+      "30"
+    ],
+    "exit_code": 0,
+    "file": "git-log.txt",
+    "sha256": "03d2ff7751925c2f26702c42e2b5f80c7327d7fef257fd2944cd51c5bb7521c4"
+  },
+  {
+    "command": [
+      "git",
+      "log",
+      "-p",
+      "-S",
+      "CANONICAL_TRADE_EVALUATION_SNAPSHOT_V1",
+      "--",
+      "executor_mod/trade_evaluation_snapshot.py"
+    ],
+    "exit_code": 0,
+    "file": "snapshot-history.txt",
+    "sha256": "9c3bd40c4f78f68e2265ec1610c16a1b96ec0978042ab654c34d46dabd25f91b"
+  },
+  {
+    "command": [
+      "git",
+      "log",
+      "-p",
+      "-S",
+      "A_CANONICAL",
+      "--",
+      "docs/research/gpt56_prompt_abc/canonical_prompt_variants.py"
+    ],
+    "exit_code": 0,
+    "file": "prompt-history.txt",
+    "sha256": "451be147ba05d66b4ec1cd237025a3142c77a2b722c7f6d29fa05a9f42b673b5"
+  },
+  {
+    "command": [
+      "nl",
+      "-ba",
+      "executor_mod/trade_evaluation_snapshot.py"
+    ],
+    "exit_code": 0,
+    "file": "snapshot-numbered.txt",
+    "sha256": "ea0fd39af6925968360c1beb40a444b12c5be76c07c7dc60f1836f987a27c980"
+  },
+  {
+    "command": [
+      "nl",
+      "-ba",
+      "docs/research/gpt56_prompt_abc/canonical_prompt_variants.py"
+    ],
+    "exit_code": 0,
+    "file": "prompt-numbered.txt",
+    "sha256": "de37bcbde0510a89c179db31a438013e9d0efb043ec513867747310ec62886df"
+  },
+  {
+    "command": [
+      "nl",
+      "-ba",
+      "docs/research/gpt56_prompt_abc/run_blind_eval.py"
+    ],
+    "exit_code": 0,
+    "file": "runner-numbered.txt",
+    "sha256": "78eb671b968d65f4e8aafab2abf5112551fefe587cdca7bcdcc24313f91d4e41"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "1,500",
+      "executor_mod/trade_evaluation_snapshot.py"
+    ],
+    "exit_code": 0,
+    "file": "snapshot-blame.txt",
+    "sha256": "0d1d4ac97e87af4fa84ebe07e5dde5074d9b2770927feab9511e5fe9ae4d270b"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "docs/research/gpt56_prompt_abc/canonical_prompt_variants.py"
+    ],
+    "exit_code": 0,
+    "file": "prompt-blame.txt",
+    "sha256": "6b7b4320207d7cbdf3483e255efc5f0a5c05e6222fc3b39648d3a37baf2239c4"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "docs/research/gpt56_prompt_abc/run_blind_eval.py"
+    ],
+    "exit_code": 0,
+    "file": "runner-blame.txt",
+    "sha256": "d439c5ca89593a52ec4a9d02eaf15e30165813ef567168b325da66751cc59f5f"
+  },
+  {
+    "command": [
+      "rg",
+      "-n",
+      "CANONICAL_TRADE_EVALUATION_SNAPSHOT|market_cutoff|signal_time|horizons|delta|open_interest|zones|A_CANONICAL|B_CANONICAL|C_CANONICAL",
+      "executor_mod",
+      "market_monitor",
+      "docs/research",
+      "test"
+    ],
+    "exit_code": 0,
+    "file": "crossreferences.txt",
+    "sha256": "1cf1bffdc44c5a81ffdeeb03efc3d6182a3c97f1dc65aeb95acb097522608787"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/feed_adapter.py | sed -n '95,160p'"
+    ],
+    "exit_code": 0,
+    "file": "feed-adapter-numbered.txt",
+    "sha256": "83d46842c6d4a4fb482a0cce20b922fe5559a827bac9fc1c7b273b1ae1d0f16a"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "95,160",
+      "market_monitor/feed_adapter.py"
+    ],
+    "exit_code": 0,
+    "file": "feed-adapter-blame.txt",
+    "sha256": "bf0a64f6e2d34259047849325c5f017cd9ca94caef87c0e6e9eba1717b599708"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/snapshot_builder_v39a.py | sed -n '202,284p'"
+    ],
+    "exit_code": 0,
+    "file": "window-metrics-numbered.txt",
+    "sha256": "7da51de4df58f9ab286e325fab850be074f4f5c49955a2f92a05efa65b942531"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "202,284",
+      "market_monitor/snapshot_builder_v39a.py"
+    ],
+    "exit_code": 0,
+    "file": "window-metrics-blame.txt",
+    "sha256": "99cc4ffb17d74d077c03971683dac61431599d9c4e7935f6c73178fc4aae6f28"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/canonical_features.py | sed -n '28,106p'"
+    ],
+    "exit_code": 0,
+    "file": "canonical-features-numbered.txt",
+    "sha256": "f407ccc73a7cf3050f03530ff4c1d86c3dc4b2f70b7d3c05b2b0957d1933f610"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "28,106",
+      "market_monitor/canonical_features.py"
+    ],
+    "exit_code": 0,
+    "file": "canonical-features-blame.txt",
+    "sha256": "9572da4cec67ba882f57b11f7922d2b6e89c655e6c4694915eef67fa58ec8fcf"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/canonical_features.py | sed -n '216,258p'"
+    ],
+    "exit_code": 0,
+    "file": "nearest-zones-numbered.txt",
+    "sha256": "db190877f8f621af1a416ef78f24235051ca75ed1968561fdf1a71d3d8b653c1"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "216,258",
+      "market_monitor/canonical_features.py"
+    ],
+    "exit_code": 0,
+    "file": "nearest-zones-blame.txt",
+    "sha256": "b4d8b971da355f8a35f09f8abdd48f68963c56b03db23c808ab9d2b912c946ba"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/zone_registry.py | sed -n '193,250p'"
+    ],
+    "exit_code": 0,
+    "file": "forward-liquidity-numbered.txt",
+    "sha256": "c5dbd98e482297d686220d6017d6012c49fa0ac227a17c7373620512570aa06d"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "193,250",
+      "market_monitor/zone_registry.py"
+    ],
+    "exit_code": 0,
+    "file": "forward-liquidity-blame.txt",
+    "sha256": "f29e143104d1ffadadc8257091429edf44479e666966a409187474d94f0d5f7d"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/zone_registry.py | sed -n '1166,1190p'"
+    ],
+    "exit_code": 0,
+    "file": "active-liquidity-numbered.txt",
+    "sha256": "29637dd61d09508b594a73288e3251d55a6a503cdf6cf16e440a42cd10bb8955"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "1166,1190",
+      "market_monitor/zone_registry.py"
+    ],
+    "exit_code": 0,
+    "file": "active-liquidity-blame.txt",
+    "sha256": "ecbd5eba1cf71e21e8557529c599c76d763685f9dc92fef4b7e95f2f9d7094e2"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba market_monitor/significant_market_zones.py | sed -n '140,220p'"
+    ],
+    "exit_code": 0,
+    "file": "significant-zones-numbered.txt",
+    "sha256": "c5c28c9b93ea86c77b867b7c9bc3aabbf59451d1d114781c543830dd062c2327"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "140,220",
+      "market_monitor/significant_market_zones.py"
+    ],
+    "exit_code": 0,
+    "file": "significant-zones-blame.txt",
+    "sha256": "23f0afc5013696d58c6d37c24cf3a23e40114dfe46232e3c0d573a76b00862e5"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba docs/research/canonical_trade_evaluation_snapshot/rebuild_cases.py | sed -n '1,120p'"
+    ],
+    "exit_code": 0,
+    "file": "historical-rebuild-numbered.txt",
+    "sha256": "7ecfb9bbaaacd68ee225da304e1952421ed73909e07b3e5702ffa9ba12d21dda"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "1,120",
+      "docs/research/canonical_trade_evaluation_snapshot/rebuild_cases.py"
+    ],
+    "exit_code": 0,
+    "file": "historical-rebuild-blame.txt",
+    "sha256": "37432235d41fcdbe6419c283b6f1be2462a894705b7e94fb0e4a83dae06a0e86"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba executor_mod/llm_trade_judge.py | sed -n '821,866p'"
+    ],
+    "exit_code": 0,
+    "file": "judge-pack-numbered.txt",
+    "sha256": "d10bb781a41369b3b0878c916f629fd1b9e04ea70094ca1d42d0294854135523"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "821,866",
+      "executor_mod/llm_trade_judge.py"
+    ],
+    "exit_code": 0,
+    "file": "judge-pack-blame.txt",
+    "sha256": "5fd82a1356e329a293cea688db12f6506ec0f21557fd04490a5e14ca1d461798"
+  },
+  {
+    "command": [
+      "bash",
+      "-c",
+      "nl -ba executor_mod/pending_entry_flow.py | sed -n '92,125p'"
+    ],
+    "exit_code": 0,
+    "file": "fill-chronology-numbered.txt",
+    "sha256": "8eec0875d9e7a731f9fd1aa53c01346a9895a7ded49d4affc1361336d970b046"
+  },
+  {
+    "command": [
+      "git",
+      "blame",
+      "-L",
+      "92,125",
+      "executor_mod/pending_entry_flow.py"
+    ],
+    "exit_code": 0,
+    "file": "fill-chronology-blame.txt",
+    "sha256": "491e9f34e4008b348821f6cc1d2f3e5db04e71b913c7919102a92fc5fe5d5214"
+  }
+]
