@@ -1,0 +1,763 @@
+[
+  {
+    "execution": {
+      "actual_entry_price": 79021.97,
+      "entry_minus_signal_distance_approx": -7.8379961256,
+      "entry_minus_signal_pct_approx": -0.0099177719,
+      "entry_to_sl_risk": 149.74,
+      "execution_quote_currency": "USDC",
+      "executor_observed_fill_timestamp_utc": "2026-05-13T16:29:19.998326Z",
+      "filled_quantity": 0.00113,
+      "initial_sl": 78872.23,
+      "initial_tp1": 79188.37,
+      "initial_tp2": 79346.44,
+      "quote_conversion_at_entry_approx": 0.9997445666809058,
+      "signal_to_fill_elapsed_seconds": 8.998326,
+      "tp1_R": 1.1112595165,
+      "tp1_reward": 166.4,
+      "tp2_R": 2.1668892747,
+      "tp2_reward": 324.47
+    },
+    "quality": {
+      "chronology_anomaly": null,
+      "conversion_available": true,
+      "degraded_or_recovered_feed": false,
+      "historical_prediction_cutoff_proxy": true,
+      "incomplete_segments": [],
+      "market_cutoff_contract": "UTC_minute_close_label_inclusive",
+      "missing_evidence": [
+        "durable_signal_measurements_unavailable"
+      ],
+      "missing_source_columns": [],
+      "open_interest_available": true,
+      "open_price_close_fallback": false,
+      "prediction_cutoff_source": "historical_executor_fill_proxy",
+      "prediction_cutoff_utc": "2026-05-13T16:29:19.998326Z",
+      "snapshot_schema_version": "OPEN_TRADE_OUTCOME_PREDICTOR_SNAPSHOT_V2",
+      "units": {
+        "delta": "BTC",
+        "delta_pct": "fraction_of_total_qty",
+        "open_interest_change": "feed_contract_units",
+        "price": "market_USDT_or_execution_USDC_per_BTC_as_labeled",
+        "total_qty": "BTC"
+      },
+      "zone_history_available": true
+    },
+    "signal": {
+      "measurements": {},
+      "peak_timestamp_utc": "2026-05-13T16:29:11Z",
+      "raw_signal_plan_usdt": {
+        "entry_usdt": 79050.5,
+        "sl_usdt": 78892.39,
+        "tp1_usdt": 79208.61,
+        "tp2_usdt": 79366.72
+      },
+      "side": "long",
+      "signal_price": 79050.0,
+      "signal_quote_currency": "USDT",
+      "trade_key": "EX_EN_1778689753"
+    },
+    "structure_geometry": {
+      "current_price_market_quote": 78997.7,
+      "nearest_active_liquidity_in_trade_direction": {
+        "distance_from_current_price": 794.7838,
+        "lower": 79792.4838,
+        "side": "BUY_SIDE",
+        "upper": 79907.934,
+        "zone_id": "zone_000007"
+      },
+      "nearest_qualified_opposing_zone": {
+        "accepted_above_timestamp": null,
+        "accepted_below_timestamp": null,
+        "close_above_count": 0,
+        "close_below_count": 0,
+        "consumed_timestamp": null,
+        "consumption_reason": null,
+        "consumption_status": null,
+        "data_quality": "RAW",
+        "failed_acceptance_count": 0,
+        "first_sweep_timestamp": null,
+        "interaction_count": 408,
+        "last_clean_reaction_timestamp": null,
+        "last_interaction_timestamp": "2026-05-13T16:29:00Z",
+        "lower": 78060.0,
+        "matched_registry_lifecycle": {
+          "accepted_above_timestamp": "2026-05-13T16:02:00Z",
+          "accepted_below_timestamp": null,
+          "close_above_count": 27,
+          "close_below_count": 0,
+          "consumed_timestamp": null,
+          "consumption_reason": null,
+          "consumption_status": "TESTED",
+          "data_quality": "RAW",
+          "failed_acceptance_count": 0,
+          "first_sweep_timestamp": null,
+          "interaction_count": 8,
+          "last_clean_reaction_timestamp": null,
+          "last_interaction_timestamp": "2026-05-13T16:12:00Z",
+          "lower": 78713.72345,
+          "resweep_count": 0,
+          "status": "TOUCHED",
+          "upper": 78792.47655,
+          "zone_id": "zone_000010",
+          "zone_type": "EUROPE_LOW_ZONE"
+        },
+        "minutes_since_last_interaction": 0,
+        "price_position": "INSIDE",
+        "qualification": "SIGNIFICANT",
+        "resweep_count": 0,
+        "status": "SIGNIFICANT",
+        "upper": 80478.0,
+        "zone_id": "significant_zone_000002",
+        "zone_type": "ACCUMULATION_REBALANCE_ZONE=2|BUY_LIQUIDATION_REPRICING_ZONE=2|MARKDOWN_VOLUME_EXPANSION_ZONE=5|MARKUP_VOLUME_EXPANSION_ZONE=5|SELL_LIQUIDATION_REPRICING_ZONE=7|TRAPPED_BUYING_DISTRIBUTION_ZONE=1"
+      },
+      "range_1440m": {
+        "distance_to_high": 2272.5,
+        "distance_to_low": 283.9,
+        "high": 81270.2,
+        "low": 78713.8,
+        "position_in_range": 0.111054608
+      },
+      "range_240m": {
+        "distance_to_high": 1326.4,
+        "distance_to_low": 283.9,
+        "high": 80324.1,
+        "low": 78713.8,
+        "position_in_range": 0.1763025523
+      },
+      "recent_cleared_structure_in_trade_direction": null,
+      "target_clear_air_geometry": {
+        "distance_from_actual_entry_R_approx": -6.5574270395,
+        "distance_from_actual_entry_execution_quote_approx": -981.9091248885,
+        "near_boundary_market_quote": 78060.0,
+        "tp1_relation": "INSIDE",
+        "tp2_relation": "INSIDE"
+      }
+    },
+    "temporal_market": {
+      "broad_context": {
+        "1d": {
+          "complete": true,
+          "delta_pct": -0.0106094034,
+          "price_change_pct": -1.6108883799,
+          "rows_expected": 1440,
+          "rows_used": 1440,
+          "source_quality": "RAW"
+        },
+        "3d": {
+          "complete": true,
+          "delta_pct": -0.0124706974,
+          "price_change_pct": -2.7594950732,
+          "rows_expected": 4320,
+          "rows_used": 4320,
+          "source_quality": "RAW"
+        },
+        "7d": {
+          "complete": false,
+          "delta_pct": -0.0065153003,
+          "price_change_pct": 1.3135231842,
+          "rows_expected": 10080,
+          "rows_used": 10029,
+          "source_quality": "RECOVERED_DEGRADED"
+        }
+      },
+      "market_bar_cutoff_utc": "2026-05-13T16:29:00Z",
+      "prediction_market_cutoff_utc": "2026-05-13T16:29:00Z",
+      "segments": {
+        "T-1440_TO_T-240": {
+          "complete": true,
+          "delta": -548.727,
+          "delta_pct": -0.0073011981,
+          "end_timestamp": "2026-05-13T12:29:00Z",
+          "high": 81270.2,
+          "low": 79801.0,
+          "open_interest_change": -286.74,
+          "price_change_pct": 0.0196783952,
+          "price_close": 80306.9,
+          "price_open": 80291.1,
+          "rows_expected": 1200,
+          "rows_used": 1200,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-12T16:30:00Z",
+          "total_qty": 75155.747
+        },
+        "T-15_TO_T-5": {
+          "complete": true,
+          "delta": 348.422,
+          "delta_pct": 0.1918602218,
+          "end_timestamp": "2026-05-13T16:24:00Z",
+          "high": 78957.7,
+          "low": 78820.9,
+          "open_interest_change": 74.27,
+          "price_change_pct": 0.1520845991,
+          "price_close": 78957.6,
+          "price_open": 78837.7,
+          "rows_expected": 10,
+          "rows_used": 10,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-13T16:15:00Z",
+          "total_qty": 1816.02
+        },
+        "T-240_TO_T-60": {
+          "complete": true,
+          "delta": 729.28,
+          "delta_pct": 0.0175757674,
+          "end_timestamp": "2026-05-13T15:29:00Z",
+          "high": 80324.1,
+          "low": 79202.8,
+          "open_interest_change": -416.39,
+          "price_change_pct": -1.3031258833,
+          "price_close": 79260.4,
+          "price_open": 80306.9,
+          "rows_expected": 180,
+          "rows_used": 180,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-13T12:30:00Z",
+          "total_qty": 41493.494
+        },
+        "T-5_TO_T0": {
+          "complete": true,
+          "delta": 180.12,
+          "delta_pct": 0.1451770464,
+          "end_timestamp": "2026-05-13T16:29:00Z",
+          "high": 79037.6,
+          "low": 78928.0,
+          "open_interest_change": -0.64,
+          "price_change_pct": 0.050660037,
+          "price_close": 78997.7,
+          "price_open": 78957.7,
+          "rows_expected": 5,
+          "rows_used": 5,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-13T16:25:00Z",
+          "total_qty": 1240.692
+        },
+        "T-60_TO_T-15": {
+          "complete": true,
+          "delta": -2167.633,
+          "delta_pct": -0.1219826207,
+          "end_timestamp": "2026-05-13T16:14:00Z",
+          "high": 79316.4,
+          "low": 78713.8,
+          "open_interest_change": 413.78,
+          "price_change_pct": -0.5333054085,
+          "price_close": 78837.7,
+          "price_open": 79260.4,
+          "rows_expected": 45,
+          "rows_used": 45,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-13T15:30:00Z",
+          "total_qty": 17770.015
+        }
+      }
+    }
+  },
+  {
+    "execution": {
+      "actual_entry_price": 77215.81,
+      "entry_minus_signal_distance_approx": 7.9503094531,
+      "entry_minus_signal_pct_approx": 0.0102972799,
+      "entry_to_sl_risk": 400.22,
+      "execution_quote_currency": "USDC",
+      "executor_observed_fill_timestamp_utc": "2026-05-22T08:36:11.176169Z",
+      "filled_quantity": 0.0518,
+      "initial_sl": 77616.03,
+      "initial_tp1": 76798.72,
+      "initial_tp2": 76390.06,
+      "quote_conversion_at_entry_approx": 0.999305029933215,
+      "signal_to_fill_elapsed_seconds": 11.176169,
+      "tp1_R": 1.0421518165,
+      "tp1_reward": 417.09,
+      "tp2_R": 2.0632402179,
+      "tp2_reward": 825.75
+    },
+    "quality": {
+      "chronology_anomaly": null,
+      "conversion_available": true,
+      "degraded_or_recovered_feed": false,
+      "historical_prediction_cutoff_proxy": true,
+      "incomplete_segments": [],
+      "market_cutoff_contract": "UTC_minute_close_label_inclusive",
+      "missing_evidence": [],
+      "missing_source_columns": [],
+      "open_interest_available": true,
+      "open_price_close_fallback": false,
+      "prediction_cutoff_source": "historical_executor_fill_proxy",
+      "prediction_cutoff_utc": "2026-05-22T08:36:11.176169Z",
+      "snapshot_schema_version": "OPEN_TRADE_OUTCOME_PREDICTOR_SNAPSHOT_V2",
+      "units": {
+        "delta": "BTC",
+        "delta_pct": "fraction_of_total_qty",
+        "open_interest_change": "feed_contract_units",
+        "price": "market_USDT_or_execution_USDC_per_BTC_as_labeled",
+        "total_qty": "BTC"
+      },
+      "zone_history_available": true
+    },
+    "signal": {
+      "measurements": {
+        "delta": -49.11,
+        "imb": 0.667,
+        "poc": 77460,
+        "vol": 73.65,
+        "vwap": 77473
+      },
+      "peak_timestamp_utc": "2026-05-22T08:36:00Z",
+      "raw_signal_plan_usdt": {
+        "entry_usdt": 77261.06,
+        "sl_usdt": 77670.0,
+        "tp1_usdt": 76852.12,
+        "tp2_usdt": 76443.18
+      },
+      "side": "short",
+      "signal_price": 77261.554158,
+      "signal_quote_currency": "USDT",
+      "trade_key": "EX_EN_1779438963"
+    },
+    "structure_geometry": {
+      "current_price_market_quote": 77254.7,
+      "nearest_active_liquidity_in_trade_direction": {
+        "distance_from_current_price": 246.215,
+        "lower": 76931.515,
+        "side": "SELL_SIDE",
+        "upper": 77008.485,
+        "zone_id": "zone_000005"
+      },
+      "nearest_qualified_opposing_zone": {
+        "accepted_above_timestamp": null,
+        "accepted_below_timestamp": null,
+        "close_above_count": 0,
+        "close_below_count": 0,
+        "consumed_timestamp": null,
+        "consumption_reason": null,
+        "consumption_status": null,
+        "data_quality": "RECOVERED_DEGRADED",
+        "failed_acceptance_count": 0,
+        "first_sweep_timestamp": null,
+        "interaction_count": 1440,
+        "last_clean_reaction_timestamp": null,
+        "last_interaction_timestamp": "2026-05-22T08:36:00Z",
+        "lower": 76014.2,
+        "matched_registry_lifecycle": {
+          "accepted_above_timestamp": "2026-05-21T17:13:00Z",
+          "accepted_below_timestamp": "2026-05-21T16:17:00Z",
+          "close_above_count": 791,
+          "close_below_count": 64,
+          "consumed_timestamp": "2026-05-21T19:09:00Z",
+          "consumption_reason": "broad_full_zone_two_sided_chop",
+          "consumption_status": "CHOPPED_THROUGH",
+          "data_quality": "RAW",
+          "failed_acceptance_count": 8,
+          "first_sweep_timestamp": "2026-05-21T17:11:00Z",
+          "interaction_count": 167,
+          "last_clean_reaction_timestamp": null,
+          "last_interaction_timestamp": "2026-05-22T08:36:00Z",
+          "lower": 77290.23555,
+          "resweep_count": 12,
+          "status": "CROSSED_UNCLASSIFIED",
+          "upper": 77417.78955,
+          "zone_id": "zone_000004",
+          "zone_type": "M15_SWING_HIGH_ZONE"
+        },
+        "minutes_since_last_interaction": 0,
+        "price_position": "INSIDE",
+        "qualification": "SIGNIFICANT",
+        "resweep_count": 0,
+        "status": "SIGNIFICANT",
+        "upper": 78648.0,
+        "zone_id": "significant_zone_000001",
+        "zone_type": "ACCUMULATION_REBALANCE_ZONE=6|BUY_LIQUIDATION_REPRICING_ZONE=14|DISTRIBUTION_REBALANCE_ZONE=18|MARKDOWN_VOLUME_EXPANSION_ZONE=24|MARKUP_VOLUME_EXPANSION_ZONE=21|REDISTRIBUTION_BALANCE_ZONE=10|SELL_LIQUIDATION_REPRICING_ZONE=9|TRAPPED_BUYING_DISTRIBUTION_ZONE=1|TRAPPED_SELLING_ACCUMULATION_ZONE=2"
+      },
+      "range_1440m": {
+        "distance_to_high": 809.1,
+        "distance_to_low": 558.0,
+        "high": 78063.8,
+        "low": 76696.7,
+        "position_in_range": 0.4081632653
+      },
+      "range_240m": {
+        "distance_to_high": 470.1,
+        "distance_to_low": 84.7,
+        "high": 77724.8,
+        "low": 77170.0,
+        "position_in_range": 0.152667628
+      },
+      "recent_cleared_structure_in_trade_direction": null,
+      "target_clear_air_geometry": {
+        "distance_from_actual_entry_R_approx": -3.4419369202,
+        "distance_from_actual_entry_execution_quote_approx": -1377.5319941875,
+        "near_boundary_market_quote": 78648.0,
+        "tp1_relation": "INSIDE",
+        "tp2_relation": "INSIDE"
+      }
+    },
+    "temporal_market": {
+      "broad_context": {
+        "1d": {
+          "complete": true,
+          "delta_pct": -0.0319151082,
+          "price_change_pct": -0.8576415179,
+          "rows_expected": 1440,
+          "rows_used": 1440,
+          "source_quality": "RAW"
+        },
+        "3d": {
+          "complete": true,
+          "delta_pct": -0.0132235,
+          "price_change_pct": 0.2148163618,
+          "rows_expected": 4320,
+          "rows_used": 4320,
+          "source_quality": "RAW"
+        },
+        "7d": {
+          "complete": false,
+          "delta_pct": -0.0223692511,
+          "price_change_pct": -4.0838547874,
+          "rows_expected": 10080,
+          "rows_used": 10079,
+          "source_quality": "RAW"
+        }
+      },
+      "market_bar_cutoff_utc": "2026-05-22T08:36:00Z",
+      "prediction_market_cutoff_utc": "2026-05-22T08:36:00Z",
+      "segments": {
+        "T-1440_TO_T-240": {
+          "complete": true,
+          "delta": -2411.562,
+          "delta_pct": -0.0263170186,
+          "end_timestamp": "2026-05-22T04:36:00Z",
+          "high": 78063.8,
+          "low": 76696.7,
+          "open_interest_change": -554.66,
+          "price_change_pct": -0.2639785429,
+          "price_close": 77717.3,
+          "price_open": 77923.0,
+          "rows_expected": 1200,
+          "rows_used": 1200,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-21T08:37:00Z",
+          "total_qty": 91635.076
+        },
+        "T-15_TO_T-5": {
+          "complete": true,
+          "delta": 55.713,
+          "delta_pct": 0.2406349206,
+          "end_timestamp": "2026-05-22T08:31:00Z",
+          "high": 77484.0,
+          "low": 77405.7,
+          "open_interest_change": 14.82,
+          "price_change_pct": -0.0267153997,
+          "price_close": 77462.7,
+          "price_open": 77483.4,
+          "rows_expected": 10,
+          "rows_used": 10,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-22T08:22:00Z",
+          "total_qty": 231.525
+        },
+        "T-240_TO_T-60": {
+          "complete": true,
+          "delta": -770.269,
+          "delta_pct": -0.0759967264,
+          "end_timestamp": "2026-05-22T07:36:00Z",
+          "high": 77724.8,
+          "low": 77237.1,
+          "open_interest_change": -215.52,
+          "price_change_pct": -0.3761072195,
+          "price_close": 77424.9,
+          "price_open": 77717.2,
+          "rows_expected": 180,
+          "rows_used": 180,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-22T04:37:00Z",
+          "total_qty": 10135.555
+        },
+        "T-5_TO_T0": {
+          "complete": true,
+          "delta": -271.489,
+          "delta_pct": -0.4638181554,
+          "end_timestamp": "2026-05-22T08:36:00Z",
+          "high": 77462.8,
+          "low": 77170.0,
+          "open_interest_change": -72.31,
+          "price_change_pct": -0.2685163311,
+          "price_close": 77254.7,
+          "price_open": 77462.7,
+          "rows_expected": 5,
+          "rows_used": 5,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-22T08:32:00Z",
+          "total_qty": 585.335
+        },
+        "T-60_TO_T-15": {
+          "complete": true,
+          "delta": 66.57,
+          "delta_pct": 0.0373087485,
+          "end_timestamp": "2026-05-22T08:21:00Z",
+          "high": 77505.7,
+          "low": 77324.1,
+          "open_interest_change": -64.69,
+          "price_change_pct": 0.0755569906,
+          "price_close": 77483.5,
+          "price_open": 77425.0,
+          "rows_expected": 45,
+          "rows_used": 45,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-22T07:37:00Z",
+          "total_qty": 1784.3
+        }
+      }
+    }
+  },
+  {
+    "execution": {
+      "actual_entry_price": 77994.12,
+      "entry_minus_signal_distance_approx": 230.3051796948,
+      "entry_minus_signal_pct_approx": 0.2961598273,
+      "entry_to_sl_risk": 1348.07,
+      "execution_quote_currency": "USDC",
+      "executor_observed_fill_timestamp_utc": "2026-05-26T14:27:02.546187Z",
+      "filled_quantity": 0.05143,
+      "initial_sl": 76646.05,
+      "initial_tp1": 78882.55,
+      "initial_tp2": 80000.8,
+      "quote_conversion_at_entry_approx": 0.9994009628657999,
+      "signal_to_fill_elapsed_seconds": 122.546187,
+      "tp1_R": 0.6590384772,
+      "tp1_reward": 888.43,
+      "tp2_R": 1.4885577158,
+      "tp2_reward": 2006.68
+    },
+    "quality": {
+      "chronology_anomaly": null,
+      "conversion_available": true,
+      "degraded_or_recovered_feed": false,
+      "historical_prediction_cutoff_proxy": true,
+      "incomplete_segments": [],
+      "market_cutoff_contract": "UTC_minute_close_label_inclusive",
+      "missing_evidence": [],
+      "missing_source_columns": [],
+      "open_interest_available": true,
+      "open_price_close_fallback": false,
+      "prediction_cutoff_source": "historical_executor_fill_proxy",
+      "prediction_cutoff_utc": "2026-05-26T14:27:02.546187Z",
+      "snapshot_schema_version": "OPEN_TRADE_OUTCOME_PREDICTOR_SNAPSHOT_V2",
+      "units": {
+        "delta": "BTC",
+        "delta_pct": "fraction_of_total_qty",
+        "open_interest_change": "feed_contract_units",
+        "price": "market_USDT_or_execution_USDC_per_BTC_as_labeled",
+        "total_qty": "BTC"
+      },
+      "zone_history_available": true
+    },
+    "signal": {
+      "measurements": {
+        "delta": 49.84,
+        "imb": 0.566,
+        "poc": 76770,
+        "vol": 88.07,
+        "vwap": 77117
+      },
+      "peak_timestamp_utc": "2026-05-26T14:25:00Z",
+      "raw_signal_plan_usdt": {
+        "entry_usdt": 77810.92,
+        "sl_usdt": 76692.0,
+        "tp1_usdt": 78929.84,
+        "tp2_usdt": 80048.76
+      },
+      "side": "long",
+      "signal_price": 77810.426155,
+      "signal_quote_currency": "USDT",
+      "trade_key": "EX_EN_1779805524"
+    },
+    "structure_geometry": {
+      "current_price_market_quote": 77989.3,
+      "nearest_active_liquidity_in_trade_direction": null,
+      "nearest_qualified_opposing_zone": {
+        "accepted_above_timestamp": null,
+        "accepted_below_timestamp": null,
+        "close_above_count": 0,
+        "close_below_count": 0,
+        "consumed_timestamp": null,
+        "consumption_reason": null,
+        "consumption_status": null,
+        "data_quality": "RAW",
+        "failed_acceptance_count": 0,
+        "first_sweep_timestamp": null,
+        "interaction_count": 1440,
+        "last_clean_reaction_timestamp": null,
+        "last_interaction_timestamp": "2026-05-26T14:27:00Z",
+        "lower": 76014.2,
+        "matched_registry_lifecycle": {
+          "accepted_above_timestamp": "2026-05-25T20:02:00Z",
+          "accepted_below_timestamp": "2026-05-25T20:43:00Z",
+          "close_above_count": 90,
+          "close_below_count": 905,
+          "consumed_timestamp": "2026-05-26T13:51:00Z",
+          "consumption_reason": "cross_through_count>=3",
+          "consumption_status": "CONSUMED",
+          "data_quality": "RAW",
+          "failed_acceptance_count": 8,
+          "first_sweep_timestamp": "2026-05-25T20:36:00Z",
+          "interaction_count": 156,
+          "last_clean_reaction_timestamp": null,
+          "last_interaction_timestamp": "2026-05-26T14:17:00Z",
+          "lower": 77274.3435,
+          "resweep_count": 11,
+          "status": "CROSSED_UNCLASSIFIED",
+          "upper": 77351.6565,
+          "zone_id": "zone_000004",
+          "zone_type": "M15_SWING_LOW_ZONE"
+        },
+        "minutes_since_last_interaction": 0,
+        "price_position": "INSIDE",
+        "qualification": "SIGNIFICANT",
+        "resweep_count": 0,
+        "status": "SIGNIFICANT",
+        "upper": 78564.3,
+        "zone_id": "significant_zone_000001",
+        "zone_type": "ACCUMULATION_REBALANCE_ZONE=18|BUY_LIQUIDATION_REPRICING_ZONE=31|DISTRIBUTION_REBALANCE_ZONE=24|MARKDOWN_VOLUME_EXPANSION_ZONE=34|MARKUP_VOLUME_EXPANSION_ZONE=26|REDISTRIBUTION_BALANCE_ZONE=15|SELL_LIQUIDATION_REPRICING_ZONE=22|TRAPPED_BUYING_DISTRIBUTION_ZONE=5|TRAPPED_SELLING_ACCUMULATION_ZONE=3"
+      },
+      "range_1440m": {
+        "distance_to_high": 87.8,
+        "distance_to_low": 1555.3,
+        "high": 78077.1,
+        "low": 76434.0,
+        "position_in_range": 0.9465644209
+      },
+      "range_240m": {
+        "distance_to_high": 87.8,
+        "distance_to_low": 1347.6,
+        "high": 78077.1,
+        "low": 76641.7,
+        "position_in_range": 0.9388323812
+      },
+      "recent_cleared_structure_in_trade_direction": null,
+      "target_clear_air_geometry": {
+        "distance_from_actual_entry_R_approx": -1.5024852779,
+        "distance_from_actual_entry_execution_quote_approx": -2025.4553285265,
+        "near_boundary_market_quote": 76014.2,
+        "tp1_relation": "BEYOND",
+        "tp2_relation": "BEYOND"
+      }
+    },
+    "temporal_market": {
+      "broad_context": {
+        "1d": {
+          "complete": true,
+          "delta_pct": 0.001004022,
+          "price_change_pct": 0.5659545276,
+          "rows_expected": 1440,
+          "rows_used": 1440,
+          "source_quality": "RAW"
+        },
+        "3d": {
+          "complete": true,
+          "delta_pct": 0.0377231899,
+          "price_change_pct": 3.640128053,
+          "rows_expected": 4320,
+          "rows_used": 4320,
+          "source_quality": "RAW"
+        },
+        "7d": {
+          "complete": true,
+          "delta_pct": 0.0056038621,
+          "price_change_pct": 2.0801019894,
+          "rows_expected": 10080,
+          "rows_used": 10080,
+          "source_quality": "RAW"
+        }
+      },
+      "market_bar_cutoff_utc": "2026-05-26T14:27:00Z",
+      "prediction_market_cutoff_utc": "2026-05-26T14:27:00Z",
+      "segments": {
+        "T-1440_TO_T-240": {
+          "complete": true,
+          "delta": -1429.486,
+          "delta_pct": -0.0222547088,
+          "end_timestamp": "2026-05-26T10:27:00Z",
+          "high": 77887.9,
+          "low": 76434.0,
+          "open_interest_change": -438.12,
+          "price_change_pct": -0.7366822092,
+          "price_close": 76979.1,
+          "price_open": 77550.4,
+          "rows_expected": 1200,
+          "rows_used": 1200,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-25T14:28:00Z",
+          "total_qty": 64232.968
+        },
+        "T-15_TO_T-5": {
+          "complete": true,
+          "delta": 1199.022,
+          "delta_pct": 0.2642633469,
+          "end_timestamp": "2026-05-26T14:22:00Z",
+          "high": 77696.3,
+          "low": 77238.4,
+          "open_interest_change": -744.64,
+          "price_change_pct": 0.4976799105,
+          "price_close": 77622.8,
+          "price_open": 77238.4,
+          "rows_expected": 10,
+          "rows_used": 10,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-26T14:13:00Z",
+          "total_qty": 4537.224
+        },
+        "T-240_TO_T-60": {
+          "complete": true,
+          "delta": -858.114,
+          "delta_pct": -0.0365581177,
+          "end_timestamp": "2026-05-26T13:27:00Z",
+          "high": 77600.0,
+          "low": 76742.1,
+          "open_interest_change": -479.53,
+          "price_change_pct": -0.2464305246,
+          "price_close": 76789.4,
+          "price_open": 76979.1,
+          "rows_expected": 180,
+          "rows_used": 180,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-26T10:28:00Z",
+          "total_qty": 23472.598
+        },
+        "T-5_TO_T0": {
+          "complete": true,
+          "delta": 1270.423,
+          "delta_pct": 0.2236553502,
+          "end_timestamp": "2026-05-26T14:27:00Z",
+          "high": 78077.1,
+          "low": 77578.4,
+          "open_interest_change": -456.3,
+          "price_change_pct": 0.472284525,
+          "price_close": 77989.3,
+          "price_open": 77622.7,
+          "rows_expected": 5,
+          "rows_used": 5,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-26T14:23:00Z",
+          "total_qty": 5680.271
+        },
+        "T-60_TO_T-15": {
+          "complete": true,
+          "delta": -74.729,
+          "delta_pct": -0.0085269709,
+          "end_timestamp": "2026-05-26T14:12:00Z",
+          "high": 77432.6,
+          "low": 76641.7,
+          "open_interest_change": -22.64,
+          "price_change_pct": 0.5847161197,
+          "price_close": 77238.4,
+          "price_open": 76789.4,
+          "rows_expected": 45,
+          "rows_used": 45,
+          "source_quality": "RAW",
+          "start_timestamp": "2026-05-26T13:28:00Z",
+          "total_qty": 8763.839
+        }
+      }
+    }
+  }
+]

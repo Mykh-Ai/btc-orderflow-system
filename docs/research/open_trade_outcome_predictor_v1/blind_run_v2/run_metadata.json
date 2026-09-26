@@ -1,0 +1,72 @@
+{
+  "builder_sha256_lf_normalized": "6fba93dd2249d3d21d5d0b95e15b0b3494e62db2961d5afb5b9cb5961ca2d987",
+  "cohort_size": 20,
+  "feed_manifest_sha256_lf_normalized": "d024aa7b136d059f53a96a3a244f57f333b094225ad56fec7d81cd6a66e72524",
+  "model": "gpt-5.6-sol",
+  "old_blind_manifest_sha256_lf_normalized": "d5486915c1801c7bd9af01f8d80cbe477695874ad5b9a2bb417874d857b9d23f",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "confidence": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "missing_evidence": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "predicted_outcome_class": {
+        "enum": [
+          "NEGATIVE",
+          "MIXED",
+          "STRONG_FAVORABLE",
+          "UNCLEAR"
+        ],
+        "type": "string"
+      },
+      "primary_evidence_against": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "primary_evidence_for": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "uncertainty_reason": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "predicted_outcome_class",
+      "confidence",
+      "primary_evidence_for",
+      "primary_evidence_against",
+      "uncertainty_reason",
+      "missing_evidence"
+    ],
+    "type": "object"
+  },
+  "planned_calls": 20,
+  "previous_response_id": false,
+  "prompt_source_sha256_lf_normalized": "b57264e6bcb19c54074fa9fe9c79e489565827f52874d323bebc1fbeef7ec4f9",
+  "prompt_version": "OPEN_TRADE_OUTCOME_PREDICTOR_V1",
+  "prompts_file_sha256": "0a1fa0672f0db222974c5f5b3cd9afd18b302263160fc3c73011fe9bf3e04ed7",
+  "reasoning_effort": "medium",
+  "retries": false,
+  "schema_version": "OPEN_TRADE_OUTCOME_BLIND_PREPARATION_V1",
+  "snapshot_builder_sha256_lf_normalized": "2724fd1a8c6abdb2b6c55b4d2d3835d01ef2e659d6db6d91f67424e4a9828ce5",
+  "snapshots_file_sha256": "81ba61675cf9d9e7e93a0b6a219ad4f3c7fcb79015005924762c5e6ca68b0582",
+  "source_snapshots_sha256_lf_normalized": "459f1feacf994e04518b7162db54e07206d159fbb1e11ffdd7140bdd2f1ff039",
+  "store": false,
+  "tools": false
+}
