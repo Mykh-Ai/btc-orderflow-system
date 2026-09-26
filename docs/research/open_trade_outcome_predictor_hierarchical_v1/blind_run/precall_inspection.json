@@ -1,0 +1,20 @@
+[
+  {
+    "prompt_sha256": "e24113540bbb823adc8e37f8bd147729c1ec7cfe4519a2d091d0a07ca4b339f5",
+    "score_eligible": "true",
+    "snapshot_sha256": "a2a2caa50abd3cf02cf91c187d105a9c0793d0062c1936194f4d24d7b3f1edd8",
+    "trade_key": "EX_EN_1778689753"
+  },
+  {
+    "prompt_sha256": "31362b287329cdd29801bbc179eee1dd91756cb998aca753c93f3d8a58c650b2",
+    "score_eligible": "false",
+    "snapshot_sha256": "028dea8fb7549f39e74157471060a8dad36651f7dca1fa9ff1b7f748d5326fb6",
+    "trade_key": "EX_EN_1779900918"
+  },
+  {
+    "prompt_sha256": "0b2e9bd9da62dd06b3e34f2afdf7c4b8e9a9598e3a7987718373390a3257edfd",
+    "score_eligible": "true",
+    "snapshot_sha256": "33e801fd03122db13f6e20cc7be2b28034db4a4b825821eff2a425bb2aadee4a",
+    "trade_key": "EX_EN_1789351940"
+  }
+]

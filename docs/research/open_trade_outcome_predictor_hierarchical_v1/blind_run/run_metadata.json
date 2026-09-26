@@ -1,0 +1,84 @@
+{
+  "builder_sha256_lf_normalized": "46b32bf8809657c8850a8d83f53328be072d588d2a105bade53c3001bb103b3f",
+  "chronology_exclusion": "EX_EN_1779900918",
+  "manifest_file_sha256": "6412e434007d27435298049d8720168382dcd4a94b5f91b5423157b0a6caf2b8",
+  "model": "gpt-5.6-sol",
+  "output_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "confidence": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "missing_evidence": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "primary_evidence_against": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "primary_evidence_for": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "question_1": {
+        "enum": [
+          "TP1_FIRST",
+          "SL_FIRST",
+          "UNCLEAR_MISSING_EVIDENCE"
+        ],
+        "type": "string"
+      },
+      "question_2": {
+        "enum": [
+          "TP2_REACHED",
+          "TP2_NOT_REACHED",
+          "UNCLEAR_MISSING_EVIDENCE",
+          null
+        ],
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "uncertainty_reason": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "question_1",
+      "question_2",
+      "confidence",
+      "primary_evidence_for",
+      "primary_evidence_against",
+      "uncertainty_reason",
+      "missing_evidence"
+    ],
+    "type": "object"
+  },
+  "planned_calls": 20,
+  "previous_response_id": false,
+  "prompt_source_sha256_lf_normalized": "e9da3cca7443625d41730802d3f899e6b505c9212dde4e9efc9fad8eb78a2c7c",
+  "prompt_version": "OPEN_TRADE_HIERARCHICAL_MILESTONE_V1",
+  "prompts_file_sha256": "027844b1974d01add7163e832bd435a92f8689754345ed3a8496594880100311",
+  "reasoning_effort": "medium",
+  "retries": false,
+  "schema_version": "HIERARCHICAL_MILESTONE_BLIND_PREPARATION_V1",
+  "scored_calls": 19,
+  "source_commit": "0c740d094e53b8bc29dd35eb8041e7dfe5fe1011",
+  "source_manifest_sha256": "9f1794687245cdacc8bb6bbd8f9965f9bc0975a033c57366448a0c6af7f47dac",
+  "source_snapshots_sha256": "402de774d4a2a7705f0b2d7c79470ee5f2ca0254a84d9cd51b4bd0ed16d024dd",
+  "store": false,
+  "tools": false
+}
