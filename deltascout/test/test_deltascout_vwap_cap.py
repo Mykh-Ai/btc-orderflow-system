@@ -56,6 +56,8 @@ def _wire(monkeypatch, ds, *, cap: float, vwap_by_ts: dict[str, float | None]):
     # --- relax гейти щоб тестувався саме VWAP cap ---
     monkeypatch.setattr(ds, "VWAP_MAX_DIST_USD", float(cap), raising=False)
     monkeypatch.setattr(ds, "IMB_MIN", 0.0, raising=False)
+    monkeypatch.setattr(ds, "IMB_MIN_LONG", 0.0, raising=False)
+    monkeypatch.setattr(ds, "IMB_MIN_SHORT", 0.0, raising=False)
     monkeypatch.setattr(ds, "IMB_MAX", 1.0, raising=False)
     monkeypatch.setattr(ds, "CHOP30_MAX", 9999.0, raising=False)
     monkeypatch.setattr(ds, "COH10_MIN", 0.0, raising=False)

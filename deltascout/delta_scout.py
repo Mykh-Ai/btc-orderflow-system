@@ -23,6 +23,11 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 
+try:
+    from .loss_avoidance_runtime import LossAvoidanceRuntimeEvaluator
+except ImportError:  # direct /app/delta_scout.py execution
+    from loss_avoidance_runtime import LossAvoidanceRuntimeEvaluator
+
 # ===== ENV =====
 FEED_DIR        = os.getenv("FEED_DIR", "/data/feed")
 FILE_PATH       = os.getenv("FILE_PATH", os.path.join(FEED_DIR, "aggregated.csv"))
@@ -40,6 +45,8 @@ VWAP_MAX_DIST_USD = float(os.getenv("VWAP_MAX_DIST_USD", "1000"))
 
 COH10_MIN  = float(os.getenv("COH10_MIN", "0.30"))
 IMB_MIN    = float(os.getenv("IMB_MIN", "0.55"))
+IMB_MIN_LONG = float(os.getenv("IMB_MIN_LONG", IMB_MIN))
+IMB_MIN_SHORT = float(os.getenv("IMB_MIN_SHORT", IMB_MIN))
 IMB_MAX    = float(os.getenv("IMB_MAX", "0.65"))
 INIT_EMIT  = os.getenv("INIT_EMIT", "true").lower() in {"1","true","yes"}
 
@@ -68,7 +75,7 @@ def _research_append(payload: dict):
     Separate from live deltascout.log — no truncation, no live bus interaction.
     Soft-fail only: never raises into caller."""
     if not ENABLE_RESEARCH_LOG:
-        return
+        return False
     try:
         ts_str = str(payload.get("ts", ""))[:10]
         if len(ts_str) < 10:
@@ -77,8 +84,10 @@ def _research_append(payload: dict):
         os.makedirs(RESEARCH_ARCHIVE_DIR, exist_ok=True)
         with open(fn, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        return True
     except Exception as e:
         print(f"[RESEARCH WRITE ERROR] {e}", file=sys.stderr, flush=True)
+        return False
 
 ENV = {
     "AGG_CSV": FILE_PATH,
@@ -94,6 +103,10 @@ ENV = {
     "TIER_B_VOL_PCTL": TIER_B_VOL_PCTL,
     "TIER_A_IMB_MAX": TIER_A_IMB_MAX,
     "TIER_B_IMB_MIN": TIER_B_IMB_MIN,
+    "IMB_MIN": IMB_MIN,
+    "IMB_MIN_LONG": IMB_MIN_LONG,
+    "IMB_MIN_SHORT": IMB_MIN_SHORT,
+    "IMB_MAX": IMB_MAX,
 }
 
 # ===== UTILS =====
@@ -211,6 +224,10 @@ class Scout:
         self.log_path = LOG_PATH
         self.prev_peak = None   # нова база для порівнянь між піками
         self._research_seq = 0
+        self.loss_filter = LossAvoidanceRuntimeEvaluator.from_env()
+        self._loss_filter_consecutive_would_block = 0
+        self._loss_filter_circuit_open = False
+        self._loss_filter_counts = {"evaluated": 0, "kept": 0, "blocked": 0, "unknown": 0}
         self._init_state()
 
     # ---- time helpers ----
@@ -226,7 +243,152 @@ class Scout:
         self._research_seq += 1
         payload = {"schema": 1, "event": event, "seq": self._research_seq}
         payload.update(fields)
-        _research_append(payload)
+        return _research_append(payload)
+
+    def _record_loss_filter_peak(self, *, ts: str, side: str, delta: float):
+        """Persist cutoff-safe peak history without affecting detector flow."""
+        try:
+            ok = self.loss_filter.record_peak(event_ts=ts, side=side, delta=delta)
+            if not ok and self.loss_filter.mode != "off":
+                print("[LOSS FILTER STATE WARN] peak history write failed", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[LOSS FILTER STATE ERROR] {e}", file=sys.stderr, flush=True)
+
+    def _notify_loss_filter_block(self, audit_fields: dict):
+        if not WEBHOOK_URL:
+            return
+        try:
+            post_json(WEBHOOK_URL, {
+                "event": "LOSS_FILTER_BLOCKED",
+                "source": "DeltaScout",
+                "action": "RESEARCH_ONLY",
+                "ts": audit_fields.get("ts"),
+                "kind": audit_fields.get("kind"),
+                "price": (audit_fields.get("would_be_peak") or {}).get("price"),
+                "rule_id": audit_fields.get("rule_id"),
+                "component_a": audit_fields.get("component_a"),
+                "component_b": audit_fields.get("component_b"),
+                "oi_change_60m": audit_fields.get("oi_change_60m"),
+                "directional_delta_pct_240m": audit_fields.get("directional_delta_pct_240m"),
+                "text": (
+                    f"DeltaScout filter blocked {str(audit_fields.get('kind') or '').upper()} "
+                    f"PEAK | A={audit_fields.get('component_a')} B={audit_fields.get('component_b')} "
+                    f"rule={audit_fields.get('rule_id')} | archived for replay"
+                ),
+            })
+        except Exception as e:
+            print(f"[LOSS FILTER WEBHOOK ERROR] {e}", file=sys.stderr, flush=True)
+
+    def _admit_peak(self, peak_payload: dict, research_payload: dict) -> bool:
+        """Evaluate one already-valid PEAK and preserve the existing bus contract."""
+        if self.loss_filter.mode == "off":
+            peak_payload["loss_filter_admission"] = {
+                "schema_version": "DS_ENTRY_ADMISSION_V1",
+                "source": "DeltaScout_loss_filter_runtime",
+                "policy_id": getattr(getattr(self.loss_filter, "config", None), "rule_id", None),
+                "configured_mode": "off",
+                "decision": "DISABLED",
+                "effective_action": "EMIT",
+                "filter_a": {"status": "UNKNOWN"},
+                "filter_b": {"status": "UNKNOWN"},
+                "unknown_policy": "FILTER_DISABLED",
+            }
+            self._emit_json(peak_payload)
+            self._emit_research("PEAK_EMIT", research_payload)
+            return True
+
+        try:
+            evaluation = self.loss_filter.evaluate(
+                signal_ts=peak_payload.get("ts"),
+                side=str(peak_payload.get("kind") or "").upper(),
+                delta=float(peak_payload.get("delta") or 0.0),
+            )
+        except Exception as e:
+            print(f"[LOSS FILTER EVALUATION ERROR] {e}", file=sys.stderr, flush=True)
+            peak_payload["loss_filter_admission"] = {
+                "schema_version": "DS_ENTRY_ADMISSION_V1",
+                "source": "DeltaScout_loss_filter_runtime",
+                "policy_id": getattr(getattr(self.loss_filter, "config", None), "rule_id", None),
+                "configured_mode": getattr(self.loss_filter, "mode", None),
+                "decision": "EVALUATION_ERROR",
+                "effective_action": "EMIT",
+                "filter_a": {"status": "UNKNOWN"},
+                "filter_b": {"status": "UNKNOWN"},
+                "unknown_policy": "EVALUATION_ERROR_FAIL_OPEN",
+            }
+            research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
+            self._emit_json(peak_payload)
+            self._emit_research("PEAK_EMIT", research_payload)
+            return True
+
+        self._loss_filter_counts["evaluated"] += 1
+        if evaluation.decision.decision == "UNKNOWN_KEEP" or evaluation.fail_open_reason:
+            self._loss_filter_counts["unknown"] += 1
+
+        would_block = evaluation.decision.union is True and evaluation.fail_open_reason is None
+        circuit_was_open = self._loss_filter_circuit_open
+        if would_block:
+            self._loss_filter_consecutive_would_block += 1
+        else:
+            self._loss_filter_consecutive_would_block = 0
+
+        audit_fields = evaluation.to_audit_fields()
+        audit_fields.update({
+            "ts": peak_payload.get("ts"),
+            "kind": peak_payload.get("kind"),
+            "delta": peak_payload.get("delta"),
+            "vol": peak_payload.get("vol"),
+            "imb": peak_payload.get("imb"),
+            "price": peak_payload.get("price"),
+            "would_be_peak": dict(peak_payload),
+            "circuit_open": circuit_was_open,
+            "consecutive_would_block": self._loss_filter_consecutive_would_block,
+            "effective_action": "BLOCK" if evaluation.may_veto and not circuit_was_open else "EMIT",
+        })
+        peak_payload["loss_filter_admission"] = evaluation.to_entry_admission_fields(
+            effective_action=audit_fields["effective_action"]
+        )
+        peak_payload["loss_filter_admission"].update({
+            "signal_ts_utc": audit_fields.get("signal_ts_utc"),
+            "evaluation_ms": audit_fields.get("evaluation_ms"),
+            "circuit_open": circuit_was_open,
+        })
+        # The additive admission block is part of the emitted signal. Keep the
+        # audit's copy consistent with that final signal shape.
+        audit_fields["would_be_peak"] = dict(peak_payload)
+        research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
+        audit_ok = self._emit_research("PEAK_LOSS_FILTER_DECISION", audit_fields)
+        effective_block = evaluation.may_veto and not circuit_was_open and audit_ok
+        peak_payload["loss_filter_admission"]["effective_action"] = "BLOCK" if effective_block else "EMIT"
+        research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
+
+        if would_block and self._loss_filter_consecutive_would_block >= 5:
+            self._loss_filter_circuit_open = True
+            if not circuit_was_open:
+                print("[LOSS FILTER CIRCUIT OPEN] five consecutive would-block decisions", file=sys.stderr, flush=True)
+
+        if effective_block:
+            self._loss_filter_counts["blocked"] += 1
+            reject_fields = dict(audit_fields)
+            reject_fields["reject_reason"] = "loss_avoidance_union"
+            self._emit_research("PEAK_LOSS_FILTER_REJECT", reject_fields)
+            self._notify_loss_filter_block(audit_fields)
+            return False
+
+        if evaluation.may_veto and not audit_ok:
+            print("[LOSS FILTER FAIL OPEN] audit write failed; PEAK emitted", file=sys.stderr, flush=True)
+        self._loss_filter_counts["kept"] += 1
+        self._emit_json(peak_payload)
+        mirror = dict(research_payload)
+        mirror.update({
+            "loss_filter_rule_id": evaluation.rule_id,
+            "loss_filter_mode": evaluation.configured_mode,
+            "loss_filter_decision": evaluation.decision.decision,
+            "loss_filter_union": evaluation.decision.union,
+            "loss_filter_fail_open_reason": evaluation.fail_open_reason,
+        })
+        self._emit_research("PEAK_EMIT", mirror)
+        return True
 
     # ---- JSON SIGNAL ----
     def _emit_json(self, payload: dict):
@@ -488,6 +650,7 @@ class Scout:
                 "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
                 "vwap": vwap_now, "poc": poc_now,
             })
+            self._record_loss_filter_peak(ts=str(ts), side="LONG", delta=delta)
 
             # --- базові перевірки ---
             if not self.prev_peak:
@@ -552,19 +715,19 @@ class Scout:
                     "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
                 })
                 return
-            if not (IMB_MIN <= imba <= IMB_MAX):
+            if not (IMB_MIN_LONG <= imba <= IMB_MAX):
                 self._emit_research("CANDIDATE_GATE_REJECT", {
                     "ts": str(ts), "kind": "long", "reject_reason": "imb_band",
                     "price_now": price_now, "ema50_now": ema50_now,
                     "vwap_now": vwap_now, "chop30": round(chop, 2),
                     "coh10": round(coh, 3), "imb": round(imba, 3),
-                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                    "imb_min": IMB_MIN_LONG, "imb_max": IMB_MAX,
                 })
                 return
 
 
-            # --- сигнал у лог (для Buyer) ---
-            self._emit_json({
+            # --- PEAK admission (live bus remains unchanged when admitted) ---
+            peak_payload = {
                 "ts": str(ts),
                 "source": "DeltaScout",
                 "action": "PEAK",
@@ -575,18 +738,18 @@ class Scout:
                 "price": ap,
                 "vwap": vwap_now,
                 "poc": poc_now,
-            })
+            }
 
-            # --- RESEARCH: PEAK_EMIT mirror (side-channel only) ---
-            self._emit_research("PEAK_EMIT", {
+            peak_research = {
                 "ts": str(ts), "kind": "long", "delta": round(delta, 2),
                 "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
                 "vwap": vwap_now, "poc": poc_now,
                 "price_now": price_now, "ema50_now": ema50_now,
                 "chop30": round(chop, 2), "coh10": round(coh, 3),
-                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "imb_min": IMB_MIN_LONG, "imb_max": IMB_MAX,
                 "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
-            })
+            }
+            self._admit_peak(peak_payload, peak_research)
 
             # оновлення бази
             self.prev_peak = curr
@@ -616,6 +779,7 @@ class Scout:
                 "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
                 "vwap": vwap_now, "poc": poc_now,
             })
+            self._record_loss_filter_peak(ts=str(ts), side="SHORT", delta=delta)
 
             # --- базові перевірки ---
             if not self.prev_peak:
@@ -680,19 +844,19 @@ class Scout:
                     "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
                 })
                 return
-            if not (IMB_MIN <= imba <= IMB_MAX):
+            if not (IMB_MIN_SHORT <= imba <= IMB_MAX):
                 self._emit_research("CANDIDATE_GATE_REJECT", {
                     "ts": str(ts), "kind": "short", "reject_reason": "imb_band",
                     "price_now": price_now, "ema50_now": ema50_now,
                     "vwap_now": vwap_now, "chop30": round(chop, 2),
                     "coh10": round(coh, 3), "imb": round(imba, 3),
-                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                    "imb_min": IMB_MIN_SHORT, "imb_max": IMB_MAX,
                 })
                 return
 
 
-            # --- сигнал у лог (для Buyer) ---
-            self._emit_json({
+            # --- PEAK admission (live bus remains unchanged when admitted) ---
+            peak_payload = {
                 "ts": str(ts),
                 "source": "DeltaScout",
                 "action": "PEAK",
@@ -703,18 +867,18 @@ class Scout:
                 "price": ap,
                 "vwap": vwap_now,
                 "poc": poc_now,
-            })
+            }
 
-            # --- RESEARCH: PEAK_EMIT mirror (side-channel only) ---
-            self._emit_research("PEAK_EMIT", {
+            peak_research = {
                 "ts": str(ts), "kind": "short", "delta": round(delta, 2),
                 "vol": round(vol, 2), "imb": round(imba, 3), "price": ap,
                 "vwap": vwap_now, "poc": poc_now,
                 "price_now": price_now, "ema50_now": ema50_now,
                 "chop30": round(chop, 2), "coh10": round(coh, 3),
-                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "imb_min": IMB_MIN_SHORT, "imb_max": IMB_MAX,
                 "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
-            })
+            }
+            self._admit_peak(peak_payload, peak_research)
 
             # оновлення бази
             self.prev_peak = curr
@@ -854,6 +1018,7 @@ if __name__ == "__main__":
 
     print(f"🚀 DeltaScout SIMPLE started. Watching {FILE_PATH}")
     print(f"    roll={ROLL_WINDOW_MIN}m, vwap={VWAP_WINDOW_MIN}m(lazy), zero_qty<{ZERO_QTY_TH}, avg9<{AVG9_MAX}")
+    print(f"    imbalance: LONG {IMB_MIN_LONG}–{IMB_MAX}, SHORT {IMB_MIN_SHORT}–{IMB_MAX} (legacy IMB_MIN={IMB_MIN})")
 
     # Перевірка колонок
     with open(FILE_PATH, "r", encoding="utf-8-sig") as f:

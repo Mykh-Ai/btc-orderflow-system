@@ -67,6 +67,8 @@ def _wire(monkeypatch, ds, tmp_dirs, *, vwap_by_ts=None):
     monkeypatch.setattr(ds, "LOG_PATH", tmp_dirs["live_log"])
 
     monkeypatch.setattr(ds, "IMB_MIN", 0.0)
+    monkeypatch.setattr(ds, "IMB_MIN_LONG", 0.0)
+    monkeypatch.setattr(ds, "IMB_MIN_SHORT", 0.0)
     monkeypatch.setattr(ds, "IMB_MAX", 1.0)
     monkeypatch.setattr(ds, "CHOP30_MAX", 9999.0)
     monkeypatch.setattr(ds, "COH10_MIN", 0.0)
@@ -259,6 +261,8 @@ def test_gate_reject_imb(monkeypatch, ds, tmp_dirs):
     state, peaks = _wire(monkeypatch, ds, tmp_dirs, vwap_by_ts=vwap_by_ts)
     # Re-apply tight IMB after _wire relaxed it
     monkeypatch.setattr(ds, "IMB_MIN", 0.90)
+    monkeypatch.setattr(ds, "IMB_MIN_LONG", 0.90)
+    monkeypatch.setattr(ds, "IMB_MIN_SHORT", 0.90)
     monkeypatch.setattr(ds, "IMB_MAX", 0.95)
 
     s = ds.Scout()
@@ -364,6 +368,8 @@ def test_no_peak_emit_on_reject_path(monkeypatch, ds, tmp_dirs):
     }
     state, peaks = _wire(monkeypatch, ds, tmp_dirs, vwap_by_ts=vwap_by_ts)
     monkeypatch.setattr(ds, "IMB_MIN", 0.90)
+    monkeypatch.setattr(ds, "IMB_MIN_LONG", 0.90)
+    monkeypatch.setattr(ds, "IMB_MIN_SHORT", 0.90)
     monkeypatch.setattr(ds, "IMB_MAX", 0.95)
 
     s = ds.Scout()
