@@ -45,6 +45,8 @@ VWAP_MAX_DIST_USD = float(os.getenv("VWAP_MAX_DIST_USD", "1000"))
 
 COH10_MIN  = float(os.getenv("COH10_MIN", "0.30"))
 IMB_MIN    = float(os.getenv("IMB_MIN", "0.55"))
+IMB_MIN_LONG = float(os.getenv("IMB_MIN_LONG", IMB_MIN))
+IMB_MIN_SHORT = float(os.getenv("IMB_MIN_SHORT", IMB_MIN))
 IMB_MAX    = float(os.getenv("IMB_MAX", "0.65"))
 INIT_EMIT  = os.getenv("INIT_EMIT", "true").lower() in {"1","true","yes"}
 
@@ -101,6 +103,10 @@ ENV = {
     "TIER_B_VOL_PCTL": TIER_B_VOL_PCTL,
     "TIER_A_IMB_MAX": TIER_A_IMB_MAX,
     "TIER_B_IMB_MIN": TIER_B_IMB_MIN,
+    "IMB_MIN": IMB_MIN,
+    "IMB_MIN_LONG": IMB_MIN_LONG,
+    "IMB_MIN_SHORT": IMB_MIN_SHORT,
+    "IMB_MAX": IMB_MAX,
 }
 
 # ===== UTILS =====
@@ -709,13 +715,13 @@ class Scout:
                     "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
                 })
                 return
-            if not (IMB_MIN <= imba <= IMB_MAX):
+            if not (IMB_MIN_LONG <= imba <= IMB_MAX):
                 self._emit_research("CANDIDATE_GATE_REJECT", {
                     "ts": str(ts), "kind": "long", "reject_reason": "imb_band",
                     "price_now": price_now, "ema50_now": ema50_now,
                     "vwap_now": vwap_now, "chop30": round(chop, 2),
                     "coh10": round(coh, 3), "imb": round(imba, 3),
-                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                    "imb_min": IMB_MIN_LONG, "imb_max": IMB_MAX,
                 })
                 return
 
@@ -740,7 +746,7 @@ class Scout:
                 "vwap": vwap_now, "poc": poc_now,
                 "price_now": price_now, "ema50_now": ema50_now,
                 "chop30": round(chop, 2), "coh10": round(coh, 3),
-                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "imb_min": IMB_MIN_LONG, "imb_max": IMB_MAX,
                 "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
             }
             self._admit_peak(peak_payload, peak_research)
@@ -838,13 +844,13 @@ class Scout:
                     "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
                 })
                 return
-            if not (IMB_MIN <= imba <= IMB_MAX):
+            if not (IMB_MIN_SHORT <= imba <= IMB_MAX):
                 self._emit_research("CANDIDATE_GATE_REJECT", {
                     "ts": str(ts), "kind": "short", "reject_reason": "imb_band",
                     "price_now": price_now, "ema50_now": ema50_now,
                     "vwap_now": vwap_now, "chop30": round(chop, 2),
                     "coh10": round(coh, 3), "imb": round(imba, 3),
-                    "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                    "imb_min": IMB_MIN_SHORT, "imb_max": IMB_MAX,
                 })
                 return
 
@@ -869,7 +875,7 @@ class Scout:
                 "vwap": vwap_now, "poc": poc_now,
                 "price_now": price_now, "ema50_now": ema50_now,
                 "chop30": round(chop, 2), "coh10": round(coh, 3),
-                "imb_min": IMB_MIN, "imb_max": IMB_MAX,
+                "imb_min": IMB_MIN_SHORT, "imb_max": IMB_MAX,
                 "chop30_max": CHOP30_MAX, "coh10_min": COH10_MIN,
             }
             self._admit_peak(peak_payload, peak_research)
@@ -1012,6 +1018,7 @@ if __name__ == "__main__":
 
     print(f"🚀 DeltaScout SIMPLE started. Watching {FILE_PATH}")
     print(f"    roll={ROLL_WINDOW_MIN}m, vwap={VWAP_WINDOW_MIN}m(lazy), zero_qty<{ZERO_QTY_TH}, avg9<{AVG9_MAX}")
+    print(f"    imbalance: LONG {IMB_MIN_LONG}–{IMB_MAX}, SHORT {IMB_MIN_SHORT}–{IMB_MAX} (legacy IMB_MIN={IMB_MIN})")
 
     # Перевірка колонок
     with open(FILE_PATH, "r", encoding="utf-8-sig") as f:

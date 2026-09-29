@@ -254,7 +254,16 @@ PEAK_EMIT
 | `LOSS_FILTER_ENRICHED_TIMEZONE` | `UTC` | Timezone of enriched daily feed timestamps |
 | `LOSS_FILTER_EVAL_BUDGET_MS` | `500` | Maximum evaluation budget before fail-open |
 
-Gate parameters include `CHOP30_MAX`, `COH10_MIN`, `IMB_MIN`, `IMB_MAX`, and `VWAP_MAX_DIST_USD`.
+Gate parameters include `CHOP30_MAX`, `COH10_MIN`, `IMB_MIN`, `IMB_MIN_LONG`, `IMB_MIN_SHORT`, `IMB_MAX`, and `VWAP_MAX_DIST_USD`. `IMB_MIN_LONG` and `IMB_MIN_SHORT` are optional side-specific lower bounds. Each falls back to `IMB_MIN` when absent; `IMB_MAX` remains shared. The bounds are inclusive. The startup log prints both effective ranges and the legacy fallback, while imbalance gate rejects and `PEAK_EMIT` research records report the effective lower bound in `imb_min`.
+
+For LONG 0.50–0.69 and SHORT 0.54–0.69, set:
+
+```dotenv
+IMB_MIN=0.54
+IMB_MIN_LONG=0.50
+IMB_MIN_SHORT=0.54
+IMB_MAX=0.69
+```
 
 ---
 
