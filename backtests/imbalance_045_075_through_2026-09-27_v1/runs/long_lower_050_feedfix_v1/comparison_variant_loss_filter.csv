@@ -1,0 +1,13 @@
+comparison_setup_variant,filter_component,candidate_count_before,filled_count_before,blocked_candidate_count,blocked_filled_count,blocked_plain_sl_count,blocked_tp1_sl_count,blocked_protected_count,overlap_candidate_count,candidate_count_after,filled_count_after,expectancy_before_usdc,expectancy_after_usdc,net_pnl_before_usdc,net_pnl_after_usdc
+ALMOST_2OF3_PRICE_FAIL,COMPONENT_A,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_PRICE_FAIL,COMPONENT_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_PRICE_FAIL,OVERLAP_A_AND_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_PRICE_FAIL,UNION_A_OR_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VOLUME_FAIL,COMPONENT_A,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VOLUME_FAIL,COMPONENT_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VOLUME_FAIL,OVERLAP_A_AND_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VOLUME_FAIL,UNION_A_OR_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VWAP_FAIL,COMPONENT_A,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VWAP_FAIL,COMPONENT_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VWAP_FAIL,OVERLAP_A_AND_B,0,0,0,0,0,0,0,0,0,0,,,0,0
+ALMOST_2OF3_VWAP_FAIL,UNION_A_OR_B,0,0,0,0,0,0,0,0,0,0,,,0,0

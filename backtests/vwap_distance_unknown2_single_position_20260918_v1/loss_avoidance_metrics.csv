@@ -1,0 +1,4 @@
+candidate_group,cohort,candidate_count,filled_count,fill_rate,resolved_count,resolved_rate_per_fill,plain_sl_count,plain_sl_rate_per_resolved,tp1_sl_count,tp1_sl_rate_per_resolved,protected_count,protected_rate_per_resolved,unresolved_filled_count,gross_pnl_usdc_sum,net_pnl_usdc_sum,expectancy_per_fill_usdc,pnl_known_filled_count,filter_blocked_candidate_count,filter_blocked_filled_count
+VWAP_DISTANCE_REJECT,BASELINE_BEFORE_FILTER,2,2,1.0,2,1.0,1,0.5,1,0.5,0,0.0,0,-28.244607500000143,-38.299007782321745,-19.149503891160872,2,0,0
+VWAP_DISTANCE_REJECT,COUNTERFACTUAL_AFTER_FILTER,2,2,1.0,2,1.0,1,0.5,1,0.5,0,0.0,0,-28.244607500000143,-38.299007782321745,-19.149503891160872,2,0,0
+VWAP_DISTANCE_REJECT,BLOCKED_BY_FILTER,0,0,,0,,0,,0,,0,,0,0,0,,0,0,0

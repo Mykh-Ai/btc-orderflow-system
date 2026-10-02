@@ -1,0 +1,26 @@
+{
+  "experiment_id": "chop_coh_relaxed_long050_short054_feedfix_v2",
+  "bands": {
+    "LONG": [
+      0.5,
+      0.69
+    ],
+    "SHORT": [
+      0.54,
+      0.69
+    ]
+  },
+  "candidate_sources": [
+    "PEAK_EMIT_BASELINE",
+    "imb_band",
+    "chop_coh"
+  ],
+  "chop_coh_ab_input": {
+    "total": 29,
+    "accepted_live_semantics": 20,
+    "blocked": 9
+  },
+  "supersedes_run": "chop_coh_relaxed_long050_short054_feedfix_v1",
+  "supersession_reason": "v1 selected baseline/imb candidates before shadow enrichment and therefore did not reapply UNION_A_OR_B with parity to long_lower_050",
+  "production_changed": false
+}

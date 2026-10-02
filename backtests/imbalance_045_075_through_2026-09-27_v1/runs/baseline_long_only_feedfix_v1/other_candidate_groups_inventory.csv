@@ -1,0 +1,3 @@
+candidate_group,inventory_subgroup,candidate_count,long_count,short_count,signal_core_complete_count,comparison_complete_count,comparison_applicable_count,loss_filter_union_known_count
+PEAK_EMIT_BASELINE,ALL,29,29,0,29,0,0,0
+PEAK_EMIT_BASELINE,loss_avoidance_union,3,3,0,3,0,0,3

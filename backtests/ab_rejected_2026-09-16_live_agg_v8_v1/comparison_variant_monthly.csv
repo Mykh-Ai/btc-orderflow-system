@@ -1,0 +1,3 @@
+comparison_cohort,side,candidate_count,filled_count,fill_rate,plain_sl_count,tp1_sl_count,protected_count,no_entry_count,gross_pnl_usdc,commission_usdc,net_pnl_usdc,mean_net_pnl_per_fill_usdc,median_net_pnl_usdc,profit_factor,max_drawdown_usdc,average_r,total_r,month
+PEAK_EMIT_BASELINE,ALL,1,1,1.0,1,0,0,0,-20.186549599999676,4.478743904543999,-25.269293867103677,-25.269293867103677,-25.269293867103677,0.0,25.269293867103677,-0.9993897878036059,-0.9993897878036059,2026-09
+PEAK_EMIT_BASELINE,SHORT,1,1,1.0,1,0,0,0,-20.186549599999676,4.478743904543999,-25.269293867103677,-25.269293867103677,-25.269293867103677,0.0,25.269293867103677,-0.9993897878036059,-0.9993897878036059,2026-09

@@ -1,0 +1,4 @@
+candidate_group,inventory_subgroup,candidate_count,long_count,short_count,signal_core_complete_count,comparison_complete_count,comparison_applicable_count,loss_filter_union_known_count
+GATE_REJECT,imb_band,19,18,1,19,0,0,0
+PEAK_EMIT_BASELINE,ALL,51,29,22,51,0,0,0
+PEAK_EMIT_BASELINE,loss_avoidance_union,4,3,1,4,0,0,4

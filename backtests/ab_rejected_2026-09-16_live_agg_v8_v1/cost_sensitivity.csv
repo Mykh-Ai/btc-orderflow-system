@@ -1,0 +1,2 @@
+trade_id,candidate_id,gross_pnl_usdc,commission_usdc,zero_slippage_net_pnl_usdc,adverse_slippage_usdc,baseline_net_pnl_usdc
+TR_0125b5cef3e4b0d40b7b,SCOUT_40ab9eaacac0a9999b56,-20.186549599999676,4.478743904543999,-24.665293504543676,0.6040003625599999,-25.269293867103677

@@ -1,0 +1,92 @@
+[
+  {
+    "candidate_utc": "2026-09-28T05:39:00Z",
+    "candidate_feed_time": "2026-09-28 07:39:00",
+    "vwap": 84319.0,
+    "previous_peak_feed_time": "2026-09-28 07:03:00",
+    "previous_peak_abs_delta": 67.84401,
+    "previous_peak_price": 83437.565625,
+    "previous_peak_volume": 72.68,
+    "previous_peak_vwap": 84409.0,
+    "feed_row_index": 1899,
+    "price_close_used_by_detector": 82706.0,
+    "avg_price_used_in_candidate_comparison": 82818.893068,
+    "buy_volume": 20.25914,
+    "sell_volume": 103.40847,
+    "volume": 123.66761,
+    "delta": -83.14932999999999,
+    "imbalance": 0.6723614210705616,
+    "ema50": 83192.3860312468,
+    "vwap_distance_from_avg_price": 1500.1069319999951,
+    "chop30": 1.452887537993921,
+    "chop30_price_range": 658.0,
+    "coh10": 0.552143271354125,
+    "coh10_sum_delta": -226.22899999999998,
+    "coh10_sum_volume": 409.7288,
+    "thresholds": {
+      "CHOP30_MAX": 3.0,
+      "COH10_MIN": 0.3,
+      "IMB_MIN": 0.54,
+      "IMB_MAX": 0.69
+    },
+    "gates": {
+      "short_regime_price_below_ema50": true,
+      "short_regime_price_below_vwap": true,
+      "chop30": true,
+      "coh10": true,
+      "imbalance_band": true
+    },
+    "all_post_comparison_detector_gates_pass": true,
+    "candidate_comparison_non_delta_checks": {
+      "delta_abs_increased": true,
+      "volume_increased": true,
+      "price_lower": true,
+      "vwap_lower": true
+    }
+  },
+  {
+    "candidate_utc": "2026-09-28T09:21:00Z",
+    "candidate_feed_time": "2026-09-28 11:21:00",
+    "vwap": 83899.0,
+    "previous_peak_feed_time": "2026-09-28 10:50:00",
+    "previous_peak_abs_delta": 39.81493,
+    "previous_peak_price": 82933.199295,
+    "previous_peak_volume": 47.45,
+    "previous_peak_vwap": 83988.0,
+    "feed_row_index": 2121,
+    "price_close_used_by_detector": 82908.0,
+    "avg_price_used_in_candidate_comparison": 82889.485481,
+    "buy_volume": 26.12754,
+    "sell_volume": 133.89242,
+    "volume": 160.01996,
+    "delta": -107.76487999999999,
+    "imbalance": 0.673446487550678,
+    "ema50": 82876.22733535763,
+    "vwap_distance_from_avg_price": 1009.5145190000039,
+    "chop30": 2.8972972972972975,
+    "chop30_price_range": 370.0,
+    "coh10": 0.3664268361423883,
+    "coh10_sum_delta": -111.08337999999999,
+    "coh10_sum_volume": 303.15296,
+    "thresholds": {
+      "CHOP30_MAX": 3.0,
+      "COH10_MIN": 0.3,
+      "IMB_MIN": 0.54,
+      "IMB_MAX": 0.69
+    },
+    "gates": {
+      "short_regime_price_below_ema50": false,
+      "short_regime_price_below_vwap": true,
+      "chop30": true,
+      "coh10": true,
+      "imbalance_band": true
+    },
+    "all_post_comparison_detector_gates_pass": false,
+    "candidate_comparison_non_delta_checks": {
+      "delta_abs_increased": true,
+      "volume_increased": true,
+      "price_lower": true,
+      "vwap_lower": true
+    }
+  }
+]

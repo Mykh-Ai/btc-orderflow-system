@@ -1,0 +1,339 @@
+{
+  "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+  "evaluated": 28,
+  "primary_candidates": 27,
+  "primary_decisions": {
+    "KEEP": 19,
+    "BLOCK": 6,
+    "UNKNOWN_KEEP": 2
+  },
+  "primary_components": {
+    "A_block": 4,
+    "B_block": 4,
+    "both_block": 2,
+    "B_unknown": 2
+  },
+  "validation": {
+    "checked": 6
+  },
+  "feed_provenance": {
+    "2026-03-19.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-19.csv",
+      "sha256": "2786da84b078b6af99f12e2c42a818a9b4ad98b3cc4be2bb043f66e4a8c3b490"
+    },
+    "2026-03-26.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-26.csv",
+      "sha256": "4a69471dd5bb55d085de0dcebc194c3ca69dc440816de518ddb0194de703da9c"
+    },
+    "2026-03-30.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-30.csv",
+      "sha256": "fee792c4ea7efd3b75814e6f8f97233d4ec97257e9a0c0f7b19ea226b6e3f9e7"
+    },
+    "2026-04-02.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-02.csv",
+      "sha256": "e5662d53a184c2a11bb07b98d95d445bfddbe261da484368a9ee83788966688f"
+    },
+    "2026-04-13.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-13.csv",
+      "sha256": "4ef67ad1d448af703207c77e5d0fcca899ac9056a22e7dce6aff1db534418dca"
+    },
+    "2026-04-19.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-19.csv",
+      "sha256": "2ddb6cfa5cc146316d954fd8bbbd802ac950c8652b58b271539759a2b417f5be"
+    },
+    "2026-04-21.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-21.csv",
+      "sha256": "3be4d0dfa8223333e3c986fef6ff032ba13b03a9f845c11a440fd5e9acc183d1"
+    },
+    "2026-04-22.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-22.csv",
+      "sha256": "6a6035eaf036d3f174716e558d8959adca06d59c0a4e992b726969de26c443bf"
+    },
+    "2026-04-27.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-27.csv",
+      "sha256": "433b88b382aceaed0edb26896262e5e8316cb59f86feabfd3cd177aa68a02644"
+    },
+    "2026-04-29.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-29.csv",
+      "sha256": "6c9742eb2c3bd4647679cbe945b2a1d8ab70dd7ec05fc44468354f1b719254cb"
+    },
+    "2026-05-23.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-05-23.csv",
+      "sha256": "ed86967eec11ace2cbd08013adf096c6ded329a355410fe6b55bca8ab25963f2"
+    },
+    "2026-05-24.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-05-24.csv",
+      "sha256": "739b0a57ff487f86abab67749541afc6d79c17e3e56574814c17253ca5386d9f"
+    },
+    "2026-06-02.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-02.csv",
+      "sha256": "8fd410c5306ce1f96cbcfeb5b71414db19c3022922f8e709865aa1083ae323a2"
+    },
+    "2026-06-03.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-03.csv",
+      "sha256": "fdd013edd8505596b5e988e8b58478504bdbda039d8ee8444001c66e4745e15a"
+    },
+    "2026-06-05.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-05.csv",
+      "sha256": "b2b8e9e8e830b2b6fbadfe37cfb5412a2af96223e8cf747d4ef5756ce065401b"
+    },
+    "2026-06-07.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-07.csv",
+      "sha256": "06f5840d875231907607503ea37de3ec8ae30c868a4f9d539ede7b8af7b9f2e5"
+    },
+    "2026-07-01.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-01.csv",
+      "sha256": "6faaf2f9f1544070b1ec23fed215b71da47a6eb6df80ba2849814c455cee9280"
+    },
+    "2026-07-08.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-08.csv",
+      "sha256": "d905a9982d59bbb05c9aaa7519ca952c6d5acb9a9876ad0f59a7293bf720e67f"
+    },
+    "2026-07-31.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-31.csv",
+      "sha256": "d0b9f82517eff90bc8899d955ebfc7de5b7be561d47d9e665134eb3b46e72bf0"
+    },
+    "2026-08-25.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-08-25.csv",
+      "sha256": "dfb2231d03eb711aa0d59c155586618d045561a96624121bfe8f3bc692ba79b9"
+    },
+    "2026-08-27.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-27.csv",
+      "sha256": "d23663eb2457277f9b06cdff26597c894569df5f84111a7e02ae894349f23794"
+    },
+    "2026-08-28.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-28.csv",
+      "sha256": "6cfa0cf95be28baf2a82ae6996607010c034d71ea71cab92590d1b2c4e50a64f"
+    },
+    "2026-08-30.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-30.csv",
+      "sha256": "bc3b6aac9026f9ba3ba519c32d1c73650c44aabc29fa03c5aafadbcb319d89a1"
+    },
+    "2026-08-31.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-31.csv",
+      "sha256": "3e16feb4b87023e9ccef0da67538345c3e5d40a4e01bed23b508e906f012b786"
+    },
+    "2026-09-04.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-04.csv",
+      "sha256": "2f53dcd61cd643183e27bcc077b9003d461cd053bd6d8d1b1ad289e9879b9604"
+    },
+    "2026-09-10.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-10.csv",
+      "sha256": "a83fb890ced04b3fd4c16f7a83c853dea65b8b1f1ead052bb6652381ca988143"
+    },
+    "2026-09-13.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-13.csv",
+      "sha256": "934da9a9af7e46d113857789590874a38a267cf5a7c51b27ba8481a5c4425a4b"
+    },
+    "2026-09-14.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-14.csv",
+      "sha256": "a0828d3f942c2057a5ccb309addf686fa3753bb24837d8838a480587c9b885f9"
+    },
+    "2026-09-15.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-15.csv",
+      "sha256": "30d18f4dbed3f56acc2a4550a17b2f77a49ba0415c09fd18223483755eae2937"
+    },
+    "2026-09-16.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-16.csv",
+      "sha256": "d56a1e97ffdf10c9f44807ff56ee712d5c7c4d491b58b6c070d89f7529f5d1cf"
+    },
+    "2026-09-18.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-18.csv",
+      "sha256": "aabe8765d4f9174f494456c6a1ba41919b4f884e9ab9bed8b7423f9514e22a00"
+    }
+  },
+  "a_precision_sensitivity_stable_all": true,
+  "legacy_feed_sha256": {
+    "2026-03-16.csv": "bc054bcd439177f3bc1ffdcd0f5fec274852d95233b5bd249f94e9bf55f3669e",
+    "2026-03-17.csv": "4bcb32db3eb6657d0cecb3e7c7c5bdff6c92fd59c361e8b17e91ffb28fc6fbef",
+    "2026-03-18.csv": "f5b5f7f5564f10e7f8adeb0fd565d2c1ba8b1a5c298959c56c20f3a43e1af2f9",
+    "2026-03-19.csv": "032f9f08ad078be4c7244007c7620a26b65f0155617970d79a7ff8658132a92e",
+    "2026-03-20.csv": "025a36487d2615969674b76ab98a81cc53491fe41f989f277dfefc7f0dd2be33",
+    "2026-03-21.csv": "6e8b4ab2d9a2357c546887bd79e0b85a060312be6b08ed18a83abb533ba7599b",
+    "2026-03-22.csv": "bf150f7dfea51179e3f06b7543036b5443f455e7abd586ae79ae1a77086654a0",
+    "2026-03-23.csv": "779965c05b01cb01a6e9a7dd9c2e05f8981ba285151900e31365f10532622b43",
+    "2026-03-24.csv": "ac7feef2542e84b3fdd50bae6368b864c97ad8d551c758f0d4c15585e7fc4870",
+    "2026-03-25.csv": "a368add4d5f9075225b062bd0264df197494178fa78a1400b1ee0a253f794659",
+    "2026-03-26.csv": "02f35e6187fb282c984d1fb3435149931020354fef18827590eefcf3c75c2309",
+    "2026-03-27.csv": "86915597cba07efb30ee3509b5f2aecd87cd9572d56514322bf5185d167b7b00",
+    "2026-03-28.csv": "bc69c178ef8abfcae1c494a52bb2d68cb8cc8beb4e80065604d0785f51adeaa1",
+    "2026-03-29.csv": "6f50f349be1f956ce4622ee78b379df0741db9500916acfe2e23263ef5119b05",
+    "2026-03-30.csv": "5fc9a9c78aed3ed3f3e1b60ba10bfbd5848939fe187f008b5ba745f43643d980",
+    "2026-03-31.csv": "8843c43b8333feda6b3c2583bfac3f5b7597ab10f9392ae79ce32ebc6c0cb678",
+    "2026-04-01.csv": "6c6d7c63dbb0b2b785e90c232695ada8993c0def479b2ae98ad0eae3333e4561",
+    "2026-04-02.csv": "ef8ef84b646a27d4c79c65f6444aab0af46908fc8322f887db82c8f86e482bf0",
+    "2026-04-03.csv": "59b28e8f225b181bc9da80a6d82d7527505cceae920cac92571453169424df2e",
+    "2026-04-04.csv": "d8b7ad2170896ab6d7fe35f9a98c6f25c2efa8707184222d8086d13fdd00b7a1",
+    "2026-04-05.csv": "df3e47be90df4259e10e03b825f9baef35504329628eb8614fc97de37650cc87",
+    "2026-04-06.csv": "53d386e2725de0f9745025b6b0d3be43c03ddfec5dfc431a646adc14510a0aff",
+    "2026-04-07.csv": "256c47a863658b606bdd6521dc866ff64f3ddd0f116bd3ae84868ac240040f67",
+    "2026-04-08.csv": "c8299c3207d26ab59bf85e86f1a08144ae4529e034bbc46aa2eb05fd27eaaa7e",
+    "2026-04-09.csv": "cacd3a5af497f7e94993370b926f20c72fdeeb93c617f37a82d3b17d08e1b60c",
+    "2026-04-10.csv": "23cc6845ff6059f2a253f22054471cdef458e7e8dc1f90539cc114b69c661b1e",
+    "2026-04-11.csv": "320ce8b0e533a6aeb75f95cbcb675a08921902c0c93eb1eb7a7ca0e84224ae5f",
+    "2026-04-12.csv": "7388ddeca0f901b50faa100cb0f694b9dd0aa08bb02dcf8272a88a178d36842b",
+    "2026-04-13.csv": "f358f8034fb9f2471cb097ac519e662971d7c4a0ed1bcabb135b090f78e8226b",
+    "2026-04-14.csv": "d9503821b96b6f4c00ece80c02f597bb56e4f97867c6096187330d1ae17f9bbe",
+    "2026-04-15.csv": "2cd6870fa6e176feb1bb134f78a5a851db3f6f9bb27b36184a49ecc5b3eb93e2",
+    "2026-04-16.csv": "fc957a7e9dfb3cd5c3e7bb9ae526f5d56e50e0c343928448c93f50a143aaf62b",
+    "2026-04-17.csv": "1d66476c6827d536c1942e43593cb43832bda996d7ef8a853ceeb0c8fbf6768e",
+    "2026-04-18.csv": "1dccff4d8e5bbcaefaa14a1ad9e671343e1c73f07d3833e2fb400f25410dc9d5",
+    "2026-04-19.csv": "47412cccc4ce9c206337ddb3b6bb324ba74f4876537ebee1cbc4fe0d621a782c",
+    "2026-04-20.csv": "de18e070b0f0f8b30d7613fe2da9e0f745856e5f2d8f2dc698e5a95a76021a84",
+    "2026-04-21.csv": "5fe8e47dd857cef901e7aaef140750a9b21c560ac16cdf87502d7b12b271d342",
+    "2026-04-22.csv": "a2d0595963b6b41a88f8f86ec2783a7b7c1e51dad2dc4c31d681baac2ecd4371",
+    "2026-04-23.csv": "d94b8b8ec0f8816a0ff717e0ab2d9567680b44a980309220b4aba986797d9161",
+    "2026-04-24.csv": "a34da2fad83cec243359822b630fb42f9401700170c7d9a5f6574728eed9db35",
+    "2026-04-25.csv": "df89b8397b5a895ccb44f364c2d01039567dc2100a4880bd25eac00a77085167",
+    "2026-04-26.csv": "b3fd7ebd59b5713e0ffebccc2bc178e6dabfc6feba14eab7ae74d8eb9eab8a0b",
+    "2026-04-27.csv": "ba3de4edce29761827f8340e31002e8c21fdce7e21650a7d9650e031b7662376",
+    "2026-04-28.csv": "7a5a277c8ecf49bf7fb3a097bb2d50f4252bdda99f99d916206d7fd1d549d267",
+    "2026-04-29.csv": "bdf156dbbd4063fab2ee6bd4f0b831d94bc5c185a26c3994bca8aea4cd51a6c9",
+    "2026-04-30.csv": "cfd10dd9a916f62d9311582e1b0b37009da229586d3be039a59896d289c1a502",
+    "2026-05-01.csv": "dd09635fc5684bd80fa866e6f176b72aeb676923d36ca010eb7a92826acac844",
+    "2026-05-02.csv": "95b6ec25af747e7a174bcf539e1c8025cf7fd1885919a10147873a2d9b31ddf8",
+    "2026-05-03.csv": "dab777a6c0986e38921c603b4579287052d0650a73bd037644f2b29064d21734",
+    "2026-05-04.csv": "e751a96f7e0256de1e22d0368011c398cee87ef07e83704f99a1680ba28522c5",
+    "2026-05-05.csv": "4a0d64bdd588699598f4091188348db2a30b9c1dc5c901697a47f55c3181f078",
+    "2026-05-06.csv": "c84abbb45e9da55a8578a6e777c26d89af9cf29d0c597c32ccd58c3563743969",
+    "2026-05-07.csv": "064b3504aadf08f9e4e93541f49e8211dcde28c8e83762104e92ec8455d43f61",
+    "2026-05-08.csv": "004eae83205122e188a04dce5357e9d318a568eb3cf22dce45374f4e628deb91",
+    "2026-05-09.csv": "9d8b7c21e406f2a8d5f1f112fd1c0dd0611f437ca260d6bf013e004b4d9d2fc2",
+    "2026-05-10.csv": "18dca51bf550b13f47c88f018dba26059d7c8e0167b287eaf9ef9f4edbd9a6a8",
+    "2026-05-11.csv": "96d014e231505327fe4cdb7c13124dceb46e34d05779094550f8aec74d57bfc3",
+    "2026-05-12.csv": "400182ae6666c517f3edafc15cfda0ab666b9de5c743d46e777aa08a62bba83e",
+    "2026-05-13.csv": "3b9535e4e416cb9838ef1851a4958f33b0dfebe8f14a9054e3cf641647e91d68",
+    "2026-05-14.csv": "93adc1200f627a8a9dc4979c884d69f3c4300f0a871500cee0b66154c75eebce",
+    "2026-05-15.csv": "c6b6535c11670019a4643eaf23f0e3e379ab0d7f53bfa90caaaf2aec0e78a322",
+    "2026-05-16.csv": "7ff8514d3deb788ef33a76bd05dd74c1284f3aec9f4a58d39e1e9024ea5d7484",
+    "2026-05-17.csv": "dd8c4c9a800133c98da28466545141c3f2fae4c474d35ed2cc20e7a0fe912cb6",
+    "2026-05-18.csv": "ccaf93b7218098f30a16bcdef0feaefe3d3e0e1295ea86dd61098f0d82734291",
+    "2026-05-19.csv": "a91ff8daeab1f5deae7595eb1fe27c35679dd34c7997d9d1e44765e88cd7e2a6",
+    "2026-05-20.csv": "aaf5c0fd10a9ddd84a9c9cc2d09e8eb6537896f9ed04326d529a281c0d81a9b8",
+    "2026-05-21.csv": "a57d18db1cc6460f4d2f3d57c8858270ae7409df65447038e36ba7be7eb2c65b",
+    "2026-05-22.csv": "876429d31e35dc8bc52affd3343931953343bc96be784d04e4bcc25825115c56",
+    "2026-05-23.csv": "9129c384e033e06bd73b94e9571aedc1dd170780e6e2b78c26c6f2a02c200da2",
+    "2026-05-24.csv": "387fb7d2511a31457bddcf04007f5cbb9952db3b4d0a313f39dfc05c9a3acba2",
+    "2026-05-25.csv": "39fec725930e8123fcf3c2a939dd30a3c682b537ad80110aaf9db02a268cc1f4",
+    "2026-05-26.csv": "f75d7871e316a7f61e983972a10cf0ccdce4d1fe203daa9737dd229dbf6fd25c",
+    "2026-05-27.csv": "99178ca809940d2278342c74541957e8e59222bee0b5dd94e847bfe675e2dc17",
+    "2026-05-28.csv": "7dc4ad445f215109164e99b4557338b67a7df79902b347a3a2e0a0179d9e17f7",
+    "2026-05-29.csv": "928bea99e52f85b95e5c0a886bc0e059a971622d6f1947be168537ecbf841387",
+    "2026-05-30.csv": "d6553bafed9eebbce185b528dd20ad7bcb3399d478972b76bafdddab2bf11299",
+    "2026-05-31.csv": "9a5f4d2d34ad85f82086e87dd163df36057d4b8b0d9815dd85eff895ac26e91b",
+    "2026-06-01.csv": "f4615f4e04b04a68d75bbf690c8e7ba00dbdc8fe8384b1b9cc4763360acd3e09",
+    "2026-06-02.csv": "145baa34f40f4ba61b82d3ddb397a7c6959dcbd82378d3bce0c0035c9769cbdb",
+    "2026-06-03.csv": "5ee415fdcc686757a8054afd33d5f46c2427e3b803beb3189a743f0980ce82d0",
+    "2026-06-04.csv": "b2fe049fcf8596f266e067d92206bad15f00fc9e09284ade11e5026bb8b41004",
+    "2026-06-05.csv": "9f761053cd31b641fb9d79fa5ec9bf9113c3dbcae3ce57b8426a06d98f3a118f",
+    "2026-06-06.csv": "4207b6c520ee8b7e39b1e12e0689bb96b2efb069229d31a915e7367364c7f61b",
+    "2026-06-07.csv": "12f5e730da120a452d08f7dcb930b0e548003f582ca27a5df5ad413133ea7cb8",
+    "2026-06-08.csv": "6414eb24d3d011c25f768fe935784759e5d1b7e0129c18a80f0cc2e919bd7fe8",
+    "2026-06-09.csv": "a155d4940b84825846990fe82e1dc2971b7f00c2b585b5dadf00adea6ab6ffeb",
+    "2026-06-10.csv": "cbc5c525039e0c77bbbfcdf05b3f813952fa15c8948d440c4c0096721634748a",
+    "2026-06-11.csv": "d10440cd139fdb07aae8c023d8f2c88ad95e0bb570b01c1003818200b18d9b2b",
+    "2026-06-12.csv": "8b90950101bc77fe9d4c50411a392983448d11c6771fe62bf6b82ffb6d8668a9",
+    "2026-06-13.csv": "d6298c2949e8fece9437e337ea5c01bea68bea167e41011b7499984d20e3c18d",
+    "2026-06-14.csv": "87a0836142a9fbafca42603fd2a2b14c027ad98e151d94864427e728f7c3089f",
+    "2026-06-15.csv": "f4749c2b87ae85c09a7ceabab3c207f3c04cc505baae45c371db18a4db14210e",
+    "2026-06-16.csv": "6300a737e93cb2028e9bcca174225597039b3f2cd8445004138d742abf3ec4e6",
+    "2026-06-17.csv": "768228948536795d6bcf579c9bd5356a424884a10713a9f71a5faab5c8a0816f",
+    "2026-06-18.csv": "7944f9b11dd13bea40700bedf95c938b924a436abf4bb4c67201b64a941cf293",
+    "2026-06-19.csv": "f06c06957b4d41764426ec79d006be701d0898339aba5851a621725a72d76f8d",
+    "2026-06-20.csv": "83d6a3a52ff9655498d0388ab0d940c3b6e469642e423f2777c24547d0a8f68d",
+    "2026-06-21.csv": "7c305ae999e8a419da9546fe939341393b0744473887e9f9253a98d8991f26b1",
+    "2026-06-22.csv": "dd15a872c187faca0afc07af5ae85827ecd4740beb730f473741dbfecd18dacb",
+    "2026-06-23.csv": "5283ae3b561e59267ed7b90edee459b1cbe63ed5b01b65cb19cb3c4619116f46",
+    "2026-06-24.csv": "78dcd3e10f82e1405711f5b1fdbf557f97cc08bd396ddf08a663f6c8d309b6fa",
+    "2026-06-25.csv": "22a95777e0b5d59be5bef7d5b401c2d36c74ee80838f2739188ae82a7fe09233",
+    "2026-06-26.csv": "3984f56234ce269ed844e6b527fe028e4197b05524694c674936a1428b1ab389",
+    "2026-06-27.csv": "698852adf38b889a27ebdec89a7d5cd1f95f3a32b302bd213231c9b93a758b1c",
+    "2026-06-28.csv": "dcbad9c50de8f39eef2bce723991279e6b1a39143c062bc78e6afc684867e111",
+    "2026-06-29.csv": "c54242e3932e259f242367d23626e76f480bf91eea54936404b067b80244f12d",
+    "2026-06-30.csv": "ef5afef38bfa3820662f8ea036b401d04e4b894066819c9878ae7fb694d301fc",
+    "2026-07-01.csv": "70a344fef85b5a917e70594317cb3a7a4cbb75e9882bbe173bcf13ef1af0bef4",
+    "2026-07-02.csv": "3e8ce77312a28fc2948409b5447397f2c2da05b4e968eb7b6c15d155484f02c7",
+    "2026-07-03.csv": "4cfcf5dde416d9ba5990d89e9856692964f6727a47552bea472d127eab3ef639",
+    "2026-07-04.csv": "ab9e885451d1ddb06fb247b64fc289faf8476a2e375baaa8f3fa0a673cd60691",
+    "2026-07-05.csv": "f857e636ad7c38bcf699b5f5d57671db0ef0a4c70607a0c9318d5d79db61d913",
+    "2026-07-06.csv": "ce96e688dac789bba81a717e75d875409cfbb711b5538a95532d614991bc27fc",
+    "2026-07-07.csv": "4668d283dce9af1411849fa875c3e05733b7432f49e829bbe51dcd3b759f1d77",
+    "2026-07-08.csv": "bf8f9b5f08375c93dd71afefbb89912d6bd5ccfa12cdd084287920579546a194",
+    "2026-07-09.csv": "3c9d82497fe25940e7a1b414dfd53991c49e75a08aa35c804372c4ae65dc17a8",
+    "2026-07-10.csv": "03353a4a0f1f140b0a609c751ac75958e5aaa213f0cbbb6533cdeb1264cbf904",
+    "2026-07-11.csv": "4e2d5a276526cff11e51a6710d8290b9930ca6d8e874d3ac8118134cd593f6de",
+    "2026-07-12.csv": "2b4b379c26d7b4b6f1a09af34263e838e8f42b1991c155528e233e6f69e00fb0",
+    "2026-07-13.csv": "bc9db5d58af0b6e66d888febb0e908cd5ef5774f1239b4cd3ea874770c1a7c0e",
+    "2026-07-14.csv": "d57bcbf001e2a84071df866ea95acfd7cf1ef994f588e7dec656762499a52efd",
+    "2026-07-15.csv": "d283aec40f4dc99aaf3fd9d8fb12ee6b97d3616f1b8531ffbb3e7f50c96b0282",
+    "2026-07-16.csv": "0d121af69af94c892cd9b831b000cddaa8aa374ce2a5e418f23c4668de5a3c01",
+    "2026-07-17.csv": "20384f5f3302e8311439770f82e4c94b053750163cb56c9d4ac498fd9b5f4316",
+    "2026-07-18.csv": "20a52530bb4c7b1d0d3e71abff2d534489ec8dab621a0813578e286669cc448b",
+    "2026-07-19.csv": "bad6d1b3979936bfe794a34ed0dee53873365ae742b90a75e3007629406a7d69",
+    "2026-07-20.csv": "b32adb7562f5b9d8c7de40f562b4aacde6e438aa223f0a49b8b757ccd64ae3ec",
+    "2026-07-21.csv": "fa119ba33f0bcad17c09141c077af4f3ea4bfcd5a9c2af068c769c26228f176c",
+    "2026-07-22.csv": "bd19297a352bddb746ae71cce73795617de89eb2e9eb42a6ca34e74a805e3902",
+    "2026-07-23.csv": "5302b61163780f00eeb7140e5c33807c9473b76cf092fe1100c25386ff7fbd4e",
+    "2026-07-24.csv": "c2dd75d161ebcb5e8e94ae4ef43e269fcbeadf10d675292c09e829c88a5cf480",
+    "2026-07-25.csv": "e7af297940537634a304b216f361bd4b27280f03862e4b09e28f719dc071fdad",
+    "2026-07-26.csv": "c66778dc6fda5eaff210ba48feb7e14087817b77239c190acfa557eecdf47420",
+    "2026-07-27.csv": "d9d6a43f480917ff54e558abf7829d701b352f69503089e850267f454eeb2e93",
+    "2026-07-28.csv": "3d3b8409e1f55eacd8f0e752581ba6b28a96521ce5a9df0df2245f7a9c6f5f23",
+    "2026-07-29.csv": "c406f8e9e1ad28fc7c3c5b668717d549521c319c1fdb4503219afe7a0b07189f",
+    "2026-07-30.csv": "428c10ebf8e232a45b0dd3237459b3977b2b3a2d7457989edc58eeb01a929a01",
+    "2026-07-31.csv": "779d6ba03080c6b0a8a619b720b89aee2157f30c6e91bba73311482ef47b790d",
+    "2026-08-01.csv": "c50fadd46d3902df26f7fbd50f98a893a8c349258744c49f8bb1decefb6af84f",
+    "2026-08-02.csv": "3c4a95f9d7d81cf0c3b6276d7437d3b01793dcd3ef614a52ff4e55e15a29696e",
+    "2026-08-03.csv": "e31a7e17ddbd00f1656b9a36688435c1ef06ca6b32258d3cdef74713a0dd8883",
+    "2026-08-04.csv": "694e59306ecfcdce88658474cf005fe95edaaf1aa8aecf0140b4f20e466cbf00",
+    "2026-08-05.csv": "bbaff79f6ea6d477938d27ad1ddadf12c9aec3f974a8de5b10c679ae0f7ba8f2",
+    "2026-08-06.csv": "bb5ee9d9a3fc883422bd020604303dcf501a63fe64d263206bb69d67592e7762",
+    "2026-08-07.csv": "d6507198d80d22140fe4f900fb86288d923616c7d787208bf6f045e0eca272ce",
+    "2026-08-08.csv": "7e5bd219f8e4fd9541f4c246d9de744f0576f9f51a59c9e6b513a707e709ee9e",
+    "2026-08-09.csv": "b1e541b4d41e3e0df57f115c30b5781f406ef12496a2d1f6edb4aa27b2cfb3c2",
+    "2026-08-10.csv": "a49ab16713ffe20cdc417eb3662bbe45be7efe38ff874eabd9728fe491181cc3",
+    "2026-08-11.csv": "54dd8e3d9f2b0c49c0a8e80f5452fd04db6a1e5e76424cae3c557267d2fb69bd",
+    "2026-08-12.csv": "07bc743d032c77bef9a98541cf358e08445b99d3dba2e4b960a5316503fc2c8a",
+    "2026-08-13.csv": "ec525e01b5ccf436911f4dfeb21b587a4f508b030ececc3417618cd16aeb7e57",
+    "2026-08-14.csv": "c5e79d1b4b31172d56dad19fd28d4d0b1e61a310e3cc8d15f596ef914d34fc21",
+    "2026-08-15.csv": "0c72c8c4cb0df45a7fc03a30f045827c4b12b6981a5d3a6a7632aa8cd70663b3",
+    "2026-08-16.csv": "12e683274d74ebacc4b814352b74ccd244dfa8104fe240233b24df27504e643b",
+    "2026-08-17.csv": "cd894c94be0ca1377909a2fbfecfed7cd7bbf9840821ff55d7d0a595aee85134",
+    "2026-08-18.csv": "af6f00a1a99db9bab9a85c9680102a8612402456231b134361288f9e3374cf12",
+    "2026-08-19.csv": "60d36eeefe302a7cbee204c35def66c885d089f933b4d644bde9b295dcee5043",
+    "2026-08-20.csv": "02c597c8560f598b1fd56e7e0d8651ccaadb808d9c461eb478d8930e760a7302",
+    "2026-08-21.csv": "1700e9e9cd90800a4ff2c25e7c32b661a50bdb1fedfcfe35c9d7316a3af62e95",
+    "2026-08-22.csv": "0be39b44405c0a3e6d0444e80ec5a6e4fac93c91aa2b0380c5d989efd083e6ce",
+    "2026-08-23.csv": "1064960e760dd6c4c98afa3c57180dee605a035e239dbcbf2dfb3209b0726861",
+    "2026-08-24.csv": "ddb192d454cf0722153b2496300c9b532882d78ce5cfcb804d11e4abf5969129",
+    "2026-08-25.csv": "cceb537c7f06ba27c5151bfd58a6b2b9f6c9c4dc2699d38a9606073b264195fc",
+    "2026-08-26.csv": "4519246a7bbfe8aa78f0fed3a20297fc5c856748b2efe832d22f66729c839801",
+    "2026-08-27.csv": "0d2ea70e2e27a048feef4ded2978452de27169a354d7f652c3ba06008291dbdf",
+    "2026-08-28.csv": "b515896dd1a768708176552871de6dc54e0b31cec4e415c717846723f6e0e94e",
+    "2026-08-29.csv": "7411726f30cfa7400b10cff530996b2c82b3a682061304f9d0183928fc94d11b",
+    "2026-08-30.csv": "7a896981a34b8770d2755ca4b62c5056aa30069d330ddd86e1d0058e1f0dbc8f",
+    "2026-08-31.csv": "5a8025c1d37d345667db0639ca52e3aea4324ffefc7c926ae43ed46455aa3e2e",
+    "2026-09-01.csv": "6e658735088e47c10d932ff49d5ee57f1403979a8759355eecc65b785711c077",
+    "2026-09-02.csv": "61f3f9302718c59fb5236f85ff19382877657f1b715971a4f63df657bf0796f4",
+    "2026-09-03.csv": "c561794d7afed81663af9bf18c30006ee90c30e8356f7273ebbea49525c4a099",
+    "2026-09-04.csv": "c3981deea546ec096cdca32928f991fe31494f1562e98e4bb67ab505059069ae",
+    "2026-09-05.csv": "514080d83085cf3273c428a1a777eaf1d3fce40c573ab62dc4012c7ff1af4c80",
+    "2026-09-06.csv": "96fdf59e42aac28fe690177a05fc7aca2ea1c665aadc0caeb657fdf37dc422ec",
+    "2026-09-07.csv": "0f70081e06300da89a9cce914ecafae964f4350893eda82a219d38246c18cd32",
+    "2026-09-08.csv": "94b12fc7ca2c94248ee9befc0b50e70656dc25ac82eafa001625f94e1c3c7dc4",
+    "2026-09-09.csv": "8cd5bd73305c8aa427316132b7d00b958a62b8190a2740fd7c37764365444b96",
+    "2026-09-10.csv": "153ab924ace0c8952b85ca99792313d10479f258c77786c20cce617abe594746",
+    "2026-09-11.csv": "3ba16f9e97e258467fd237c83f811afbc40e1220acd30d3d4f50d729806272f2",
+    "2026-09-12.csv": "c7d1aac30d10149a588291ba3e3094a5a81864bcc17495e88827bc00cc0ef6b9",
+    "2026-09-13.csv": "e97c3f72c56cbc35ca1de5918c1d08f46bbf030f906d335460d0be82c03a3932",
+    "2026-09-14.csv": "77f3527c778d8b0e3b84b91bb1c2b67b31dd634ee7e5c63f5924a697cb895142",
+    "2026-09-15.csv": "a92806ad9ec4bf52415687e0f096198ac3cc0e2217402920c174b3a83f806ab0",
+    "2026-09-16.csv": "c1d7743cc8f31398f8a7c485706e1df780a2d60749361f40bdc2ea7777c1603c",
+    "2026-09-17.csv": "fc9beaf19369ecff300adfb691d700d38bf59b1e2963bdbb891841cc31410063",
+    "2026-09-18.csv": "dfd2bb118e301a5f61990689206850ca123214da1a188095d9aff625ee418584"
+  },
+  "audit_script_sha256": "61603c92b11d166f789b07fb86e368d93cf7cc6e960d39f5599e5dca514f17b2",
+  "policy_sha256": "1624d5cf5ec0107b7c557086423cbe5bca45b9a85b5ed7be0edbd44f99313d1e",
+  "quality_sidecar_sha256": "b50bdbe779f714a61a51fe37363d10d8cbdcb387f239375b1c07071d0873e65d",
+  "notes": "A/B states are blocker matches (true means BLOCK). Policy union does not reconstruct historical fail-open circuit, budget, state/audit I/O errors. UNKNOWN is not PASS."
+}

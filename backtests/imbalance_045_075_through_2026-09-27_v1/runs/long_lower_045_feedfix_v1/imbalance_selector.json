@@ -1,0 +1,19 @@
+{
+  "variant": "long_lower_045",
+  "experiment_id": "long_lower_045_feedfix_v1",
+  "thresholds_by_side": {
+    "LONG": [
+      0.45,
+      0.69
+    ],
+    "SHORT": [
+      0.54,
+      0.69
+    ]
+  },
+  "candidate_source_rule": "PEAK_EMIT_BASELINE plus CANDIDATE_GATE_REJECT/reject_reason=imb_band; retain candidates whose recorded imbalance is inside the fixed band",
+  "date_from": "2026-03-17",
+  "date_to": "2026-09-27",
+  "candidate_loss_filter": "UNION_A_OR_B",
+  "production_changed": false
+}

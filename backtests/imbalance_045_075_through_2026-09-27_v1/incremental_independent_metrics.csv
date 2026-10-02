@@ -1,0 +1,5 @@
+cohort,side,candidates,filled,not_filled_or_blocked,positive_net_filled,negative_net_filled,plain_sl,tp1_reached,tp2_reached,net_pnl_usdc,gross_pnl_usdc,average_net_per_candidate_usdc,average_net_per_fill_usdc,sum_position_r,recovery_overlap_count,same_bar_sensitive_count,lifecycle_counts
+low_added,LONG,13,11,2,7,4,4,7,5,197.67323787670676,252.38621539999997,15.205633682823597,17.97029435242789,6.500304451803577,0,0,"{""NO_FILL"": 2, ""PLAIN_SL"": 4, ""TP1_SL"": 2, ""TP1_TP2_TRAILING_STOP"": 5}"
+low_added,SHORT,5,3,2,1,2,2,1,0,-52.29738055179673,-37.171702499999924,-10.459476110359345,-17.432460183932243,-1.2639851476067627,0,0,"{""NO_FILL"": 2, ""PLAIN_SL"": 2, ""TP1_SL"": 1}"
+high_added,LONG,11,11,0,5,6,6,5,3,60.202019274220184,115.19385320000019,5.472910843110926,5.472910843110926,1.9093579532369165,0,0,"{""PLAIN_SL"": 6, ""TP1_SL"": 2, ""TP1_TP2_TRAILING_STOP"": 3}"
+high_added,SHORT,9,9,0,1,8,8,1,0,-332.8497861536123,-287.1071970999991,-36.98330957262359,-36.98330957262359,-7.716854502536932,0,0,"{""PLAIN_SL"": 8, ""TP1_SL"": 1}"

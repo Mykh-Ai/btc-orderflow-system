@@ -1,0 +1,38 @@
+[
+  {
+    "feed_timestamp": "2026-09-28 07:39:00",
+    "signal_ts_utc": "2026-09-28T05:39:00Z",
+    "signal_price_usdt": 82818.893068,
+    "signal_index": 1899,
+    "planned_entry_usdt": 82818.4,
+    "selector_result": "SELECTED",
+    "swing_ts_feed_local_naive": "2026-09-28T07:01:00",
+    "swing_ts_utc": "2026-09-28T05:01:00+00:00",
+    "swing_price_usdt": 83534.0,
+    "swing_volume": 9.47479,
+    "stop_usdt": 83584.0,
+    "stop_distance_usd": 765.6000000000058,
+    "eligible_count": 1,
+    "confirmed_count": 10,
+    "window_gap_count": 0,
+    "would_cancel_for_1200_cap": false
+  },
+  {
+    "feed_timestamp": "2026-09-28 11:21:00",
+    "signal_ts_utc": "2026-09-28T09:21:00Z",
+    "signal_price_usdt": 82889.485481,
+    "signal_index": 2121,
+    "planned_entry_usdt": 82888.99,
+    "selector_result": "SELECTED",
+    "swing_ts_feed_local_naive": "2026-09-28T10:55:00",
+    "swing_ts_utc": "2026-09-28T08:55:00+00:00",
+    "swing_price_usdt": 83030.0,
+    "swing_volume": 38.10259,
+    "stop_usdt": 83080.0,
+    "stop_distance_usd": 191.00999999999476,
+    "eligible_count": 4,
+    "confirmed_count": 13,
+    "window_gap_count": 0,
+    "would_cancel_for_1200_cap": false
+  }
+]

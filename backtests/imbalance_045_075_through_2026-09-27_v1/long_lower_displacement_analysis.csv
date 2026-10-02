@@ -1,0 +1,5 @@
+baseline_candidate_id,signal_ts_utc,side,baseline_status,baseline_lifecycle,baseline_net_pnl_usdc,long_lower_status,long_lower_lifecycle,long_lower_net_pnl_usdc,net_effect_usdc,causing_new_candidate_id,causing_new_signal_ts_utc,causing_new_imbalance,interpretation
+SCOUT_871dab2537815717a078,2026-05-29T15:10:00+00:00,LONG,FILLED,TP1_SL,1.415623,BLOCKED,NO_TRADE,0,-1.415623,SCOUT_50153feade427fdde8dd,2026-05-29T15:08:00+00:00,0.496,profitable_baseline_trade_displaced
+SCOUT_f1fa583cdcb278230adf,2026-06-01T08:31:00+00:00,SHORT,FILLED,TP1_TP2_TRAILING_STOP,45.470668,BLOCKED,NO_TRADE,0,-45.470668,SCOUT_50153feade427fdde8dd,2026-05-29T15:08:00+00:00,0.496,profitable_baseline_trade_displaced
+SCOUT_5f451f9f4a0928c8a194,2026-08-05T20:22:00+00:00,LONG,FILLED,PLAIN_SL,-58.331098,BLOCKED,NO_TRADE,0,58.331098,SCOUT_072a749b3fb629a0f6b6,2026-08-04T12:39:00+00:00,0.536,losing_baseline_trade_avoided
+SCOUT_21d8a4708ab6a14cf11b,2026-08-10T06:45:00+00:00,LONG,BLOCKED,NO_TRADE,0,FILLED,PLAIN_SL,-25.566296,-25.566296,,,,changed_position_timeline_admitted_losing_baseline_trade

@@ -1,0 +1,391 @@
+{
+  "candidate_contract_version": "SCOUT_CANDIDATE_V0_1",
+  "candidate_count": 1,
+  "candidate_groups": [
+    "PEAK_EMIT_BASELINE"
+  ],
+  "candidate_quality_count": 0,
+  "candidate_selection": {
+    "comparison_setup_variants": [],
+    "loss_filter_policy": "NONE"
+  },
+  "code_fingerprint": "56b84adbe3b9ed58c27bab97c4d85424ce0fc5fefe683d551a1b07d3e6db4ece",
+  "date_range": {
+    "candidate_from": "2026-09-16",
+    "candidate_to": "2026-09-16",
+    "execution_feed_from": "2026-09-15",
+    "execution_feed_to": "2026-09-17",
+    "signal_feed_from": "2026-09-14",
+    "signal_feed_to": "2026-09-18"
+  },
+  "description": "Independent counterfactual of archived live AB rejects; V8 initial stop and deployed trailing defaults; no live mutations",
+  "exclusions": {
+    "duplicates": 0,
+    "invalid_candidates": 0,
+    "operator_test_parity_rows": 0
+  },
+  "execution_feed_quality_counts": {
+    "BINANCE_SPOT_OFFICIAL": 4320
+  },
+  "experiment_id": "ab_rejected_2026-09-16_live_agg_v8_v1",
+  "feed_contract_version": "SCOUT_FEED_V0_2_COMPLETED_MINUTE",
+  "generated_at_utc": "2026-09-18T16:46:34.344877+00:00",
+  "git": {
+    "commit": "254f55c2376466dde6ff0cb0610750db5c1cce40",
+    "dirty": true
+  },
+  "input_files": [
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\btcusdc_spot\\daily\\2026-09-15.csv",
+      "sha256": "3632466add3a44754ddd73a7af9546dc613eb4d50521ddba89c72ac70623ca9a",
+      "size": 200257
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\btcusdc_spot\\daily\\2026-09-16.csv",
+      "sha256": "db0d36797f52d50f637f46458716fbb9f83baecf99c755a79b2cb31acab23f23",
+      "size": 200121
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\btcusdc_spot\\daily\\2026-09-17.csv",
+      "sha256": "11d07841ba9296f6d2855175e234ec614ac34ceb601768abeb5df62c656e1e78",
+      "size": 199868
+    },
+    {
+      "data_row_count": 5,
+      "line_count": 6,
+      "path": "server_journals\\2026-09-18\\btcusdc_spot\\provenance\\daily_quality.csv",
+      "sha256": "3f9126cd19469506f3eb6142bce6d723bdfa9ef25a2c1352300554d4a7327d78",
+      "size": 1029
+    },
+    {
+      "path": "server_journals\\2026-09-18\\btcusdc_spot\\provenance\\source_manifest.json",
+      "sha256": "1fd5dec8982e05ab7afc1102cb2414d0dce3c438d54d1c322657986be42984a3",
+      "size": 5369
+    },
+    {
+      "data_row_count": 49,
+      "line_count": 49,
+      "path": "server_journals\\2026-09-18\\deltascout\\2026-09-14.jsonl",
+      "sha256": "75cd6b2a4117c5f23b7e702bcf5d77c4376d61389b52e120e3f666e7b48e3161",
+      "size": 22888
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\2026-09-18\\deltascout\\2026-09-15.jsonl",
+      "sha256": "618130604097ccbeb3e9201122b050631856240b2a121c3b049aa294ca2247e6",
+      "size": 6728
+    },
+    {
+      "data_row_count": 39,
+      "line_count": 39,
+      "path": "server_journals\\2026-09-18\\deltascout\\2026-09-16.jsonl",
+      "sha256": "9066f53b6c41c573fc4910905397a1971179bd19d0d78135f226afd13d4ef390",
+      "size": 13472
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\normalized_agg\\daily\\2026-09-14.csv",
+      "sha256": "e4ee185f85e2b2f15fab1a710662f84311bb9da3d205db9008b9aab7ae013bd0",
+      "size": 138861
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\normalized_agg\\daily\\2026-09-15.csv",
+      "sha256": "18942c365fe538db85bda880261d182506943727b5aef310aeefa7076a143e5e",
+      "size": 139182
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\normalized_agg\\daily\\2026-09-16.csv",
+      "sha256": "3847ebddfc165e5b2dd58d32065d2edf9bfcdf73f5270d34827bb0adbd089f94",
+      "size": 138771
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\2026-09-18\\normalized_agg\\daily\\2026-09-17.csv",
+      "sha256": "3686c3675a2d824451c31b2f72ead4323c817f7323b1a9482d370172d46c2c99",
+      "size": 138244
+    },
+    {
+      "data_row_count": 982,
+      "line_count": 983,
+      "path": "server_journals\\2026-09-18\\normalized_agg\\daily\\2026-09-18.csv",
+      "sha256": "4f5503476d483de12909f5f6f24d06ecc65c0dba89fc5ab01a4c9368192cbc11",
+      "size": 95118
+    },
+    {
+      "data_row_count": 41,
+      "line_count": 41,
+      "path": "server_journals\\2026-09-18\\trade_outcomes.jsonl",
+      "sha256": "3ae98e22e26ae5a5f0784fa00996aca593e21f11df372a7d8fbc8aa7c695c130",
+      "size": 30792
+    }
+  ],
+  "output_artifacts": [
+    {
+      "data_row_count": 4,
+      "line_count": 5,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\comparison_variant_metrics.csv",
+      "sha256": "3de5685df3a721427b8c7b7ff7fda0826ff655f2ddcae86c700ff7a2395920c6",
+      "size": 1108
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\comparison_variant_trades.csv",
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2
+    },
+    {
+      "data_row_count": 2,
+      "line_count": 3,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\comparison_variant_monthly.csv",
+      "sha256": "893671e8db5834d381cf7e7dfb2db73731d92db48ddcd34f2c061ee30f9010bc",
+      "size": 689
+    },
+    {
+      "data_row_count": 12,
+      "line_count": 13,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\comparison_variant_loss_filter.csv",
+      "sha256": "7c2d555ca8de3261fa2f1c8e9c6799c9de47d3d13a2c11bd348276d4dd3c4e4c",
+      "size": 1107
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\other_candidate_groups_inventory.csv",
+      "sha256": "bb358ebdc0191583acd96bbc666774db8e7c7488ed219950fab5f9cb5299d63b",
+      "size": 241
+    },
+    {
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\summary.md",
+      "sha256": "bccdb60fe22bf06934d581b214bfa8f9948ed55d8852f602beea57735b02a32e",
+      "size": 2097
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\normalized_candidates.csv",
+      "sha256": "0f96f50942cee973466cba93880a9f6b737323cee311cfbd22558e9a3b75e8a0",
+      "size": 1187
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\candidate_quality.csv",
+      "sha256": "34ed73ad4f251b7690693e79f2850df448334c903d0488839ce484d09b6cf555",
+      "size": 58
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\candidate_loss_filter_exclusions.csv",
+      "sha256": "025598e4b7d0dc3fbc095b6137a94b49c9b072b6156569fe0f4350b678845645",
+      "size": 130
+    },
+    {
+      "data_row_count": 12,
+      "line_count": 12,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\replay_events.jsonl",
+      "sha256": "eca4b407751e5620470f759c849c8208749d504d1ce4c647622d422db3771cd3",
+      "size": 2750
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\independent_trades.csv",
+      "sha256": "d5c5f1bea833f53f044b1ddb0ab65f05be4ce44baa26fccf445287c816b32ecf",
+      "size": 2452
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\portfolio_trades.csv",
+      "sha256": "b8d94c1791e0504a7faa86f7e0321b0ae4dd6d9e28eeb79f42dc63156c54a2eb",
+      "size": 2470
+    },
+    {
+      "data_row_count": 2,
+      "line_count": 3,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\trade_legs.csv",
+      "sha256": "0ff00e065aca0e494695a779a29d7e2022853108e855550d57384973295c247b",
+      "size": 400
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\position_lock_opportunity_cost.csv",
+      "sha256": "12f11d60b81fba724f72f83f031b2defcae5763b19a743d4273de48ce39d5011",
+      "size": 463
+    },
+    {
+      "data_row_count": 14,
+      "line_count": 15,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\candidate_group_metrics.csv",
+      "sha256": "547a4e8fdba80a1982fa00544b88531973a27367887b3dba8ed57bddb65e9248",
+      "size": 4563
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\portfolio_metrics.csv",
+      "sha256": "6dd340e357c140f20f668f19d1490bb51989bf6b1a6e56ff48540fc8450ce50f",
+      "size": 375
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\equity_curve.csv",
+      "sha256": "2e730c43451c0d3bff59525812f5f007dcd7389fa1fed2a05e88870940ee367f",
+      "size": 146
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\drawdown.csv",
+      "sha256": "a5963d66c7055c719e31baf6ba1bc1e3d65b2eed94a68f735a79fd7f46dc2c70",
+      "size": 155
+    },
+    {
+      "data_row_count": 41,
+      "line_count": 42,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\parity_report.csv",
+      "sha256": "a4f46f34b4c90dadbb5ec136faa75bfc0007d8440e1ee7d4d4071b737bd20633",
+      "size": 8630
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\same_bar_sensitivity.csv",
+      "sha256": "5e742cc0b298ac1cef8f6db4a444fd3474e3b1fb028724bfb03cc0617607a2e8",
+      "size": 310
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\cost_sensitivity.csv",
+      "sha256": "e910a3208e1fdc03140b44ccf68a26aadb4e747ddcd3ae50301d068f0a889276",
+      "size": 274
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\loss_avoidance_counterfactual.csv",
+      "sha256": "ef25974e6a9b1a30449e4a77ae28e07da3c6b8b700dd03d3e5f40945a0485f3e",
+      "size": 859
+    },
+    {
+      "data_row_count": 3,
+      "line_count": 4,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\loss_avoidance_metrics.csv",
+      "sha256": "0bfebe7c28cc87b476c7e84d1ccb6647daba306c3ed0915a2f60fabb1f993cf6",
+      "size": 751
+    },
+    {
+      "data_row_count": 18,
+      "line_count": 19,
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\loss_avoidance_coverage.csv",
+      "sha256": "f240b46a3216f2e9bbd275263b632870626fd4290bda9e85bc43833dbc848e75",
+      "size": 1624
+    },
+    {
+      "path": "backtests\\ab_rejected_2026-09-16_live_agg_v8_v1\\loss_avoidance_summary.md",
+      "sha256": "fbcc785a7b62e43c8d203340618b22bfdd85a2fa4816378ddefac4e38c189866",
+      "size": 4216
+    }
+  ],
+  "replay_modes": [
+    "independent_opportunity",
+    "executor_portfolio"
+  ],
+  "research_analysis": {
+    "applied_candidate_loss_filter": {
+      "blocked_candidate_count": 0,
+      "input_candidate_count": 1,
+      "kept_candidate_count": 1,
+      "policy": "NONE",
+      "unknown_kept_count": 0,
+      "unknown_policy": "NOT_APPLICABLE"
+    },
+    "artifact_content_sha256": "c70cee4025f33088b84aef3375e9301ae564ead157f41d2fe67be30e718b757a",
+    "classification_invalid_count": 0,
+    "comparison_variant_distribution": {},
+    "discovery_period_end_exclusive_utc": "2026-06-01T00:00:00+00:00",
+    "price_contour": "btcusdc_spot",
+    "requested_comparison_setup_variants": [],
+    "validation_period_start_utc": "2026-06-01T00:00:00+00:00"
+  },
+  "resolved_config": {
+    "commission_calibration_count": 0,
+    "commission_calibration_source": "PINNED_SPEC_REFERENCE_0_000744",
+    "commission_rate": 0.000744,
+    "conversion_model_id": "COMPLETED_MINUTE_BTCUSDC_SPOT_TO_BTCUSDT_REFERENCE_CLOSE_RATIO_V0_2",
+    "cooldown_seconds": 180,
+    "cost_model_id": "COMMISSION_TURNOVER_RATE_V0_1",
+    "description": "Independent counterfactual of archived live AB rejects; V8 initial stop and deployed trailing defaults; no live mutations",
+    "entry_expiry_bars": 2,
+    "entry_offset_usd": 0.5,
+    "entry_slippage_bps": 0.0,
+    "execution_policy_id": "EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2",
+    "execution_symbol": "BTCUSDC",
+    "exit_slippage_bps": 1.0,
+    "experiment_id": "ab_rejected_2026-09-16_live_agg_v8_v1",
+    "fill_model_id": "LIMIT_THEN_MARKET_90S_GUARDED_V0_1",
+    "fixed_notional_usdc": 3000.0,
+    "initial_stop_policy": "volume_confirmed_swing",
+    "initial_swing_buffer_usd": 50.0,
+    "initial_swing_lr": 25,
+    "initial_swing_max_distance_usd": 1200.0,
+    "initial_swing_price_source": "extreme",
+    "initial_swing_require_full_window": true,
+    "live_entry_timeout_seconds": 90,
+    "min_notional": 5.0,
+    "min_qty": 1e-05,
+    "planb_abort_if_past_tp1": true,
+    "planb_max_dev_r_mult": 0.25,
+    "planb_max_dev_usd": 0.0,
+    "planb_price_proxy": "SECOND_NEXT_BAR_OPEN",
+    "planb_require_price": true,
+    "price_contour": "btcusdc_spot",
+    "qty_step": 1e-05,
+    "quality_policy_id": "EFFECTIVE_FEED_RECOVERY_QUALITY_V0_1",
+    "replay_feed_symbol": "BTCUSDC_SPOT_1M",
+    "same_bar_policy_id": "CONSERVATIVE_STOP_FIRST_V0_1",
+    "signal_feature_feed_symbol": "BTCUSDT_USDM_FUTURES_ENRICHED",
+    "signal_price_symbol": "BTCUSDT_REFERENCE",
+    "sl_limit_gap_ticks": 2,
+    "sl_pct": 0.002,
+    "slippage_model_id": "FIXED_BPS_ADVERSE",
+    "stop_slippage_bps": 2.0,
+    "swing_lookback_minutes": 1440,
+    "symbol": "BTCUSDC",
+    "tick_size": 0.01,
+    "tp_r_multipliers": [
+      1.0,
+      2.0
+    ],
+    "trail_confirm_buffer_usd": 20.0,
+    "trail_step_usd": 25.0,
+    "trail_swing_buffer_usd": 50.0,
+    "trail_swing_lookback": 240,
+    "trail_swing_lr": 25,
+    "usdt_usdc_ratio_max": 1.05,
+    "usdt_usdc_ratio_min": 0.95,
+    "utility_policy_id": "SCOUT_UTILITY_V0_1"
+  },
+  "run_fingerprint": "e559b31fb91907f79069eb8dc77e6171a0bba4608a4f87454eb94eadbf62367d",
+  "signal_feed_quality_counts": {
+    "REAL_ENRICHED": 6742
+  }
+}

@@ -1,0 +1,1218 @@
+{
+  "schema": "chop_coh_ab_counterfactual_v1",
+  "scope": {
+    "date_from": "2026-03-17",
+    "date_to": "2026-09-27"
+  },
+  "candidate_count": 29,
+  "decision_counts": {
+    "BLOCK": 9,
+    "KEEP": 19,
+    "UNKNOWN_KEEP": 1
+  },
+  "component_counts": {
+    "a_true": 7,
+    "b_true": 5,
+    "a_and_b_true": 3,
+    "b_unknown": 1
+  },
+  "kept_by_side": {
+    "LONG": 14,
+    "SHORT": 6
+  },
+  "blocked_by_side": {
+    "LONG": 6,
+    "SHORT": 3
+  },
+  "policy_path": "D:\\Project_V\\Executor\\backtests\\ab_counterfactual_2026-09-28_vwap_distance_v1\\source\\loss_avoidance_policy.py",
+  "policy_sha256": "1624d5cf5ec0107b7c557086423cbe5bca45b9a85b5ed7be0edbd44f99313d1e",
+  "candidate_csv_sha256": "31701acbe42a0095d06f411196982a7cbf46b1c7b9f0d8f7f65c0b08dcff3d00",
+  "source_snapshot_manifest_sha256": "ae10f2cb42cba317f23fba70612161de0d0489b75cb2b51623f0fd9b02ebaa0b",
+  "recovery_quality_sha256": "cf4e5f13d363d753f480e03f42c3da6a0de1f203aa115878d780cfa47c369fd6",
+  "results": [
+    {
+      "signal_ts_utc": "2026-04-09T15:34:00+00:00",
+      "source_ts_local": "2026-04-09 17:34:00",
+      "side": "LONG",
+      "imbalance": "0.514",
+      "chop30": "2.07",
+      "coh10": "0.288",
+      "failure_component": "COH",
+      "price_now": "71870.0",
+      "ema50_now": "71246.68472183916",
+      "vwap_now": "71140",
+      "source_file": "2026-04-09.jsonl",
+      "source_line": "28",
+      "candidate_exact_abs_delta": 53.19866999999999,
+      "same_side_peak_count_24h": 11,
+      "same_side_peak_percentile_24h": 81.81818181818181,
+      "component_a": false,
+      "oi_change_60m": 121.69000000000233,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.03188603237559615,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-04-21T14:42:00+00:00",
+      "source_ts_local": "2026-04-21 16:42:00",
+      "side": "LONG",
+      "imbalance": "0.513",
+      "chop30": "2.04",
+      "coh10": "0.223",
+      "failure_component": "COH",
+      "price_now": "76458.0",
+      "ema50_now": "76107.75662477619",
+      "vwap_now": "75999",
+      "source_file": "2026-04-21.jsonl",
+      "source_line": "28",
+      "candidate_exact_abs_delta": 37.727199999999996,
+      "same_side_peak_count_24h": 11,
+      "same_side_peak_percentile_24h": 45.45454545454545,
+      "component_a": true,
+      "oi_change_60m": 1885.0599999999977,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": -0.004013794796029525,
+      "component_b": false,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": false,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-04T10:07:00+00:00",
+      "source_ts_local": "2026-05-04 12:07:00",
+      "side": "SHORT",
+      "imbalance": "0.618",
+      "chop30": "1.37",
+      "coh10": "0.291",
+      "failure_component": "COH",
+      "price_now": "78902.0",
+      "ema50_now": "79703.38110197765",
+      "vwap_now": "79480",
+      "source_file": "2026-05-04.jsonl",
+      "source_line": "24",
+      "candidate_exact_abs_delta": 93.47909,
+      "same_side_peak_count_24h": 16,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": null,
+      "oi_trusted_60m": false,
+      "directional_delta_pct_240m": 0.13310136141472398,
+      "component_b": null,
+      "union": null,
+      "decision": "UNKNOWN_KEEP",
+      "reason_codes": "COMPONENT_B_UNKNOWN",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": null,
+        "union": null,
+        "decision": "UNKNOWN_KEEP",
+        "reason_codes": [
+          "COMPONENT_B_UNKNOWN"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "PRICE_VOLUME_OI_RECOVERED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-10T15:47:00+00:00",
+      "source_ts_local": "2026-05-10 17:47:00",
+      "side": "LONG",
+      "imbalance": "0.673",
+      "chop30": "1.83",
+      "coh10": "0.259",
+      "failure_component": "COH",
+      "price_now": "81324.0",
+      "ema50_now": "81035.22571146692",
+      "vwap_now": "80781",
+      "source_file": "2026-05-10.jsonl",
+      "source_line": "30",
+      "candidate_exact_abs_delta": 60.56112,
+      "same_side_peak_count_24h": 11,
+      "same_side_peak_percentile_24h": 81.81818181818181,
+      "component_a": false,
+      "oi_change_60m": -130.56999999999243,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.05149524860863729,
+      "component_b": true,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": true,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-12T15:24:00+00:00",
+      "source_ts_local": "2026-05-12 17:24:00",
+      "side": "SHORT",
+      "imbalance": "0.618",
+      "chop30": "3.38",
+      "coh10": "0.574",
+      "failure_component": "CHOP",
+      "price_now": "80355.0",
+      "ema50_now": "80579.8235908284",
+      "vwap_now": "81192",
+      "source_file": "2026-05-12.jsonl",
+      "source_line": "30",
+      "candidate_exact_abs_delta": 22.45669,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 22.22222222222222,
+      "component_a": true,
+      "oi_change_60m": 768.4100000000035,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.0012114574772125967,
+      "component_b": false,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": false,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-19T07:41:00+00:00",
+      "source_ts_local": "2026-05-19 09:41:00",
+      "side": "LONG",
+      "imbalance": "0.577",
+      "chop30": "3.66",
+      "coh10": "0.26",
+      "failure_component": "BOTH",
+      "price_now": "77185.0",
+      "ema50_now": "77122.59193487142",
+      "vwap_now": "76790",
+      "source_file": "2026-05-19.jsonl",
+      "source_line": "16",
+      "candidate_exact_abs_delta": 15.52935,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 25.0,
+      "component_a": true,
+      "oi_change_60m": 11.780000000013388,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.08513153939387283,
+      "component_b": false,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": false,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-20T03:10:00+00:00",
+      "source_ts_local": "2026-05-20 05:10:00",
+      "side": "SHORT",
+      "imbalance": "0.627",
+      "chop30": "4.97",
+      "coh10": "0.392",
+      "failure_component": "CHOP",
+      "price_now": "76625.0",
+      "ema50_now": "76680.94918411944",
+      "vwap_now": "76791",
+      "source_file": "2026-05-20.jsonl",
+      "source_line": "16",
+      "candidate_exact_abs_delta": 76.75907,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 88.88888888888889,
+      "component_a": false,
+      "oi_change_60m": -362.35999999998603,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.15876658352089412,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-29T17:13:00+00:00",
+      "source_ts_local": "2026-05-29 19:13:00",
+      "side": "LONG",
+      "imbalance": "0.626",
+      "chop30": "3.83",
+      "coh10": "0.438",
+      "failure_component": "CHOP",
+      "price_now": "74250.0",
+      "ema50_now": "73988.47702761757",
+      "vwap_now": "73553",
+      "source_file": "2026-05-29.jsonl",
+      "source_line": "30",
+      "candidate_exact_abs_delta": 123.80756,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": 661.25,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.004393537100418955,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-05-29T17:16:00+00:00",
+      "source_ts_local": "2026-05-29 19:16:00",
+      "side": "LONG",
+      "imbalance": "0.543",
+      "chop30": "3.51",
+      "coh10": "0.502",
+      "failure_component": "CHOP",
+      "price_now": "74188.0",
+      "ema50_now": "74016.06849418534",
+      "vwap_now": "73574",
+      "source_file": "2026-05-29.jsonl",
+      "source_line": "32",
+      "candidate_exact_abs_delta": 176.91441,
+      "same_side_peak_count_24h": 10,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": 770.0399999999936,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.0012961094675499373,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-06-08T10:01:00+00:00",
+      "source_ts_local": "2026-06-08 12:01:00",
+      "side": "LONG",
+      "imbalance": "0.535",
+      "chop30": "3.05",
+      "coh10": "0.471",
+      "failure_component": "CHOP",
+      "price_now": "63561.0",
+      "ema50_now": "63371.815943532994",
+      "vwap_now": "62668",
+      "source_file": "2026-06-08.jsonl",
+      "source_line": "20",
+      "candidate_exact_abs_delta": 72.4332,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 88.88888888888889,
+      "component_a": false,
+      "oi_change_60m": 33.220000000001164,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.058013057414518884,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-06-12T15:07:00+00:00",
+      "source_ts_local": "2026-06-12 17:07:00",
+      "side": "LONG",
+      "imbalance": "0.529",
+      "chop30": "2.61",
+      "coh10": "0.147",
+      "failure_component": "COH",
+      "price_now": "64101.0",
+      "ema50_now": "63735.17360894108",
+      "vwap_now": "63399",
+      "source_file": "2026-06-12.jsonl",
+      "source_line": "28",
+      "candidate_exact_abs_delta": 65.61208,
+      "same_side_peak_count_24h": 14,
+      "same_side_peak_percentile_24h": 92.85714285714286,
+      "component_a": false,
+      "oi_change_60m": 500.66999999999825,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.02748052966052864,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-06-17T03:16:00+00:00",
+      "source_ts_local": "2026-06-17 05:16:00",
+      "side": "SHORT",
+      "imbalance": "0.583",
+      "chop30": "3.26",
+      "coh10": "0.434",
+      "failure_component": "CHOP",
+      "price_now": "65740.0",
+      "ema50_now": "65868.47296268471",
+      "vwap_now": "66031",
+      "source_file": "2026-06-17.jsonl",
+      "source_line": "14",
+      "candidate_exact_abs_delta": 85.84045,
+      "same_side_peak_count_24h": 11,
+      "same_side_peak_percentile_24h": 90.9090909090909,
+      "component_a": false,
+      "oi_change_60m": 13.519999999989523,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.024255403849440322,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-06-26T13:25:00+00:00",
+      "source_ts_local": "2026-06-26 15:25:00",
+      "side": "SHORT",
+      "imbalance": "0.689",
+      "chop30": "3.86",
+      "coh10": "0.154",
+      "failure_component": "BOTH",
+      "price_now": "58867.0",
+      "ema50_now": "59172.46213456688",
+      "vwap_now": "59561",
+      "source_file": "2026-06-26.jsonl",
+      "source_line": "24",
+      "candidate_exact_abs_delta": 66.78666,
+      "same_side_peak_count_24h": 13,
+      "same_side_peak_percentile_24h": 61.53846153846154,
+      "component_a": false,
+      "oi_change_60m": -2129.6900000000023,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.0760665275003801,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-09T23:55:00+00:00",
+      "source_ts_local": "2026-07-10 01:55:00",
+      "side": "LONG",
+      "imbalance": "0.631",
+      "chop30": "3.27",
+      "coh10": "0.259",
+      "failure_component": "BOTH",
+      "price_now": "63319.0",
+      "ema50_now": "63245.197641638144",
+      "vwap_now": "62757",
+      "source_file": "2026-07-10.jsonl",
+      "source_line": "6",
+      "candidate_exact_abs_delta": 10.977150000000002,
+      "same_side_peak_count_24h": 11,
+      "same_side_peak_percentile_24h": 18.181818181818183,
+      "component_a": true,
+      "oi_change_60m": -213.44000000000233,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": -0.04345386417527079,
+      "component_b": true,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK|OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": true,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK",
+          "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-17T13:37:00+00:00",
+      "source_ts_local": "2026-07-17 15:37:00",
+      "side": "SHORT",
+      "imbalance": "0.587",
+      "chop30": "3.11",
+      "coh10": "0.444",
+      "failure_component": "CHOP",
+      "price_now": "62623.0",
+      "ema50_now": "62923.45996178701",
+      "vwap_now": "63553",
+      "source_file": "2026-07-17.jsonl",
+      "source_line": "24",
+      "candidate_exact_abs_delta": 50.585879999999996,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 50.0,
+      "component_a": true,
+      "oi_change_60m": -49.43000000000757,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.08976361363672701,
+      "component_b": false,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": false,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-20T06:34:00+00:00",
+      "source_ts_local": "2026-07-20 08:34:00",
+      "side": "SHORT",
+      "imbalance": "0.629",
+      "chop30": "3.39",
+      "coh10": "0.422",
+      "failure_component": "CHOP",
+      "price_now": "63996.0",
+      "ema50_now": "64169.126055588706",
+      "vwap_now": "64578",
+      "source_file": "2026-07-20.jsonl",
+      "source_line": "18",
+      "candidate_exact_abs_delta": 82.26525,
+      "same_side_peak_count_24h": 12,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": 115.88999999999942,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.0660824117962476,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-22T00:26:00+00:00",
+      "source_ts_local": "2026-07-22 02:26:00",
+      "side": "LONG",
+      "imbalance": "0.568",
+      "chop30": "3.96",
+      "coh10": "0.247",
+      "failure_component": "BOTH",
+      "price_now": "66663.0",
+      "ema50_now": "66562.8678728162",
+      "vwap_now": "66212",
+      "source_file": "2026-07-22.jsonl",
+      "source_line": "6",
+      "candidate_exact_abs_delta": 73.97772,
+      "same_side_peak_count_24h": 7,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": -526.6300000000047,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.10265632761594388,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-22T00:46:00+00:00",
+      "source_ts_local": "2026-07-22 02:46:00",
+      "side": "LONG",
+      "imbalance": "0.641",
+      "chop30": "4.66",
+      "coh10": "0.476",
+      "failure_component": "CHOP",
+      "price_now": "66722.0",
+      "ema50_now": "66630.97911478736",
+      "vwap_now": "66227",
+      "source_file": "2026-07-22.jsonl",
+      "source_line": "8",
+      "candidate_exact_abs_delta": 87.82224,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": -484.429999999993,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.09193119537824186,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-07-27T13:38:00+00:00",
+      "source_ts_local": "2026-07-27 15:38:00",
+      "side": "LONG",
+      "imbalance": "0.679",
+      "chop30": "2.29",
+      "coh10": "0.202",
+      "failure_component": "COH",
+      "price_now": "65352.0",
+      "ema50_now": "65055.48326687662",
+      "vwap_now": "65149",
+      "source_file": "2026-07-27.jsonl",
+      "source_line": "36",
+      "candidate_exact_abs_delta": 45.88353000000001,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 66.66666666666667,
+      "component_a": false,
+      "oi_change_60m": 181.42999999999302,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.028466364810548934,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-12T09:26:00+00:00",
+      "source_ts_local": "2026-08-12 11:26:00",
+      "side": "LONG",
+      "imbalance": "0.597",
+      "chop30": "1.78",
+      "coh10": "0.249",
+      "failure_component": "COH",
+      "price_now": "63964.0",
+      "ema50_now": "63851.666737073094",
+      "vwap_now": "63847",
+      "source_file": "2026-08-12.jsonl",
+      "source_line": "20",
+      "candidate_exact_abs_delta": 26.11833,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 37.5,
+      "component_a": true,
+      "oi_change_60m": -275.22000000000116,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.04014681168706247,
+      "component_b": true,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK|OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": true,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK",
+          "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-19T13:31:00+00:00",
+      "source_ts_local": "2026-08-19 15:31:00",
+      "side": "LONG",
+      "imbalance": "0.57",
+      "chop30": "2.24",
+      "coh10": "0.278",
+      "failure_component": "COH",
+      "price_now": "65080.0",
+      "ema50_now": "64880.03751714834",
+      "vwap_now": "64548",
+      "source_file": "2026-08-19.jsonl",
+      "source_line": "30",
+      "candidate_exact_abs_delta": 60.28817000000001,
+      "same_side_peak_count_24h": 14,
+      "same_side_peak_percentile_24h": 64.28571428571429,
+      "component_a": false,
+      "oi_change_60m": 758.4399999999878,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.051480937263911536,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-22T23:12:00+00:00",
+      "source_ts_local": "2026-08-23 01:12:00",
+      "side": "SHORT",
+      "imbalance": "0.642",
+      "chop30": "4.71",
+      "coh10": "0.47",
+      "failure_component": "CHOP",
+      "price_now": "76994.0",
+      "ema50_now": "77040.12836179111",
+      "vwap_now": "77487",
+      "source_file": "2026-08-23.jsonl",
+      "source_line": "14",
+      "candidate_exact_abs_delta": 44.03317,
+      "same_side_peak_count_24h": 10,
+      "same_side_peak_percentile_24h": 70.0,
+      "component_a": false,
+      "oi_change_60m": -119.47999999999593,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.05211511714412015,
+      "component_b": true,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": true,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-24T10:34:00+00:00",
+      "source_ts_local": "2026-08-24 12:34:00",
+      "side": "LONG",
+      "imbalance": "0.653",
+      "chop30": "3.05",
+      "coh10": "0.354",
+      "failure_component": "CHOP",
+      "price_now": "77926.0",
+      "ema50_now": "77729.16112566498",
+      "vwap_now": "77301",
+      "source_file": "2026-08-24.jsonl",
+      "source_line": "22",
+      "candidate_exact_abs_delta": 39.06095,
+      "same_side_peak_count_24h": 14,
+      "same_side_peak_percentile_24h": 71.42857142857143,
+      "component_a": false,
+      "oi_change_60m": 320.4600000000064,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.06822448114469037,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-27T00:44:00+00:00",
+      "source_ts_local": "2026-08-27 02:44:00",
+      "side": "LONG",
+      "imbalance": "0.683",
+      "chop30": "4.6",
+      "coh10": "0.429",
+      "failure_component": "CHOP",
+      "price_now": "78892.0",
+      "ema50_now": "78872.0827072041",
+      "vwap_now": "78577",
+      "source_file": "2026-08-27.jsonl",
+      "source_line": "8",
+      "candidate_exact_abs_delta": 61.59683,
+      "same_side_peak_count_24h": 7,
+      "same_side_peak_percentile_24h": 85.71428571428571,
+      "component_a": false,
+      "oi_change_60m": -90.13999999999942,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.09980134192295788,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-08-30T12:12:00+00:00",
+      "source_ts_local": "2026-08-30 14:12:00",
+      "side": "LONG",
+      "imbalance": "0.516",
+      "chop30": "1.53",
+      "coh10": "0.209",
+      "failure_component": "COH",
+      "price_now": "78665.0",
+      "ema50_now": "78262.57889166837",
+      "vwap_now": "78049",
+      "source_file": "2026-08-30.jsonl",
+      "source_line": "30",
+      "candidate_exact_abs_delta": 21.028350000000003,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 75.0,
+      "component_a": false,
+      "oi_change_60m": -1002.6100000000006,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.10028861527164094,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-09-07T14:43:00+00:00",
+      "source_ts_local": "2026-09-07 16:43:00",
+      "side": "SHORT",
+      "imbalance": "0.607",
+      "chop30": "3.46",
+      "coh10": "0.268",
+      "failure_component": "BOTH",
+      "price_now": "79028.0",
+      "ema50_now": "79161.05399274405",
+      "vwap_now": "79712",
+      "source_file": "2026-09-07.jsonl",
+      "source_line": "32",
+      "candidate_exact_abs_delta": 32.22848,
+      "same_side_peak_count_24h": 8,
+      "same_side_peak_percentile_24h": 62.5,
+      "component_a": false,
+      "oi_change_60m": 895.5900000000111,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.12685954032398697,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-09-09T12:17:00+00:00",
+      "source_ts_local": "2026-09-09 14:17:00",
+      "side": "LONG",
+      "imbalance": "0.583",
+      "chop30": "2.23",
+      "coh10": "0.172",
+      "failure_component": "COH",
+      "price_now": "79420.0",
+      "ema50_now": "79244.10365701425",
+      "vwap_now": "78686",
+      "source_file": "2026-09-09.jsonl",
+      "source_line": "24",
+      "candidate_exact_abs_delta": 39.021969999999996,
+      "same_side_peak_count_24h": 6,
+      "same_side_peak_percentile_24h": 33.333333333333336,
+      "component_a": true,
+      "oi_change_60m": -282.52999999999884,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": -0.03399242115310184,
+      "component_b": true,
+      "union": true,
+      "decision": "BLOCK",
+      "reason_codes": "WEAK_SAME_SIDE_PEAK|OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": true,
+        "component_b": true,
+        "union": true,
+        "decision": "BLOCK",
+        "reason_codes": [
+          "WEAK_SAME_SIDE_PEAK",
+          "OI_DOWN_60M_AND_WEAK_DIRECTIONAL_FLOW_240M"
+        ]
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-09-11T12:48:00+00:00",
+      "source_ts_local": "2026-09-11 14:48:00",
+      "side": "LONG",
+      "imbalance": "0.581",
+      "chop30": "2.0",
+      "coh10": "0.191",
+      "failure_component": "COH",
+      "price_now": "77981.0",
+      "ema50_now": "77195.1835914828",
+      "vwap_now": "77090",
+      "source_file": "2026-09-11.jsonl",
+      "source_line": "38",
+      "candidate_exact_abs_delta": 90.81388,
+      "same_side_peak_count_24h": 14,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": 268.8399999999965,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.009070606768473414,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    },
+    {
+      "signal_ts_utc": "2026-09-16T18:07:00+00:00",
+      "source_ts_local": "2026-09-16 20:07:00",
+      "side": "LONG",
+      "imbalance": "0.548",
+      "chop30": "2.4",
+      "coh10": "0.225",
+      "failure_component": "COH",
+      "price_now": "76250.0",
+      "ema50_now": "75651.38610606173",
+      "vwap_now": "75886",
+      "source_file": "2026-09-16.jsonl",
+      "source_line": "37",
+      "candidate_exact_abs_delta": 105.17836,
+      "same_side_peak_count_24h": 9,
+      "same_side_peak_percentile_24h": 100.0,
+      "component_a": false,
+      "oi_change_60m": 372.84999999999127,
+      "oi_trusted_60m": true,
+      "directional_delta_pct_240m": 0.021246850079058712,
+      "component_b": false,
+      "union": false,
+      "decision": "KEEP",
+      "reason_codes": "",
+      "ab_policy": {
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "component_a": false,
+        "component_b": false,
+        "union": false,
+        "decision": "KEEP",
+        "reason_codes": []
+      },
+      "component_b_quality": {
+        "missing_240m_rows": [],
+        "synthetic_240m_rows": [],
+        "oi_quality_classes_60m": {
+          "REAL_ENRICHED": 60
+        }
+      }
+    }
+  ],
+  "interpretation": "Offline cutoff-safe A/B evaluation for candidates rejected before live A/B. BLOCK is excluded by the union; KEEP and UNKNOWN_KEEP preserve live fail-open behavior."
+}

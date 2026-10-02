@@ -1,0 +1,5 @@
+imbalance_bin,post_ab_candidates,independent_fills,positive_net_fills,plain_sl,no_fill,independent_net_pnl_usdc
+0.45_to_lt_0.48,1,1,0,1,0,-12.260901897267289
+0.48_to_lt_0.50,6,5,3,2,1,73.66962481117012
+0.50_to_lt_0.52,3,2,2,0,1,56.11673449782943
+0.52_to_lt_0.54,3,3,2,1,0,80.1477804649745

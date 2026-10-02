@@ -1,0 +1,4219 @@
+{
+  "candidate_contract_version": "SCOUT_CANDIDATE_V0_1",
+  "candidate_count": 96,
+  "candidate_groups": [
+    "VWAP_DISTANCE_REJECT"
+  ],
+  "candidate_quality_count": 0,
+  "candidate_selection": {
+    "comparison_setup_variants": [],
+    "loss_filter_policy": "NONE",
+    "vwap_distance_min_usd": 1200.0
+  },
+  "code_fingerprint": "8fe15a2872bc88927d968dd403429828565ab56c36084f5fa7f813431a0b8353",
+  "date_range": {
+    "candidate_from": "2026-03-16",
+    "candidate_to": "2026-09-18",
+    "execution_feed_from": "2026-03-19",
+    "execution_feed_to": "2026-09-18",
+    "signal_feed_from": "2026-03-16",
+    "signal_feed_to": "2026-09-18"
+  },
+  "description": "Single-position isolated distance cohort; today_flat separately assumes flat at start of day; V8 guarded Plan B deployed trail; no live changes",
+  "exclusions": {
+    "duplicates": 0,
+    "invalid_candidates": 0,
+    "operator_test_parity_rows": 0
+  },
+  "execution_feed_quality_counts": {
+    "BINANCE_SPOT_OFFICIAL": 264544
+  },
+  "experiment_id": "vwap_distance_single_position_gt1200_20260918_v1",
+  "feed_contract_version": "SCOUT_FEED_V0_2_COMPLETED_MINUTE",
+  "generated_at_utc": "2026-09-18T17:06:02.427475+00:00",
+  "git": {
+    "commit": "254f55c2376466dde6ff0cb0610750db5c1cce40",
+    "dirty": true
+  },
+  "input_files": [
+    {
+      "data_row_count": 41,
+      "line_count": 41,
+      "path": "server_journals\\2026-09-18\\trade_outcomes.jsonl",
+      "sha256": "3ae98e22e26ae5a5f0784fa00996aca593e21f11df372a7d8fbc8aa7c695c130",
+      "size": 30792
+    },
+    {
+      "data_row_count": 15,
+      "line_count": 15,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-16.jsonl",
+      "sha256": "a7481ccf88ce9e8b9c702af08123966c23aa19eda463e2f8e6a3674e4c24120d",
+      "size": 3159
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-17.jsonl",
+      "sha256": "3119d807379a83483af195171dad317e6d7caade1dbab6b5e74cc14ee9e58fcf",
+      "size": 6800
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-18.jsonl",
+      "sha256": "e379ab2e4506db321f11d26ff224bebc0f1c5c5cfafc91e5252403da04e76e17",
+      "size": 6809
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-19.jsonl",
+      "sha256": "84d674a8f3e9d63d38a4e09f652945f5f590e73afc479777ea2c02f0293c06b8",
+      "size": 8454
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-20.jsonl",
+      "sha256": "98f4f8008034497f0b5c58d5f151ecdb534d2f7cf3f3f68d7e38877c13b439e0",
+      "size": 6177
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-21.jsonl",
+      "sha256": "027bcf7c05893b43a042baab5748cab0d3726c1c7d6b87e2b2dac3cc015a12ca",
+      "size": 8584
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-22.jsonl",
+      "sha256": "b2f92b7665d0fb9342741554cb8958fdfdbfd3b6eefe94269fc9dfbb167b552a",
+      "size": 6556
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-23.jsonl",
+      "sha256": "1b6151254ec53bf401d7e2e96d9dc18af640eb3b2cf31bed5fe7a2da0825b7d0",
+      "size": 7294
+    },
+    {
+      "data_row_count": 50,
+      "line_count": 50,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-24.jsonl",
+      "sha256": "51611b4b3beb5951037b04f6f93a68de093257ec11b2f8a45ee99deb2852a1e7",
+      "size": 10748
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-25.jsonl",
+      "sha256": "add4651580614eb2ed96472ad1133230d85697d665f04dfa20899532395ba54e",
+      "size": 8709
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 26,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-26.jsonl",
+      "sha256": "c28aa91f4f234cad880ad6e0874f0e0809605956ba6934e60dba64acb92ae34a",
+      "size": 5693
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-27.jsonl",
+      "sha256": "edadb9bafe2a4f0090889f61f32bef470c7e4a11efb11533320b08480d763732",
+      "size": 7247
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-28.jsonl",
+      "sha256": "61df7cc95efe822618b9da85d3b736910921cb0a84604e3beffa93bbf1b70ad9",
+      "size": 6476
+    },
+    {
+      "data_row_count": 48,
+      "line_count": 48,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-29.jsonl",
+      "sha256": "3719202d717d290d04ddc1f5ea5f2b791e9b3b913655ed6a03b87924269eee7c",
+      "size": 10490
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-30.jsonl",
+      "sha256": "ebb0671316dbf7cccedafaf6a2bb4895717ab0892326c467b5b037c8935ae03e",
+      "size": 9427
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-03-31.jsonl",
+      "sha256": "d46059c303649e3254634919e12fe92f0a6ed45481c7324e7fe0acf7000c0702",
+      "size": 9106
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-01.jsonl",
+      "sha256": "7477e7d249762116b131d7544be995428c16b056dc3557f078ab776d1c050823",
+      "size": 6461
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-02.jsonl",
+      "sha256": "419d0da4f5c9d1faa5919e0bc7d0993fd210ccf3638c48b082f388d534fb43a4",
+      "size": 7599
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-03.jsonl",
+      "sha256": "5dede6e959f45c92c392d77546020d1cafefc2c8eca3a433f07bbd739c1774f4",
+      "size": 9394
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-04.jsonl",
+      "sha256": "4ed5dd38c793dcff4bae72cead5e70c15fd663754c49149bf1730bc6afd68c85",
+      "size": 6698
+    },
+    {
+      "data_row_count": 52,
+      "line_count": 52,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-05.jsonl",
+      "sha256": "f65754b2e85dea1406a455662bf7a35c11be8fd85dfa6360986959c4f2ccee13",
+      "size": 11716
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-06.jsonl",
+      "sha256": "e05e8a8019e36a3035ec2a3f5b031854a4f14786fec195ab6c0f8d8ce6e54919",
+      "size": 7962
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-07.jsonl",
+      "sha256": "0e895843d3ab42071f14b7452289bbb8f075e68e567e906232d2671ef75d700e",
+      "size": 9018
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-08.jsonl",
+      "sha256": "ba2fb66f7da81214e32b40fa47376210996914294f5272bb42dd200d588aa9c3",
+      "size": 7976
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-09.jsonl",
+      "sha256": "a922876f197a241088640e26da7eb9d0e7a9d5cd4a561c1b59eed6ff474e4234",
+      "size": 8334
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-10.jsonl",
+      "sha256": "92cdf4c64413f103c93ba2d947c17fe1a455b0be4d5627cf630a8c810cf7e92d",
+      "size": 7399
+    },
+    {
+      "data_row_count": 50,
+      "line_count": 50,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-11.jsonl",
+      "sha256": "fe21e6aef658e3314473e2354ad2f88e4f69f02c552f6cebf8d14749638e6147",
+      "size": 10752
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-12.jsonl",
+      "sha256": "f4082e0dd15f1abfa3ae675895cabb483264d797584daee8c3fa5744437dddcb",
+      "size": 6881
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-13.jsonl",
+      "sha256": "a06abe271403892822f4d6fb68b5abfe57ac2efcc5e90ebcfefddad6fe89d26e",
+      "size": 8323
+    },
+    {
+      "data_row_count": 50,
+      "line_count": 50,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-14.jsonl",
+      "sha256": "c83969dc3bbcdbf2c4e6945a66269d5a4ab9062ea174b6a6cc887bb67b99b193",
+      "size": 10625
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-15.jsonl",
+      "sha256": "5ea46a67ca074214c366cafa523301fa55d0f7c2278cff686a60f14dc72b331a",
+      "size": 9752
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-16.jsonl",
+      "sha256": "9eafd7fcabfcf0e8c4b6e1e3c54924df51e35eed3209cd914a1b2224a055c175",
+      "size": 9909
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-17.jsonl",
+      "sha256": "9ed95136141a2d61bedfca1a5980bab61dbc6c6c20d34ad11e72305ec23fe405",
+      "size": 7879
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-18.jsonl",
+      "sha256": "a6cd3558e4a493b5a27f73ee0c9601c551f8ed43b38b94f132cb774cee1c58d8",
+      "size": 7624
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-19.jsonl",
+      "sha256": "afd5a04eee40ded7f917619602e1138b24ec9c7fae45cbdb3e62f1b781a86a3f",
+      "size": 9642
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-20.jsonl",
+      "sha256": "c069fff319684b35e76cc3ce23be9c148a49aa2f91354801c9523a54bd147983",
+      "size": 8194
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-21.jsonl",
+      "sha256": "b5f6f1b25e7e2546c2c378ab3ee6d1206d1729125c3f0e3707d7fc5c5530db1a",
+      "size": 7552
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-22.jsonl",
+      "sha256": "5e44ed2fedaef24a36e745e49e2f4354117a699e315079ef7b76e4923f329544",
+      "size": 6201
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-23.jsonl",
+      "sha256": "1b76abfa5edfda151a2b6be060d1610e0fbd2843f97cc9c31ec77bc2c9b25560",
+      "size": 8050
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-24.jsonl",
+      "sha256": "7788d3adace955f114713cf7f209027ab11aef1f7bb34fcbd0e3ad26006a2ef1",
+      "size": 7822
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-25.jsonl",
+      "sha256": "92805487d9b7c1b5f78f65cdfd6f91ed7a964855867853920a0bc5f6af9538a5",
+      "size": 6984
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-26.jsonl",
+      "sha256": "628930f027780e6cbf9d9ce00b18299bc676d76fc0c4ec2454624327ef24f552",
+      "size": 7931
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-27.jsonl",
+      "sha256": "72d15ee9ddf07fc4a8d61d7c8595423483e3d5dfafc1af02b2ece34a48108bf2",
+      "size": 8206
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-28.jsonl",
+      "sha256": "e30f880ab67eea91d7bc17223b4d2bf857c41b65d5b4077de6e5beed3cd30642",
+      "size": 8953
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-29.jsonl",
+      "sha256": "0595b6520b1e1240cee36536dc5f7b64f563bec882b5432c833569cdffec33bf",
+      "size": 7714
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-04-30.jsonl",
+      "sha256": "9d340b3ea4f4485ca073ac962d05f4de703f0e99360353fd08b7fa9bca25aadc",
+      "size": 6234
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-01.jsonl",
+      "sha256": "f78de3efd0818b62f1a7e270f8b7b849290a6d0904e5234c42709132d7fd6f2e",
+      "size": 6834
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-02.jsonl",
+      "sha256": "2065005d2fd50ed98dd6526c546e4ae55e4de0264a3c42d9f0ea63fa5e411483",
+      "size": 6468
+    },
+    {
+      "data_row_count": 48,
+      "line_count": 48,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-03.jsonl",
+      "sha256": "49d3315a15258694e4d601f5a37e5308d9644b2b0f65fbcd35fbea3c1739f517",
+      "size": 10511
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-04.jsonl",
+      "sha256": "fffbaef3d5c5990a9123a25f5c96162033772f997eef554c07ca57666668a44e",
+      "size": 9271
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-05.jsonl",
+      "sha256": "b8555c2e8447fd46cf017df53a79edafa0abfe3ec8a4de583a94fb1be0d07929",
+      "size": 8018
+    },
+    {
+      "data_row_count": 24,
+      "line_count": 24,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-06.jsonl",
+      "sha256": "884ce391a9cf7f279d7c0568e052599560273acf2ea1d86e22d970bc07e77ef2",
+      "size": 5265
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-07.jsonl",
+      "sha256": "f044429fa33e0de03e318dfd02580e0c3c92382c40e9706471ec08f4a5cef345",
+      "size": 5975
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-08.jsonl",
+      "sha256": "589ea100ed056728307e825c7cf2a3393ad3d7bc52c008932a1d8ec4401ff568",
+      "size": 6414
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-09.jsonl",
+      "sha256": "d99df06b37164bf89b807da9bc452b481b80523fed8c46b9736fb68c7b3452d0",
+      "size": 6834
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-10.jsonl",
+      "sha256": "c12baf0bf20e6754880c642e64ca68b1e48e07454323e430af4236f77b835a1d",
+      "size": 8035
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-11.jsonl",
+      "sha256": "b5bf6765934e078e09cbdbb1d2fd5f656df60f436b40f08837eb18169496e043",
+      "size": 6630
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-12.jsonl",
+      "sha256": "c7534378dfe27a1174548b8bba3cef5bcd92c0eb51b8827c4c63a0bafac8ac41",
+      "size": 7968
+    },
+    {
+      "data_row_count": 50,
+      "line_count": 50,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-13.jsonl",
+      "sha256": "e40cd907d3af77eb2fd4839a0d5b7bc7ec03961fcab2cfb4c3c5456c5c9c06c3",
+      "size": 10839
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-14.jsonl",
+      "sha256": "9006e036ff1c96a1ae866a734c0fb7f8018b10d7d229571d6d08db068e3d62f0",
+      "size": 9102
+    },
+    {
+      "data_row_count": 56,
+      "line_count": 56,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-15.jsonl",
+      "sha256": "128ee044add15427411a16d976ef63d4dd0c7b06280c41a612fd7949e39a1504",
+      "size": 12382
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-16.jsonl",
+      "sha256": "467e5f214508d76302db404d5b119673ce09675acbec5bdb2cde3cd099db1661",
+      "size": 7162
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-17.jsonl",
+      "sha256": "7fec9b334f312959a4606adeb2ae6b0ff85ba2dff5bbe51cab67b011c88fbfea",
+      "size": 8359
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-18.jsonl",
+      "sha256": "430b286b894a7d3a6d7ee2306473022dacf7907d311df1cedaaadc9176756cce",
+      "size": 6646
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-19.jsonl",
+      "sha256": "da258c7be43e25a6ea772a0237d750e2cfc377dba46d43b50a6c8a8b1dd1c1e8",
+      "size": 6648
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-20.jsonl",
+      "sha256": "f5ba7693ea58bf5b2952916aeb3db41deeb7f1dac8c704d0b7be6d5c6615cf49",
+      "size": 7247
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-21.jsonl",
+      "sha256": "cf70f77bb1f15be9eb8ab212e4f963e9c05a6620cfc459ba9da37a2945d508da",
+      "size": 8245
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-22.jsonl",
+      "sha256": "bd34298f8d1b76a037227b11b9fd4ff60dd1750a3261833ea96ea26c128a79ac",
+      "size": 7838
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-23.jsonl",
+      "sha256": "11d4fef678cb8c9ce2d9269c69dd81a3f8398c5e030cfdec9463bf76ccaf2439",
+      "size": 6770
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-24.jsonl",
+      "sha256": "3160a5a7b0b1fe7d4a14e7031e82e622a167dc87f4dd193d8a4176124d7c438f",
+      "size": 8477
+    },
+    {
+      "data_row_count": 24,
+      "line_count": 24,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-25.jsonl",
+      "sha256": "151d0da752eedef61017a3506da5fdc50d9eded8af2a04d41d51634bf93f0c1d",
+      "size": 5254
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-26.jsonl",
+      "sha256": "a770aad0926df19c2337f424189faff2ff574f918b082b871f19aa4b9e1497bf",
+      "size": 9529
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-27.jsonl",
+      "sha256": "086939bbca1bb8ce42afb4d55c0ac226340e3e7af19e27d49d2cfe4c6397e2ec",
+      "size": 9142
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-28.jsonl",
+      "sha256": "f74a4849ceb54b0742075a1f540c92bdcbe7031abe1ac66020e2a74955923647",
+      "size": 8447
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-29.jsonl",
+      "sha256": "7d5e11559fd820b141519960ae000a1e6c1bd1a0643b99656f5e429ad3346422",
+      "size": 10564
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-30.jsonl",
+      "sha256": "31dbfb036171b32ce2ad2cdf61aabb5170cdd2c0a4d0c3fc1acd8f6775674cfa",
+      "size": 6719
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-05-31.jsonl",
+      "sha256": "b05eb0b64205f89d760ab57851f7b6950b8168adbf288fe755d42a4eae4681df",
+      "size": 7263
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 26,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-01.jsonl",
+      "sha256": "a0fd24f337851899f1a88dd457c24f7a75772d6db934286b628544d0f4cbf93c",
+      "size": 5861
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-02.jsonl",
+      "sha256": "f8a232d1427dbe949b7b4fcb8895e2321881e0c5e3090c01833d7c2cf7184e48",
+      "size": 9770
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-03.jsonl",
+      "sha256": "31829cf56407c804860b540f58ff7cd5e03005ec4b27a0c928d53d8ddd696aff",
+      "size": 9399
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-04.jsonl",
+      "sha256": "1ae600334fa30016993cae68b690d005c8ff25c71e9a1816df07fbe6ad3ac133",
+      "size": 7748
+    },
+    {
+      "data_row_count": 50,
+      "line_count": 50,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-05.jsonl",
+      "sha256": "f642ad7a92d7fc7745f1f4d5c1c06a7dce581e1a4098420a0e12a47cbb059cc1",
+      "size": 11036
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-06.jsonl",
+      "sha256": "8f191d48eb893c4f21b3e48e184ef91373b1deebf7500724a5b0c7bf5887be9b",
+      "size": 7893
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-07.jsonl",
+      "sha256": "553d4242d5841f9a4157295e1cb9472bcad4128a7a3e1d1ade7c9ca9584a5671",
+      "size": 7105
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-08.jsonl",
+      "sha256": "d8846be840c06c912b68779fedfc715e43850aa51fa9aa26c4b5f00d321f459c",
+      "size": 6947
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-09.jsonl",
+      "sha256": "6c570e3f7c72e279671ea5cf2e9d09711e8dd69516c07445ae467fe30aa778ad",
+      "size": 9295
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-10.jsonl",
+      "sha256": "8bdac3a114109de29485f78db46b4bc5421766f3842ccaa619b14fd02260e7f7",
+      "size": 8784
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-11.jsonl",
+      "sha256": "665e319759482873ea0816fc55d3f3e36ec860debc7abdc3b4ecddd7b649f7e7",
+      "size": 8894
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-12.jsonl",
+      "sha256": "5f351a2fdb08317ba625d52dfd5ac26b52716ac780296951a3facb8f009b22a1",
+      "size": 7405
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-13.jsonl",
+      "sha256": "ca78e6ff736e3a7dce2da19a0be8205d2654f01251cbe3655a9dc1254d0819cf",
+      "size": 8228
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-14.jsonl",
+      "sha256": "2273222693ce69b9ad9da097ea55381372bbdd56b2eb7a50a7c1e928e81a8462",
+      "size": 8459
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-15.jsonl",
+      "sha256": "f9fd938076f08b7df8912ecdac07d1b7fcbb4be97a376dacac66341d33e802d8",
+      "size": 6406
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-16.jsonl",
+      "sha256": "8b43c33738dd8eb9178b607875837ec6284a23a62c6333658eaf7d80962c29ba",
+      "size": 7419
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-17.jsonl",
+      "sha256": "3785554d8cde7e2e6dece35fdb7a7d744e49eaa822d3d966162dccc0eca361ae",
+      "size": 9691
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-18.jsonl",
+      "sha256": "ae6f2f69dc7b2f40c27f58ac4e71908dfeed1e35acd6b976a6aa589610b7d2ff",
+      "size": 7363
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-19.jsonl",
+      "sha256": "368d316bc73c8abc6b07b85326c8136686488aeac4a26a84b698fef8c66c5422",
+      "size": 7650
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-20.jsonl",
+      "sha256": "90740097f1359d0be53fbcf76cbf8476f4167ae3848506a4720d4abe11140bc5",
+      "size": 6418
+    },
+    {
+      "data_row_count": 48,
+      "line_count": 48,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-21.jsonl",
+      "sha256": "176cbcaac10253f9f8f81b042a82a07966e80b56df999e92a3a5344d2206e2b4",
+      "size": 10641
+    },
+    {
+      "data_row_count": 24,
+      "line_count": 24,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-22.jsonl",
+      "sha256": "dbfefca515df8b111523510cad773dddbb1e29ecbd47a415e6565eed87889168",
+      "size": 5270
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-23.jsonl",
+      "sha256": "2747f7eae7eeee9176a57a6e0d08de79b69deeb782b4174a7994b0b93943a1d1",
+      "size": 8693
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-24.jsonl",
+      "sha256": "20305fcd9c81f9159421026b93a26de7987401fc24c8c5067f403134f9dbcbb8",
+      "size": 10336
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-25.jsonl",
+      "sha256": "230c385b13e7831c6536c32a22b1330edb256fe2b8a53b3f361119e3fbed0ab6",
+      "size": 8681
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-26.jsonl",
+      "sha256": "91a42ab611c873e4e31e9065efc8a4acbe4b007d8f2885fdac5f7394ff185b13",
+      "size": 9013
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-27.jsonl",
+      "sha256": "db92733b6e571487b4e3762d34e5df43668d00791ca8c1c981ac258078f3ab60",
+      "size": 9238
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-28.jsonl",
+      "sha256": "c1660e0974d150b37d214ec71adddacbd880554737f783d00804902aec2a0811",
+      "size": 6018
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-29.jsonl",
+      "sha256": "78c529d41516ba236f73ac079bddf22d5050a9bad7717d44e3c0eed44f0ef58e",
+      "size": 7566
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-06-30.jsonl",
+      "sha256": "4e8f3ee9cccb1d5aad8da0dc749b06b71ff86f39a5f0f68ed08fa9b277d7c898",
+      "size": 7643
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-01.jsonl",
+      "sha256": "414ab69ea5bf15a033a0858f6f3e0c4de0a0ff3d10711f2986b6c3a50bcc1a26",
+      "size": 7840
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-02.jsonl",
+      "sha256": "65f11581ef6f87aeb1f4262714a9e771341f3a315721b9ada53fbda5ddde09b3",
+      "size": 9289
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-03.jsonl",
+      "sha256": "32977cafddf80b1d2ac3c24410e38bf1daa303faaa34d107fad24e86be32d4e7",
+      "size": 6608
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-04.jsonl",
+      "sha256": "31135f7191f7def0fefa3a0fbc1f31b1df8e30175a14fff28f59395e978bc7a3",
+      "size": 7026
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-05.jsonl",
+      "sha256": "b41af45a08c61ad333203022f1aed17b8ba3316403cce464e32e1da34b03212b",
+      "size": 9374
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-06.jsonl",
+      "sha256": "905befbfd7f174ae002964795a7b214c75b0af43774eb6ecd60e47e0df7a0e45",
+      "size": 9164
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-07.jsonl",
+      "sha256": "31e988dfc4569ae80b115bf9ea23d63e993e869a18c9ec22c95bb992de3c4335",
+      "size": 7852
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-08.jsonl",
+      "sha256": "5afa873128c2dc4a256219f1e2ca0dfaf48479a900274100d76d2fa989fa6ae9",
+      "size": 9193
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-09.jsonl",
+      "sha256": "a73adb31d72e0b1d632afe456e8df1d30a6091be6b72fee21928e5307b8e4a32",
+      "size": 6314
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-10.jsonl",
+      "sha256": "0f478ac2400d8e3b129f1b25be59f2f19ab06d5051eb2167ad35bf1d57e7e410",
+      "size": 8280
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-11.jsonl",
+      "sha256": "608c2d889bd53564d0d5e0e2f1c36ecdd18dd2d88d65083a23d565a52c28b42a",
+      "size": 7140
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-12.jsonl",
+      "sha256": "da0750d61c5d971669c0e9e9832244f6b2c95f0de387784d3a9a3ce963abf06c",
+      "size": 9272
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-13.jsonl",
+      "sha256": "c8584893014d1b56e63e263aa8798f04e3819c4a80c4b5ee1e0abdac42d307d9",
+      "size": 7453
+    },
+    {
+      "data_row_count": 54,
+      "line_count": 54,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-14.jsonl",
+      "sha256": "ca017c8f4bc35f3c79d9e78b94af82aa4d2be1b666455dda4a393a89b7a93537",
+      "size": 12067
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-15.jsonl",
+      "sha256": "61b429a322a4f59fb47b6edb66442e436ef0687f1209a822ee9f385aec07d5f9",
+      "size": 7285
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-16.jsonl",
+      "sha256": "1f5fa6afb4856ce753adee54624f85f2725f3de2dc56b1c647884ef3edb8d16a",
+      "size": 8227
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-17.jsonl",
+      "sha256": "b56ab843fb7f9e206a7727d9f82cb53f53d55d83f02dd85340b57e89aeb0ebc9",
+      "size": 6097
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-18.jsonl",
+      "sha256": "804af392ab3bfd3db0736d1ed4d4d4a5f4cc1d39b0e6501b37be761f93809b66",
+      "size": 9678
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-19.jsonl",
+      "sha256": "67909969ed34148c0a018621a5540b0290da5648fc7590b7fba3d11a2bcc180b",
+      "size": 7807
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-20.jsonl",
+      "sha256": "92851ead6cf77a8933d36723ffd4ce9b37fa0dbfa8a968f593c6ce57c8053ea5",
+      "size": 8413
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 26,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-21.jsonl",
+      "sha256": "7c96ec9d6297849548ddb214a252ac4c2aa62e96611d94cac2682b5230150fa9",
+      "size": 5568
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-22.jsonl",
+      "sha256": "31839a3cde55330304434f6389f0d2b3f73b6483547c929fa9a0480df2034a1b",
+      "size": 7667
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-23.jsonl",
+      "sha256": "84ba4c0f7f44a099372fd000c8cc09205c31a0296fbb9b4b68962282c81d8c6a",
+      "size": 7943
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-24.jsonl",
+      "sha256": "32e3493f8544919df94c3447e3d2bd95b19640c1dd6ea930a9f0ffeee597fe46",
+      "size": 8265
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-25.jsonl",
+      "sha256": "c2f217598ac92291a5a071d42ec174fb8598ec5826863071576f233ba35263f7",
+      "size": 6794
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-26.jsonl",
+      "sha256": "232a4cd25f2d3910c8ebcb50845ce54ee06f58861ccc15440326df72f4f4eff2",
+      "size": 7342
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-27.jsonl",
+      "sha256": "067a0673b70b5f00092aa2cf4059c35d6fa872b6c6286dcf0d32eb062c41d5ba",
+      "size": 10070
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-28.jsonl",
+      "sha256": "355f70199850f213a1ef7676902094b69f79524f644c8d03621cf6b4416e9faa",
+      "size": 9499
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-29.jsonl",
+      "sha256": "853db2e2b70788b2b8f4fc2b5389647c19b14a471b32bca8fe32e0d0bf5538df",
+      "size": 7048
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-30.jsonl",
+      "sha256": "2868dc88369e43cef540ccc6742199ad67212b5a6458ad9b234465dd9e0b9c16",
+      "size": 6866
+    },
+    {
+      "data_row_count": 54,
+      "line_count": 54,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-07-31.jsonl",
+      "sha256": "424af029da7f99d78d3e7ebcd5667d5af50edef8239856670d13fc15eabf057f",
+      "size": 11655
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-01.jsonl",
+      "sha256": "842e1cfde6bc2f88d51e5921b95e78dc14a82b0aff0d92ecc40e06fb33e9aeae",
+      "size": 8280
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-02.jsonl",
+      "sha256": "d80142f82ee8c5bd226540a0dd2cd264c062499df4c917325a399b97bbaffc51",
+      "size": 6625
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-03.jsonl",
+      "sha256": "c2242e793021ea466c8c8e2e845f225f7612e9cdbd74cba77ed63d355e1a193c",
+      "size": 7773
+    },
+    {
+      "data_row_count": 22,
+      "line_count": 22,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-04.jsonl",
+      "sha256": "ce0cd0d189602c76434648f61362ab8fb8b9fa52314731558cbe72e5ff4730ec",
+      "size": 4742
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-05.jsonl",
+      "sha256": "ee7a501b16315929e5a9277b8e2d2f6f1d6e7f146dd218d11ac3185c22f8b5a9",
+      "size": 7599
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-06.jsonl",
+      "sha256": "1b53e790402d10be5c7a3896ba159d6bac9de2681b61adf19dbf0122ffd1f746",
+      "size": 8276
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-07.jsonl",
+      "sha256": "fc9b260280ac207495f804847d9484b377999bf57338c1eb5246045437ed35a5",
+      "size": 9821
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-08.jsonl",
+      "sha256": "7239c7a5d7734d0a8dff5510f29b8b7a960758121dc5a8ddb9c202a5dadc2464",
+      "size": 6994
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 26,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-09.jsonl",
+      "sha256": "b6dabf946e312b284011f5b1a2940352ccd65823be159ec532a5130f32a36a40",
+      "size": 5533
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-10.jsonl",
+      "sha256": "72af055ea8f6cdf9a73eaa256512adfbeeb5fb58d0551dc25c659d8e16b50a83",
+      "size": 7381
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-11.jsonl",
+      "sha256": "a1c07cfaf95f37b862ca0b2fd43edb3dad6e652d70ee4593f3f38a7ed90771bf",
+      "size": 7452
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-12.jsonl",
+      "sha256": "0c117e298f0d6299a4bc901f1d7a3a7d350e8da538dedf4fba9b1f28def42a62",
+      "size": 9560
+    },
+    {
+      "data_row_count": 20,
+      "line_count": 20,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-13.jsonl",
+      "sha256": "d23fffba9f2c3f96955879652f920d22a6edac0c1786da9213098012feb7e688",
+      "size": 4293
+    },
+    {
+      "data_row_count": 44,
+      "line_count": 44,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-14.jsonl",
+      "sha256": "46085621a149216f1540648366da055850643b57bc738115775cc7029dfa9ba7",
+      "size": 9434
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 26,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-15.jsonl",
+      "sha256": "6bff4cc045917ade1ae52dd238d1547c2b6023f4f2f4d753f7b469269761eac4",
+      "size": 5604
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-16.jsonl",
+      "sha256": "c01681d479b51f5aef642e6da6a6f2aeeddc44af60bdd7c03c48e728686acfe0",
+      "size": 8249
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-17.jsonl",
+      "sha256": "f4e676bae24a29abb5d921d2a76ca765548f1b5a63265705ade3f9dc06b50a94",
+      "size": 6858
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-18.jsonl",
+      "sha256": "afc33b90ab09a5b703b90c88b23edc43866e8eb09ebf60ba433888d42aba3ac2",
+      "size": 8582
+    },
+    {
+      "data_row_count": 52,
+      "line_count": 52,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-19.jsonl",
+      "sha256": "d428b0e5324b691b3da41fd715033741dc4f0664bb4fa5de21c86fe2fe2049ca",
+      "size": 11588
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-20.jsonl",
+      "sha256": "8f59394e475927cf3aff1c402ee63d177c8ab126807185b467d2c1805c560add",
+      "size": 6739
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-21.jsonl",
+      "sha256": "62c921dfbf83ffa4c38a1e6737d3ac89ce7ae319be46280f27bfbf8bc7be9d50",
+      "size": 6255
+    },
+    {
+      "data_row_count": 24,
+      "line_count": 24,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-22.jsonl",
+      "sha256": "5dcce439e07b3ef6dc0f53acbafad3ad595d117eb0b8b65aeb65db917e11afa0",
+      "size": 5230
+    },
+    {
+      "data_row_count": 52,
+      "line_count": 52,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-23.jsonl",
+      "sha256": "c35dfff8b6f9076075ff24013e06673cfe78e8a8fce328fe7030fb7fd6412316",
+      "size": 11383
+    },
+    {
+      "data_row_count": 38,
+      "line_count": 38,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-24.jsonl",
+      "sha256": "02486944d14ea52f9bfbc4ac50085d41cdd9e03633ae3464750ea7dcd7e7ca59",
+      "size": 8107
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-25.jsonl",
+      "sha256": "0c2fbb860b5b9675a04f37fbef6db7a3b139be074ef8320be7d2cd7cb6fb1173",
+      "size": 7357
+    },
+    {
+      "data_row_count": 24,
+      "line_count": 24,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-26.jsonl",
+      "sha256": "5d2b72d4dc45f61d789fd557a15db99042a355358ae2eadcfec0b886f25f8648",
+      "size": 5431
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-27.jsonl",
+      "sha256": "ea0d613650ce83490cbb1cbfb44671bfb12709ed58fc3aa4512c201597de5cab",
+      "size": 9078
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-28.jsonl",
+      "sha256": "36aa60eabe5548d9e9160d6a5eb5d08314d2cbd4396bd35450d6e93232aa8016",
+      "size": 6917
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-29.jsonl",
+      "sha256": "2ddd9398bd25d9f5e8112540f6925a2732a5dcbce229f739faadc6292e884756",
+      "size": 5961
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-30.jsonl",
+      "sha256": "34e6f03386d0751c702e07172df7a16309cd596bffc6e40ea4d694bc974c7d04",
+      "size": 8800
+    },
+    {
+      "data_row_count": 41,
+      "line_count": 41,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-08-31.jsonl",
+      "sha256": "eaf48c606e138a5fe1513487b3e0923e2c158ec6e7a31bf762eea3a31ae346cd",
+      "size": 10197
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-01.jsonl",
+      "sha256": "f5bd17d51963b8942efac4ee1387f6a7ba1c91e589a286ab71289f12e97fa614",
+      "size": 7725
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-02.jsonl",
+      "sha256": "f73ade121c270b85ea9eabd249a23c2df23ea4be91a50f7d70046853fb1df12c",
+      "size": 8979
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-03.jsonl",
+      "sha256": "5fb01cc6c406cd0b6ffe6a300dbec4dc9565d7382df6c17f6b33749af4c959cd",
+      "size": 8550
+    },
+    {
+      "data_row_count": 39,
+      "line_count": 39,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-04.jsonl",
+      "sha256": "96298e3874d14e5a27b21b612f7a6061c71ae24b1e8a267059979ed14e7700de",
+      "size": 10094
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-05.jsonl",
+      "sha256": "4d5195e83161a90a0f88644397b5173859af128923b027ce8404962ef4e12d50",
+      "size": 7893
+    },
+    {
+      "data_row_count": 22,
+      "line_count": 22,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-06.jsonl",
+      "sha256": "cd8c054f7666bba4f7defd81fcd509c7336469a8ff206d8a3b590c7509b04211",
+      "size": 4729
+    },
+    {
+      "data_row_count": 40,
+      "line_count": 40,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-07.jsonl",
+      "sha256": "98d81777ab08d25a631bcbbe16004515207eb62d862f553939b00bc7e6a20aff",
+      "size": 8747
+    },
+    {
+      "data_row_count": 30,
+      "line_count": 30,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-08.jsonl",
+      "sha256": "7d615274d11bed4591449597e48fa014d36580304f56dedd3fd8d3d5754401ac",
+      "size": 6692
+    },
+    {
+      "data_row_count": 36,
+      "line_count": 36,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-09.jsonl",
+      "sha256": "26a93c4fa4b971123969a10672eb497de321e8ca2a3b83c3ac2aba853405a55f",
+      "size": 7831
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-10.jsonl",
+      "sha256": "a9982531c8347d9a9e03c4155af61fcf98977957147a0af8769bc5c7cb5246d0",
+      "size": 6831
+    },
+    {
+      "data_row_count": 52,
+      "line_count": 52,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-11.jsonl",
+      "sha256": "4b7ef56b68929f2b2a19aea9fb44b933707b67f1d1bbae463e6e8cd71facf3d5",
+      "size": 11239
+    },
+    {
+      "data_row_count": 46,
+      "line_count": 46,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-12.jsonl",
+      "sha256": "9f23e129d51d5f9465e88e87dd7e705bc552ed04c30790b5e2205f3631c2f24c",
+      "size": 9788
+    },
+    {
+      "data_row_count": 34,
+      "line_count": 34,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-13.jsonl",
+      "sha256": "09ffab61cd43030104b236f218f9244cf87c9fa6d8c08eb9479e04359e762923",
+      "size": 7352
+    },
+    {
+      "data_row_count": 49,
+      "line_count": 49,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-14.jsonl",
+      "sha256": "75cd6b2a4117c5f23b7e702bcf5d77c4376d61389b52e120e3f666e7b48e3161",
+      "size": 22888
+    },
+    {
+      "data_row_count": 32,
+      "line_count": 32,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-15.jsonl",
+      "sha256": "618130604097ccbeb3e9201122b050631856240b2a121c3b049aa294ca2247e6",
+      "size": 6728
+    },
+    {
+      "data_row_count": 39,
+      "line_count": 39,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-16.jsonl",
+      "sha256": "9066f53b6c41c573fc4910905397a1971179bd19d0d78135f226afd13d4ef390",
+      "size": 13472
+    },
+    {
+      "data_row_count": 28,
+      "line_count": 28,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-17.jsonl",
+      "sha256": "47c37dec630056d12fe50367a02780b4622a1848f80f170fe3c23d0a3f5440b0",
+      "size": 6190
+    },
+    {
+      "data_row_count": 42,
+      "line_count": 42,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\archive\\deltascout\\2026-09-18.jsonl",
+      "sha256": "624fa976a6fa3ab0a4e933fd66f98fa4e8f48957dcd5017797ba2d6266cf1ac1",
+      "size": 8923
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-19.csv",
+      "sha256": "927ff5bc7ba15832a410b243212e95fd2e950b7a2f22c82c95d414c877e41bed",
+      "size": 200518
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-20.csv",
+      "sha256": "452e011cd5557a301d96efadcdee3e8abf270a9f62ecdff5636c922c991762e0",
+      "size": 200387
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-21.csv",
+      "sha256": "0023a0fd36857f4467d80a880f2482061bd71f96d206dbec0c7e31ed151a8126",
+      "size": 199475
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-22.csv",
+      "sha256": "27bb8b687af24a160aa46ff30f54d5d1f3793fcc849c070db07423e68fbd25da",
+      "size": 200235
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-23.csv",
+      "sha256": "e4809fbdeec9d5d5951b5cf592370b4caf96c487ea0851e16c3e4aba47b62b11",
+      "size": 200562
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-24.csv",
+      "sha256": "8664af715092899800d154f31953372f8ea4e68b119de20b9fffb93019214055",
+      "size": 200372
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-25.csv",
+      "sha256": "0872f70736a34aadd8fc2608428c16eb45cfe258b69a8cafbc2ebfad8782c76e",
+      "size": 200315
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-26.csv",
+      "sha256": "96dec67b1452b3e376293a2b2d0eaf2d9a059c62bfbc94c0ff7c522fb4843645",
+      "size": 200367
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-27.csv",
+      "sha256": "bcf2c2167cd278abbccc8f123c7af4e2fefb7c87e575679d0b71e823901cd5e4",
+      "size": 200383
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-28.csv",
+      "sha256": "808c4202881d2a38702912a2a9a9eb13fff5f918e659dfa7942bb3de4bd033cd",
+      "size": 199834
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-29.csv",
+      "sha256": "cf0e342fa797a65cb8a823728aa2e20c1e2ed22ce88c10cca0d837395e301b92",
+      "size": 199837
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-30.csv",
+      "sha256": "c799790563a117197ad64cb95de23ad4cd3b7fe4f43269a3dd18809a2d46ec02",
+      "size": 200343
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-03-31.csv",
+      "sha256": "00da8718ab62e93b72778c980137848091a62338035ca54a5ff6bcfb6f8850f5",
+      "size": 200492
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-01.csv",
+      "sha256": "ee83176304d22c25ee4ecff67cce52feb6a176b60d6c9fefd7260961006ffefd",
+      "size": 200345
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-02.csv",
+      "sha256": "44a9c4342d36b03630e8515fcfcbbb20236a7eccbcb47a3809bbbf818697e69b",
+      "size": 200383
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-03.csv",
+      "sha256": "bb06b3d2bce8337500da3d15df983db36e3c683e34ccc8809bd50364bab7bc53",
+      "size": 199862
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-04.csv",
+      "sha256": "6844bacc968f2901020df788fc88206e5e49fa58aeaf80a5749d40b30fe175fb",
+      "size": 199280
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-05.csv",
+      "sha256": "6c0ca11293549e6967e55e34645af7bd1c5a1f03368b35acbacb5592725582a7",
+      "size": 199640
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-06.csv",
+      "sha256": "016b1b630c32202f623f2426b521b532754236374e20e133c72b7d570385f29f",
+      "size": 200277
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-07.csv",
+      "sha256": "f2e5c1649036d01baf14b3fd8faac5640c5d9eb5c71d5e38df455cd9a477806d",
+      "size": 200373
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-08.csv",
+      "sha256": "57ee5d782a42a655ce3cb3d1006b8e3fa6a26984a5d19cfbbb24c0b6d2bc38f7",
+      "size": 200379
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-09.csv",
+      "sha256": "5335a9e21b4ab64499bae85247b1d195dfa5478f4229cce67380c5750d1af08a",
+      "size": 200299
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-10.csv",
+      "sha256": "02c97a66adc32e9358d2e32b99bda745ab6fb0b3614d6632bab52b6b0f42987f",
+      "size": 200235
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-11.csv",
+      "sha256": "f7ed773258c30fe46f1326b86f0a15c6599bc4955132868b2121a51190dec637",
+      "size": 199579
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-12.csv",
+      "sha256": "72229c5a22ca13ec7387f2499b43a5a01eb4f7a60f41ddcbf3e691fd4b9a3a84",
+      "size": 199873
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-13.csv",
+      "sha256": "3a3b95f47f63ea7129a69a42b70c270fb204fb36a1d81cbc5f300776307f0bbf",
+      "size": 200328
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-14.csv",
+      "sha256": "d03ad89ee5093dc8776d68d47e75e6c27ca5c1f23106a5dd65052718c66cec1d",
+      "size": 200540
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-15.csv",
+      "sha256": "d4387472542a1e7927aa2faa3980a3bf32d716c41d3e939a1a11e717cdc11986",
+      "size": 200143
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-16.csv",
+      "sha256": "18561635eecba95bd0dd9f47f2f9a019c0afeda82c8aceb28b9f0047d4fac855",
+      "size": 200463
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-17.csv",
+      "sha256": "759f96bf51db545f8c10dab2b0a403ce09bb8379d2ae57edff57b023fb637fe5",
+      "size": 200722
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-18.csv",
+      "sha256": "0f82c0a5b4356b4a9589112d19144451da821736a7c924541b33d0d6bb9cf829",
+      "size": 199926
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-19.csv",
+      "sha256": "2c97c7c81f8f726ba859ddd6f6c833eb1f374ec4ddc4dbfd690775391488e8ad",
+      "size": 200246
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-20.csv",
+      "sha256": "c508003ce3da24f07f2dc528565b19fb6fc270a61b7004a39c38278cf2b69e85",
+      "size": 200514
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-21.csv",
+      "sha256": "5ec0318c753b94cac006e97913fdef1a8f11123ff21009048f5c917ee58d1a7f",
+      "size": 200340
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-22.csv",
+      "sha256": "e1984730da5ca65ad9fa991a18b0d642fd08070eaaf28ecb3e5eeb2e47739538",
+      "size": 200506
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-23.csv",
+      "sha256": "979b04153a34dfb864694943dc1d8cc8b1b7e0a7d16014bb290d006ef8338d74",
+      "size": 200400
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-24.csv",
+      "sha256": "3b446ad7f63609258f5a6cf72652b7e9ff44b579a27f0440660a4b9268e7b934",
+      "size": 200175
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-25.csv",
+      "sha256": "3c678d64cadd22b0bcb3e9fdfda18e3ac1b9dfd0b58cbcf09d1b31240b2c46ba",
+      "size": 199212
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-26.csv",
+      "sha256": "3b97bdf2a21704aaaceb5b2d2f0a6fdf59a62668b169d54ecf8ee06e1e49fe12",
+      "size": 199694
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-27.csv",
+      "sha256": "96369c3304c9b7bfc5e8fb5211e11e0df077b9070697ac1a8dc19b5b3b96d92e",
+      "size": 200280
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-28.csv",
+      "sha256": "78b4be7dbb99f5a834a27fdd59cab4afa275a3aa819d8c92be800b1f23d9b881",
+      "size": 200040
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-29.csv",
+      "sha256": "b7ecab4e725368db7fa3de4bcd0e11699db0ae39c635c77a287c9305cbacdb7c",
+      "size": 200342
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-04-30.csv",
+      "sha256": "58a3d19d51b72a7fb4a01f893a70797751bb97696b6f4461d618552a12cad2e3",
+      "size": 200164
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-01.csv",
+      "sha256": "a9960009f607762df055677fd03a70f9c1c320dfbdb34a9ee5f68f37ffd172df",
+      "size": 200159
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-02.csv",
+      "sha256": "1e3adb188dbc2e787212324559c21ceac265bd1f89835f8dd7e00fcc02f69d60",
+      "size": 199396
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-03.csv",
+      "sha256": "5bd9dc4673d9008e118d93b7e9d40205b3e259ad4822b27044fd3c8797f9abdc",
+      "size": 199656
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-04.csv",
+      "sha256": "27cde255802f20c7dc9e6b4228f6c34eaa8ebecfe00157a4d939019eb07b763f",
+      "size": 200796
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-05.csv",
+      "sha256": "93c9782a104144fa62992e35e191054dac17cf1dd18484dd4aaebbbbbb47e345",
+      "size": 200412
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-06.csv",
+      "sha256": "bd1912659be19b7fb17020b09e3f9c0dbe0a6ef9e0d25066231108055669abc6",
+      "size": 200431
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-07.csv",
+      "sha256": "fb468592de707d674a012e61578403fbb4146b038b77be9a24591bb2c8b1153c",
+      "size": 200353
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-08.csv",
+      "sha256": "910afbd0ee56da9d167c86dcb45ab82a6209dcd00c48177a78f8d0f10c953142",
+      "size": 200138
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-09.csv",
+      "sha256": "780764bf7abc0591200518e5cb6b62691180e3b1d11c6184a2e203e3233c5273",
+      "size": 199585
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-10.csv",
+      "sha256": "c066b8c67f26063de8d445ac5a86809253107acfc82e86da24a5bee732872556",
+      "size": 199822
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-11.csv",
+      "sha256": "9bbe940dd73b934dc588697770783cda2328d5f679ebd9797753784677747250",
+      "size": 200308
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-12.csv",
+      "sha256": "acb0d47ed3f38c69b50088d79addfcac49ffe9fe5171051413cd445c1b9c52ce",
+      "size": 200141
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-13.csv",
+      "sha256": "0eed4518518ff7bc75ea7517a133ebdbc5f3e631bb9954e93c4aec0f889a20d5",
+      "size": 200184
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-14.csv",
+      "sha256": "32c22e7907920122e8763ab1589ed81fad1062f5280018da7d64dcdd708f7733",
+      "size": 200531
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-15.csv",
+      "sha256": "858532f8eb639959f062fa554868b277f75eb8dfbad274d4045240a5ab48fa93",
+      "size": 200332
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-16.csv",
+      "sha256": "302e0644004f3c361538a51c740103e6f31d6b206c5471ae895959c76374dc90",
+      "size": 199712
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-17.csv",
+      "sha256": "5d5a9bf4a67fb39ef841f46ee1c0186864110558b456ddd4d4310a4eb93ab35b",
+      "size": 199676
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-18.csv",
+      "sha256": "aaef1443e93f7d394e421b657949fb206747b7ca28c47858d18b60d92ccac51c",
+      "size": 200454
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-19.csv",
+      "sha256": "d72134755735cab223327da6787b4ec86f8289082d76f09536588eea6cd706a8",
+      "size": 200013
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-20.csv",
+      "sha256": "0002240e9060d7e13c306da4ec47d1a4dd5a59d35d74578a0f84aaa4eae260a5",
+      "size": 200123
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-21.csv",
+      "sha256": "e308708ae184b29b3870ce67203ba1415d25217d1d901a57da74552fa94ce871",
+      "size": 200070
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-22.csv",
+      "sha256": "aeb608575aa6bf5c8165c5e1e393168dc620d7d0ae574d89399573e4f4fddc5f",
+      "size": 200186
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-23.csv",
+      "sha256": "a97f771157f92b6fcdab1f6820a9e8074bf38ae8a20a9c72d0bd3555510a74f6",
+      "size": 200078
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-24.csv",
+      "sha256": "9a23892c8702b5b9738e733b11ebfa9ff0d91788749def8961368756c7fb1a02",
+      "size": 199939
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-25.csv",
+      "sha256": "1823d750dbc35cd386de9cd90cfd2714f0829c75d54592cc04d4ee041189eebb",
+      "size": 199877
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-26.csv",
+      "sha256": "bf459e884cb16a4cb09f381b612bb166d1ca05dfde79e77d6f612baa2b79327d",
+      "size": 200312
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-27.csv",
+      "sha256": "0cbccb69c8a3379a616c95eeaae8666e91e131bf08d98bbf9c49aa6403d6a562",
+      "size": 200241
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-28.csv",
+      "sha256": "3b29df00b8068fb33ed1de16c7e5b88c4112671d706de49a192bc63682989d7d",
+      "size": 200379
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-29.csv",
+      "sha256": "9b60e3bcd6b03aad6825d6e7db9f8e0d8f1d4637a41bc1ebb9fa0304e2825e89",
+      "size": 200132
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-30.csv",
+      "sha256": "c610604df8ef0577e298b6fa4ce8f8f01d8cf90a5eeb2626514b96177ae1f1d1",
+      "size": 199377
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-05-31.csv",
+      "sha256": "960bc54d433e000ae09bca3e9625ba1c6978aa9903451aa914f06ab822d1e448",
+      "size": 199429
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-01.csv",
+      "sha256": "eb8b82ae94a98d146ed419c94002945fb2d970dc5a49d307d52f44a17b66c294",
+      "size": 200667
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-02.csv",
+      "sha256": "f6e2dbc1f50903dcbcd6e094e1e23168201f89c5aaa453489a669f918f1d3a59",
+      "size": 200976
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-03.csv",
+      "sha256": "b68577f11a89c873746ae835b39755522a92e69abe647d209a42999f8900deed",
+      "size": 200683
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-04.csv",
+      "sha256": "06ccfa399ce81ba609b2fc41201e8fd298346e9423dfce4a5e36a2e9cbff4ce9",
+      "size": 201228
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-05.csv",
+      "sha256": "c1d21cca0219371a0677eafa81f335ba3e70f2ce310b531aa4dc51431c20a001",
+      "size": 201702
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-06.csv",
+      "sha256": "3fa4002e5b15c308f8ea5920bf818bd74d471e2f6b280d7cb4d5584dea83669d",
+      "size": 200916
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-07.csv",
+      "sha256": "61d7792905b9f9857da8a1b3fd2ca02c4b551c51e671cb1a485659bdcba8cde5",
+      "size": 200748
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-08.csv",
+      "sha256": "ae5c4ecd0142ff035721542f63e29d34f8e867a93a2aef47e4c98287585562ae",
+      "size": 200569
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-09.csv",
+      "sha256": "5b2a3fb58cbf9f1545277aa58790ee0a99ce09ca0f4e9135ff1a741052a7820f",
+      "size": 200636
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-10.csv",
+      "sha256": "6dfd6eb2c334231f0ca500f28c6fafc00c36db5c4f6110218039d95c6866380a",
+      "size": 200508
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-11.csv",
+      "sha256": "0ac30725fbe0336e10da8a8c3556a49b44b4f1d729fd1250c480ef7cbacc27d2",
+      "size": 200476
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-12.csv",
+      "sha256": "14989cd5b48dfacbb1f09974ab28564e056181edaa8474cb5cab7d3b953bdae6",
+      "size": 200336
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-13.csv",
+      "sha256": "79d3e5c4892792752ab5c764a37cf699b857358bac54b1373d884b52393b41ab",
+      "size": 199839
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-14.csv",
+      "sha256": "08a67b9d4b46de060d751d25a3978b449e129e9d81d58c97edbab42038f90603",
+      "size": 199911
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-15.csv",
+      "sha256": "6b917babe0811b29a655966e9602dbd29be198399a734ef390926d7d9a6b45b5",
+      "size": 200402
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-16.csv",
+      "sha256": "44f0cd306385ebdbb78c198b78826c3bf4c8e884337c95a10b09d7ae0db49090",
+      "size": 200158
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-17.csv",
+      "sha256": "de4027adcfb0f0fe6bd4dd638b5b169f364c96738c7df33c59c60b37995b8db1",
+      "size": 200393
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-18.csv",
+      "sha256": "5300e1f9692731afa3fe9c5a675afa977ff1fa50cf2de32a1bcce24c5263d2de",
+      "size": 200321
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-19.csv",
+      "sha256": "6683300404e350af9f5a1350e6acc0ff0debb015ce19951ed3d85cf76aea4e24",
+      "size": 200051
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-20.csv",
+      "sha256": "d65a2b96467451e92b1aa11154a7b3801e1c29228191256c777b03a99ca20698",
+      "size": 199800
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-21.csv",
+      "sha256": "c9b799a196448c69f767f8113cf13ce16c529f616a12228002446798da3d70c8",
+      "size": 199720
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-22.csv",
+      "sha256": "04c41a1adead499b5484db51c5b24c8c94853167b548aa119b3788405d66e971",
+      "size": 200272
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-23.csv",
+      "sha256": "01e0b4a91c9e387bd0e6c855de96b993300039a6ee1344d7dbebb784b67e99bc",
+      "size": 200356
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-24.csv",
+      "sha256": "0c36125d1d647cfbfd1065e6454cda8f9b63f00bfdc4d53bf80a545c91b1d335",
+      "size": 200778
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-25.csv",
+      "sha256": "793bbc8c00473f46edfc32583b2f71c1f9dde0e9f9332dff9680c8df759e0277",
+      "size": 200769
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-26.csv",
+      "sha256": "fb81cf1636250e1ad62b55ff2c9ec0859c630591d3ffbe1824fc713d7d264493",
+      "size": 200728
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-27.csv",
+      "sha256": "1339825b4ca4c4d70d3791b8405d09baa294f8f8107dbe98608d434ff5ba5556",
+      "size": 199926
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-28.csv",
+      "sha256": "1abc487b2c114bdce7b0443f5c3e91809e49f995b691e79cff2490085d0add01",
+      "size": 200027
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-29.csv",
+      "sha256": "e900f5f50ab5135f77d461addb60ff5b0a0733a0f907c956dec8454120aff02c",
+      "size": 200596
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-06-30.csv",
+      "sha256": "cc107dfd4d46580f7fa3df451f2fa627f0b6cb589b9d2099563ee43d09ccd4ed",
+      "size": 200532
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-01.csv",
+      "sha256": "bfa7a7e0d4995d150d1f166c620e961b59f4a0d6e5bb06567953a3095efbbf8d",
+      "size": 200517
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-02.csv",
+      "sha256": "92464ac295f31bce14aa07a5d656f1394b9048fed5a896061a8ef506cb3dbcfe",
+      "size": 200333
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-03.csv",
+      "sha256": "e561d94b6de3ef5098e4233296be1628381e99e2982e65187037fb5061b7e0c6",
+      "size": 200146
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-04.csv",
+      "sha256": "a2c3de2eff2308ecd253b9dbec9e80d1d39736303a79aca8b8b39b2d2fb60df5",
+      "size": 199634
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-05.csv",
+      "sha256": "5d78608e2b742db07d8ef890918a2ae2508bd0af657102c123d1e63fccd5861e",
+      "size": 199759
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-06.csv",
+      "sha256": "bfec49396e9c0edcc6d93c08ecdb47b210f26dfdba2812405bc3f27a8dd03754",
+      "size": 200390
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-07.csv",
+      "sha256": "3339e821fef8604452f0d0442fb13cc3687248e2bfbccda9cc8a894ad46d146d",
+      "size": 200384
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-08.csv",
+      "sha256": "653784e853564d63c7e4585fc31fa0516a4836e5d1faa39708e76ffe5f18b534",
+      "size": 200261
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-09.csv",
+      "sha256": "df6bc52424da58f270b7bdf236836b6b338d323e790c77d875720abdfdf2cc7c",
+      "size": 200378
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-10.csv",
+      "sha256": "25a13a0237e8e7eb97b807f97cd1ba7de9e45b9b6633adb2381cab4992655a18",
+      "size": 200201
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-11.csv",
+      "sha256": "519cfff054cc3c55a0385371f8f4938ccb229aed50b4352139083fd0bc6553dc",
+      "size": 199595
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-12.csv",
+      "sha256": "a88e74306a6d3ab20076a81465791f83ba0c826c00ab900d3a43ba09f1c95751",
+      "size": 199750
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-13.csv",
+      "sha256": "ed040854b09c22f284d3d1ab7643c6ffd1758a06d84a7da83027df93d05fbed6",
+      "size": 200242
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-14.csv",
+      "sha256": "fba35b93ca577648a4b6f512b8864f79ca8900e64196d303e7919101b71aefec",
+      "size": 200446
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-15.csv",
+      "sha256": "be633103caa36c780ce20275be9583bc7cff8bd3135f011cc251df046a753473",
+      "size": 200169
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-16.csv",
+      "sha256": "8bd01e934d83fd7c619dc5fe1d3bf5e4821090f177bec6a777601e5a1b29a754",
+      "size": 200177
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-17.csv",
+      "sha256": "d341a3358db5f722f509b6022c04e83e19c65b81bec775abe71712ad3c07d711",
+      "size": 200208
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-18.csv",
+      "sha256": "a26e81b0951f8449c2416daed0255b397e985f5e4a127376daad8d44070a5922",
+      "size": 199312
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-19.csv",
+      "sha256": "9fedcbeba9a41ab13dce0a25dc507aae5110a4b12c96e895c529d1a19c4b8175",
+      "size": 199583
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-20.csv",
+      "sha256": "01ab8ba0f6c493a09db6a50e1c6f493a934d8b30c3e580f6a6bbe309599065a9",
+      "size": 200381
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-21.csv",
+      "sha256": "4314eab231767cdadbff878061d3614b3cf7ed6f7cadaaab18538d0ad613affc",
+      "size": 200373
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-22.csv",
+      "sha256": "9897556d97dd16be2c1e52c742830fa789b9c6b0c6be6a2ae724f1a288709030",
+      "size": 200121
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-23.csv",
+      "sha256": "7e0e60e50d5cf09bfe6576ca166814e383f2b4e763b07afd39784d856101d62b",
+      "size": 200236
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-24.csv",
+      "sha256": "270f4477bcbe49e5fa73a1e6f7aaa89b560d8bb773153e6ae538a3e6af05a60c",
+      "size": 200143
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-25.csv",
+      "sha256": "a0605543dc900fbee7aead399c8f69b383b6bf548966f78a5a1c375ce15abdc1",
+      "size": 199152
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-26.csv",
+      "sha256": "708a842954e6b4847b373e996d14681e1d6bb596827c66cb54ddfbe3ca9bb359",
+      "size": 199319
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-27.csv",
+      "sha256": "dff0d1c5b3c1880daab4b21469a6a564d172635c44d3a9a4dc9d16491ca8a759",
+      "size": 200163
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-28.csv",
+      "sha256": "93cf8165d08cb6f8a07daef3fc0be040fce8ffba34da35e81cb9336896b6dcfc",
+      "size": 200153
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-29.csv",
+      "sha256": "e763f1ce85844a9d5a79ef63b73a942b170533aa79ea750e5357878f2e7954fb",
+      "size": 200360
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-30.csv",
+      "sha256": "c1d4c58e764ad6e70d2bd6888d0e961b1788e1fdeab9b3ad8d162a149bb408bf",
+      "size": 200087
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-07-31.csv",
+      "sha256": "f102abb24cb77467225a6e6e91a2c471f86998d6e2776826f723a5c7d49e102a",
+      "size": 200124
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-01.csv",
+      "sha256": "728d0ba3b216860612c6fe1656711f5feee5f7f267dc371a02d832e8c3a04312",
+      "size": 199066
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-02.csv",
+      "sha256": "51278f30a11318b6c361e4299f4ca19407b2fd85f8877621ccb0131f4c4f2116",
+      "size": 199346
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-03.csv",
+      "sha256": "b785859a7794d9f776c0c74ea97944dd688f4f40d7966c1111015087d5ebf8ab",
+      "size": 200038
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-04.csv",
+      "sha256": "4b3dc7e6e2c561bf768a5d453531f866cc78d037687ac53ac6500cc80991c9d3",
+      "size": 200081
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-05.csv",
+      "sha256": "979e8df7079d6817024cd5e6aab8054913a4ec104643ecd7237a6f71a51086c0",
+      "size": 200147
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-06.csv",
+      "sha256": "bc0275e99b67b679005afbdc29fd9ec1e7484e83bdd1a296525d6fd4fef81b4e",
+      "size": 199869
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-07.csv",
+      "sha256": "1966c11f210453c24bdb57e06c95ea525f6887096fc7fe84527cdccb3035800b",
+      "size": 199958
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-08.csv",
+      "sha256": "1d6ec8e056ed44346313841dc7dd02971eb4dcda128ae2a75cc102c1d444426b",
+      "size": 199053
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-09.csv",
+      "sha256": "00238dbed33acfecf353443b4d890479cb029b372fc03b7e288dd9e02211b916",
+      "size": 198982
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-10.csv",
+      "sha256": "cfd6251cd58b812aa93aaf857c7565a4b858aa378a64deafc9f7d0da96ceb8ed",
+      "size": 199823
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-11.csv",
+      "sha256": "3b1bf9b2c669a669f301474e07af1cb5db49b28b5cc206a1af85e212edf3eea4",
+      "size": 199677
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-12.csv",
+      "sha256": "16a3b7bb748e22432037926e41a2f7c1aed7bd017bd199db428cfee11ef51bfe",
+      "size": 199893
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-13.csv",
+      "sha256": "9db94a46130897acff238be19fd43ecfd213dfe80b799c94f7f7d5c757451a54",
+      "size": 199895
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-14.csv",
+      "sha256": "8a1316963b810dff159fe8aa3357967c755634d4efdeb07d1599ee3af1b74157",
+      "size": 199856
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-15.csv",
+      "sha256": "458d93e447451f4b87fa96aba1168733eda94b1155d35c55ae47d9dc7287b3b2",
+      "size": 198801
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-16.csv",
+      "sha256": "99c5cbc514c2890ac02f28b1ccca6c9c0296fb4b5f9c5c92596e31ed362f6c70",
+      "size": 198881
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-17.csv",
+      "sha256": "332b471066218ac3669a48c718cfad3956381c86c48f93fd9a8bc47e338df598",
+      "size": 199889
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-18.csv",
+      "sha256": "5c710e1606dd2058428d85220371f603179e0befb496e09017a4ccc028e0cf41",
+      "size": 199589
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-19.csv",
+      "sha256": "9235f1da137b2be637e3fce502d512e629b5b4bd65ab356113cdfbd2eeaaa531",
+      "size": 200734
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-20.csv",
+      "sha256": "f96a80f746b049018071f31795f6b332ceaea692fd1805fae2880ee2577aaca9",
+      "size": 200915
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-21.csv",
+      "sha256": "c08867d367b5467873f23917e1cc0d3a6e1ce021460833b10e94f708868c0971",
+      "size": 201331
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-22.csv",
+      "sha256": "52591a21879d113d080379a4e600ca82f73c92c5c469541da4fa116b7c6da23b",
+      "size": 200309
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-23.csv",
+      "sha256": "608f314a413c0ae9999c776be40f5a4473647e7ac47e48925a83268f4b471f0a",
+      "size": 200200
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-24.csv",
+      "sha256": "477c9ed587e2dd60467cf92e34b87273513b838351b53443a1443a2ebf940c3f",
+      "size": 200482
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-25.csv",
+      "sha256": "f94348758c81e8e5fc6bd39eda20624adb45b54b40be82d26577a98aa0ad280b",
+      "size": 200530
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-26.csv",
+      "sha256": "953e582b2a02e50ae88168430c2ec284b4bfc1becd59df36db51ea95e81cf894",
+      "size": 200221
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-27.csv",
+      "sha256": "dae5d9fde1c51e8dea5347f17ab4341ec8dd1b83768a5dc097922ec42471e4be",
+      "size": 200217
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-28.csv",
+      "sha256": "ebc6d8f944405a30b3972b16aa296d7c537b20e4fe74b2d294098691db87cfce",
+      "size": 200317
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-29.csv",
+      "sha256": "cb57d3747a824eb91908ae2fa6ed11be6535eab8ee64cbb33fee33ed8cc93de5",
+      "size": 199227
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-30.csv",
+      "sha256": "0abd9734dc4ba3993f33794cff002916693526b40833f01f890ed39e847601d8",
+      "size": 199558
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-08-31.csv",
+      "sha256": "5b8ce25c9121590ccdd6c3b624fa29744ec0223400cc37557bf9b7dfedde41ec",
+      "size": 200118
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-01.csv",
+      "sha256": "48fee55de994a256bec696d98f573b4383df15f22319e7243c12eee5b55e3f0b",
+      "size": 200141
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-02.csv",
+      "sha256": "559bde00fc0c33fe78928b371368e2f9d465d5834b864db70b6e8a834a264cd5",
+      "size": 200105
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-03.csv",
+      "sha256": "a56d4a908ab2d22df779fec867e6ed520f1a64db365a719010881962861dddbf",
+      "size": 200383
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-04.csv",
+      "sha256": "ef47951959a7a155cd8c62ceba8e219653f7c9f98bd2551bfa7c919e041ec11b",
+      "size": 200125
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-05.csv",
+      "sha256": "0ce381c3ac65b017e953298781f1c3979e4590bf91afef8e5b7e9d8ad906a4af",
+      "size": 199355
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-06.csv",
+      "sha256": "06a652aa8f99a09140070d65e6cbe5a75a28b0f71a5ef616385b1407af571969",
+      "size": 199545
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-07.csv",
+      "sha256": "a6a280b81455cab2e8bed0a08584e0772d0aa8a7641b0ef60b920014d157599b",
+      "size": 199817
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-08.csv",
+      "sha256": "8121812447e74c3c8bd600db497814be7eebf2b02bd1aa8aca1c70b6094646ea",
+      "size": 200080
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-09.csv",
+      "sha256": "bad3b6c4e552b927f37bbc5b7f62c51611e13fd14186a28a189ec6492d8a92d4",
+      "size": 200160
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-10.csv",
+      "sha256": "c5cd720797e8a5ceb10792664988c9be5800ba60a086db4599a9b82c7044d293",
+      "size": 200252
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-11.csv",
+      "sha256": "2c693cd3a069f014a4c2ffd7a41a6c281efe024d1c0c55516654fea3411950db",
+      "size": 200163
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-12.csv",
+      "sha256": "aed895e097a4952cb4fe8af76b2e99c8a3ed604287a8522c8781b13e10a6d23e",
+      "size": 198917
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-13.csv",
+      "sha256": "b8d2272321139b52468aadad9054147f5d52368e0437d610f1328688ca8ba04d",
+      "size": 199165
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-14.csv",
+      "sha256": "408fbfc83ef88387e4402358cde7205c35741dcf20da82747c866903315d8297",
+      "size": 200203
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-15.csv",
+      "sha256": "3632466add3a44754ddd73a7af9546dc613eb4d50521ddba89c72ac70623ca9a",
+      "size": 200257
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-16.csv",
+      "sha256": "db0d36797f52d50f637f46458716fbb9f83baecf99c755a79b2cb31acab23f23",
+      "size": 200121
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-17.csv",
+      "sha256": "11d07841ba9296f6d2855175e234ec614ac34ceb601768abeb5df62c656e1e78",
+      "size": 199868
+    },
+    {
+      "data_row_count": 1024,
+      "line_count": 1025,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\btcusdc_spot\\daily\\2026-09-18.csv",
+      "sha256": "ccb57a03751af3329ca114136a294ad7522bf6749045585783b63a8c03957817",
+      "size": 142512
+    },
+    {
+      "data_row_count": 269,
+      "line_count": 270,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-16.csv",
+      "sha256": "2e45c1e0a5531526d46254647c2f51ac2b778c135bb8302945230588a4cf558d",
+      "size": 26175
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-17.csv",
+      "sha256": "fc51a64622a5728ae4a07ee798ff823455a82ffb90a77b29de470518d8feebf8",
+      "size": 139749
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-18.csv",
+      "sha256": "f864a2aced1e71dcab38f03952dc8f42ac02ea8623b8f9acb6a31a66bcf331ea",
+      "size": 139548
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-19.csv",
+      "sha256": "1a340b8e9449419cc9ca6dc41c2e0a8899e067b5f49bd4159caaedb2c8b13b57",
+      "size": 139618
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-20.csv",
+      "sha256": "a80c87488fbdbfca83e58f12eaf6c1f4df5801c72ae39fb9ae9237ee8564ecaa",
+      "size": 139291
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-21.csv",
+      "sha256": "aa3c37fe3497121b18717fa8ecbb0bc9f60d6613499f4e62f62ee2b24e18b22f",
+      "size": 137988
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-22.csv",
+      "sha256": "e3db4647c527a56f16afbd532d9309344c8ec79ddc449f4c2d60382840e3cccc",
+      "size": 138741
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-23.csv",
+      "sha256": "932ed68b2cb43dd173282e3968818c191d6e86d5a5582ce30cb78430bee7037c",
+      "size": 139816
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-24.csv",
+      "sha256": "f7c4dd8f5b64e321e14aa5561a15b6cd2d87b06825b77be35decf73cd95fc215",
+      "size": 139410
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-25.csv",
+      "sha256": "a1f003ff6ad554af073ef450a8cf9aba365b62a1af251b5baa950b1fb702e781",
+      "size": 139047
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-26.csv",
+      "sha256": "e130c38b121f02f8aaa8c21b8e37b8761ba2b10fa6fabaf965c6356161d04358",
+      "size": 139257
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-27.csv",
+      "sha256": "34988e2bfbf01a3fc6930782c137bf4de43da9aaad723b8c06ed6a43320b27a4",
+      "size": 139707
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-28.csv",
+      "sha256": "6b7ba5c1076cfb34c7b6973238c896ba0968c8c723d422f2fc891f23bb94454e",
+      "size": 138101
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-29.csv",
+      "sha256": "c49689f06cb428e4cfe297fd97951aaaf114469efa15ff2125721706759ce8f9",
+      "size": 138042
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-30.csv",
+      "sha256": "228dd7b637be83c4ed91e630679fecfcd35848adde8cec159cf613166396a319",
+      "size": 139188
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-03-31.csv",
+      "sha256": "c413f0e051f5b050db19408fb529e56ffb5028dc92bb6bcfea4bb4292b164142",
+      "size": 139454
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-01.csv",
+      "sha256": "408eafeb92583951db83b08d6791fcb965508558afed996d8d27b3b6bc5b4ba6",
+      "size": 139190
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-02.csv",
+      "sha256": "d6d0738d2b4fe24ec28d220096df3d0edbb9949edf5376e325ecd01ab11d79b9",
+      "size": 139349
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-03.csv",
+      "sha256": "298f759a34ffeafc85b6829572d3f2170d6f86d43e2eb7c2262ba2eb3304b203",
+      "size": 138228
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-04.csv",
+      "sha256": "c44128ceca6bd8dce42343975ca9fe6b30bc544e50e09bc9f180913f9e34082c",
+      "size": 137708
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-05.csv",
+      "sha256": "de8285b893dc4d09089e20ba73a3a4a04cb868bde67d25f57ef8028fd690fc28",
+      "size": 138162
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-06.csv",
+      "sha256": "fde7ab1edf4a57fb487fd1aebb7b2e47d0779db6323253f9d0f361c752f53cbe",
+      "size": 139376
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-07.csv",
+      "sha256": "6717f43c985f14ee15c14556c00f0c5bbe2b4cebbd8b29a1162753ea14d000bd",
+      "size": 139472
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-08.csv",
+      "sha256": "c54aae313d2139091e2245ce1eab36f40c0c884517c0299a410840a1de2baf47",
+      "size": 139297
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-09.csv",
+      "sha256": "43f85dadcd012d2e8ec81c07ce6bb12f6a3c1421736595be7c275d8b0beb9034",
+      "size": 139058
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-10.csv",
+      "sha256": "5d238a34827174258eaabc2cef3deba8981ddc1eea1aaa455400be7c57509a7e",
+      "size": 138938
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-11.csv",
+      "sha256": "c9f955ff40b1d221bf75fc2a1c95933e85d6341c6d73f58af4c5200c40a7cf1c",
+      "size": 137786
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-12.csv",
+      "sha256": "362c0b7e21a6b433de38bb2760deac6b51a5a6df5212f86cebbfa54e59893910",
+      "size": 138189
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-13.csv",
+      "sha256": "1ad038b0defc4751323ac6faac347aba8c65ccfd8fc1f638af6ab0d7407d34d0",
+      "size": 139394
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-14.csv",
+      "sha256": "0268d7b5485be1d42152cf2625e6bd199a8ea648ba21419c073e3c5ec9348f7b",
+      "size": 139599
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-15.csv",
+      "sha256": "fcd2c0d82069b15c875211d3d33c3e4d0df4ca7a6417034d1cbd0eb4fdfa3f9f",
+      "size": 138838
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-16.csv",
+      "sha256": "6e100c22a920b3996df77c5ec951012c7548b34999ad78342baa3830d3ec4eed",
+      "size": 139000
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-17.csv",
+      "sha256": "96f72a1ddad127670bea6d8a412e646c9530f43ca6025ec28e4cc0d3794a46e9",
+      "size": 139473
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-18.csv",
+      "sha256": "9ade22541bb2b93ac59bbb66beb1bb349558b48457cd722aa6c1e1e56e44a35b",
+      "size": 138099
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-19.csv",
+      "sha256": "f2d7ecfe4da4bae6db1c1f650a4e21ab69583c741af0c36d26e26ac9b162d51f",
+      "size": 138432
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-20.csv",
+      "sha256": "b5ebdfbd0dd3c32cbf8045796747a5685deec74d1eb966f5a4009a9001df9ff2",
+      "size": 139016
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-21.csv",
+      "sha256": "05845be9878f4fbcb85e34ebde0a50a339065e4870901f8c569e829031d251c9",
+      "size": 138824
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-22.csv",
+      "sha256": "65625268a7e27bb9bd8487ee62eaa74bd75fe1bb18f083644453f21a4db9ff23",
+      "size": 139309
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-23.csv",
+      "sha256": "5f30b9665d66b6c8e379cb8cf6290e3f25ff907fd54e8402b7c775d5cc030442",
+      "size": 138983
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-24.csv",
+      "sha256": "717a033cb16f1a1b8fcec7b5dfbfe86b0093eefa961f32caa8d15505ec88fc98",
+      "size": 138518
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-25.csv",
+      "sha256": "ed257e826dcff1ed886d065703905e75ed218549c598863ed842cf439ecbe0ad",
+      "size": 137202
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-26.csv",
+      "sha256": "26a0e9f783a15041665fe396f70071d35555be4257165740bf3536ea4bc3710f",
+      "size": 137633
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-27.csv",
+      "sha256": "c2e104e0a70c3cd29599cde3e82a50c79bd3960d96e7e0576291b80f956d928e",
+      "size": 138764
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-28.csv",
+      "sha256": "b75fa5fdccc5ac451ace7d26ed23449ec161198bcbe8fad28a38124c8956ebf0",
+      "size": 138526
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-29.csv",
+      "sha256": "0456395c479f317678fdb61b89ef309e63c15a63d7498cb54687c874e99f9c0e",
+      "size": 138930
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-04-30.csv",
+      "sha256": "f175656c0a89a8a217119250c807518cb592ee13ceb924dad523a629a4b190e0",
+      "size": 138370
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-01.csv",
+      "sha256": "dc10fde0795163f6b97a76e788b4f8c709588d092fba90ed2874d0da8b3077cf",
+      "size": 138694
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-02.csv",
+      "sha256": "d05d129f839c9df2126f5cad900a84f356926f98f5f21b511f0e52af198cba9b",
+      "size": 137335
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-03.csv",
+      "sha256": "7758d8191b614e4b5863febf0e0f2ff8d8ed73fdb279ff6754bdbfcaf1ba85db",
+      "size": 137615
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-04.csv",
+      "sha256": "1c2f06b99a9031a975c0ee09b83f0836b7af3aa29af86a486192445d358890af",
+      "size": 139434
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-05.csv",
+      "sha256": "1f10681f4e233452ee3ef792cd25b25d7c04b59d7aa247239e635bd5fad02659",
+      "size": 138848
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-06.csv",
+      "sha256": "837e1da4efd637409c57699a152625b8aaacaaf50a16ac461728a0d9cbeca0e7",
+      "size": 139024
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-07.csv",
+      "sha256": "e80a40a46ca61ac4bce92abe02c08b7a147bebd7d314b98f927b3aaec8b4eb3b",
+      "size": 138777
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-08.csv",
+      "sha256": "cac7bf8ddf991a69757e9e247ca0774ac026f0292fea3a662137febe61872eed",
+      "size": 138641
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-09.csv",
+      "sha256": "622b8d16607e8136a5db80c1813dc6af1a720247b96b989cd837e5cb7503804b",
+      "size": 137517
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-10.csv",
+      "sha256": "0b5763258b93bc844ae79d4e0681333c3d9d422cc441d75ef0e052c707e059fd",
+      "size": 138088
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-11.csv",
+      "sha256": "b8831cadd65928948c76447b1062f50c0a1597a1223cc7e6cea5503af534fe60",
+      "size": 138577
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-12.csv",
+      "sha256": "ca053813448290b10c9b40808be7e4027fc30a0327536345c3e9c65f8493ecbf",
+      "size": 138399
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-13.csv",
+      "sha256": "44630c8ea52eb8925642436c9513a24634aca44d025ade4f161850ad780c6f33",
+      "size": 138597
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-14.csv",
+      "sha256": "21bc4fc4a122d1d2f552ad044dc4f0562586734630744e5d758877f3f92d7bff",
+      "size": 139004
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-15.csv",
+      "sha256": "cfff817ae57258a0c90665f670b0d54a0e4803708c3ba9952dde3f217ee7474f",
+      "size": 138916
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-16.csv",
+      "sha256": "cbe412589b535d67b52eacf55bb189344178328431619259a8a69045038af84a",
+      "size": 138069
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-17.csv",
+      "sha256": "05d675b8f4c8a60a6968ab86791428d0de8fbb54c9f34c4825694b75dfe6b0f1",
+      "size": 137686
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-18.csv",
+      "sha256": "8087f67068236481614cec5bb14d0a1e5a7c2d3b381e204135ae2fbef9e1494f",
+      "size": 139125
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-19.csv",
+      "sha256": "8c892104e9f3b5429e964cbfb7b7d083770f9002709550dea4fe86a8df4e3a30",
+      "size": 138356
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-20.csv",
+      "sha256": "d559541e2ae5eccfb1bba578bf8daeae7346e1cecccc88d99c8e2447b7a8dded",
+      "size": 138320
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-21.csv",
+      "sha256": "7225e71facff8ed080e3a82f43bcda1fea3d0fbbdd6ede0b44c746e51f5ad52d",
+      "size": 138362
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-22.csv",
+      "sha256": "e7d89b0bcbce30788a1d5ef3d6e52d5a4a382b362b165857cf40d7693087bf80",
+      "size": 138328
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-23.csv",
+      "sha256": "f15f69dca1e9df37982c4ae69a7c9a04c1b9d6e014796fd55aa2a1653c00ce36",
+      "size": 138353
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-24.csv",
+      "sha256": "324cb902ce20a489c95c443a1f4b9cfed118df9c8eff97ead256cb1edd4492ec",
+      "size": 137819
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-25.csv",
+      "sha256": "fab929a7c290723afb564a31f6e1b396fd6fe9183d1c399596c2356b185d97e2",
+      "size": 137903
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-26.csv",
+      "sha256": "8aedc98c841a139cf511f8fc9687fbd5d8edf828680ec05d56a61e563c80b159",
+      "size": 138860
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-27.csv",
+      "sha256": "308bff42b8c888a21075cd4c1dfcb1d6ee3a85978c7b281d0e9ab7d1139bc23d",
+      "size": 138900
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-28.csv",
+      "sha256": "485eb2cfe7437cd724bcc0068d9381293eb0ca59da37bda4c8d5d89af7a92a24",
+      "size": 139201
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-29.csv",
+      "sha256": "8d22a9b0e32ab113ef79a8de1a5a1383389291e75dd44a03f8a08ccc053db126",
+      "size": 138909
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-30.csv",
+      "sha256": "0a4581501856bc9aea3859a1ad818f539184858a88f8b71e96b1b41853eacfb7",
+      "size": 137566
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-05-31.csv",
+      "sha256": "89621b41f498ac6137bdca088c12ff8574a67d2b5798bf700db5fee22cc0d2ec",
+      "size": 137664
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-01.csv",
+      "sha256": "ad80135bf0177e40932123280b5af11e05af4a865b5dbbfc755fccf27192ac2f",
+      "size": 139395
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-02.csv",
+      "sha256": "af8c76cfbceb8ebf2ca4aa10f532c0f273ab9f1f955d9e9662ff2d2b4a7a626b",
+      "size": 140384
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-03.csv",
+      "sha256": "f6bf6d7818934a8c0283075782ba0eba4e19e6575a101f7278e642316c13fa3f",
+      "size": 140244
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-04.csv",
+      "sha256": "94b0c496246af21eed4638efac4dc7fbb4e9b1fb16db619e54dc32d4498ba940",
+      "size": 141127
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-05.csv",
+      "sha256": "12c632563902beb225e0ade5e7b174a621bf8a01b5a13b48ecf9a2728fffa325",
+      "size": 141680
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-06.csv",
+      "sha256": "a4750ceef3fecbacdebe174bc894cd394ea9b298980a9d2b40ea2f44df61a86e",
+      "size": 139462
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-07.csv",
+      "sha256": "697aba114aa6b1b86d3df54705a5ee113a8253bc27ddb94f3b7c07aaf33f1098",
+      "size": 139711
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-08.csv",
+      "sha256": "f2e795636296f90495f962e22bed017189c724fec9894141537820b720888ab4",
+      "size": 139626
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-09.csv",
+      "sha256": "c4c6672ddf33d877b75acbdd1c4b59164de454a4ea161658219253c40cc1852f",
+      "size": 139480
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-10.csv",
+      "sha256": "d8c5eaa7c615aa51a7ee79c9ad4570d6ff8e061867055418aa69a95329d082f1",
+      "size": 139137
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-11.csv",
+      "sha256": "318f3120766e924cc20fe519ca09cdfbc076c41b98bb7478b2ef2ebf107efe20",
+      "size": 139040
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-12.csv",
+      "sha256": "c201156d493e3b8536d0251ab9370de6a81300cb26eef894043d07a20a1b13bf",
+      "size": 138888
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-13.csv",
+      "sha256": "f67e85001e8c067edab7b974f9e51b6d482e0c06bc84f465f1a4e9ffeffc26c4",
+      "size": 137902
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-14.csv",
+      "sha256": "0fb9436af3abece13df5e4d45ea2ba654a5a28b8cfa3c7275db4afb3a037cf31",
+      "size": 138105
+    },
+    {
+      "data_row_count": 1438,
+      "line_count": 1439,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-15.csv",
+      "sha256": "5fe0df222d90fabfc3d94f1dd31f0ae46225ec656dc7d7e7a4965312d10f70d2",
+      "size": 138813
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-16.csv",
+      "sha256": "673e249c0c7a770170dd8de25e8e89640891400f3f6c64b9f055ee28b3954f43",
+      "size": 138722
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-17.csv",
+      "sha256": "6259b8ddb1c544fda77477e31092fe57f6e152c18145823a31c161f8cb1cb221",
+      "size": 139032
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-18.csv",
+      "sha256": "a8043632c71a5272f8d9abf261798539e609f4ccceca8b089f1761dc6898fbe9",
+      "size": 139020
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-19.csv",
+      "sha256": "d53e16f74c7a59f980868cb10bb99ea038815319a67c0a97afb7932b08709cb0",
+      "size": 138585
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-20.csv",
+      "sha256": "d6822221efd24088d06ebd660f45fca1dd579ac46e989e4e0a0873d121c2c60f",
+      "size": 138022
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-21.csv",
+      "sha256": "d4a9450006cdd593055305c24bffc4c7a8793c112e109b1c30b3cef64395c01f",
+      "size": 137904
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-22.csv",
+      "sha256": "c7d9b919ba9279ad09a53bf82ffd34996ba174a74026ed8f1d11667daeebaa13",
+      "size": 138890
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-23.csv",
+      "sha256": "b63ae623fc0e1885774251752207947493bcbdad1598d5910d99aa613cfe4f16",
+      "size": 139162
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-24.csv",
+      "sha256": "508b591fa54b4d874337359a5a13c85b2abd3831d22a335731ed5712937aed41",
+      "size": 139848
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-25.csv",
+      "sha256": "70d3ed5ca2bc1a182f0f51792fba316b093be719ea09d35af800c861b93de403",
+      "size": 139720
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-26.csv",
+      "sha256": "4c6187060250e137ca0693a1c58f9b4e1f645557d417c0dbe075bf329443aabe",
+      "size": 139969
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-27.csv",
+      "sha256": "ff95df50f80bcd6ddf4e2b04f86e0ed0f0fd180a77806a65e4c0991479edd9c4",
+      "size": 137997
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-28.csv",
+      "sha256": "bee7cc1c3b153ec5b0922e119cd0f5f91afb6ed2ceec2d191934ce1003d20e0c",
+      "size": 138113
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-29.csv",
+      "sha256": "109e5c98eb7316fe1a6ab992a512e3daf6ac664283277368fd68cd939facce42",
+      "size": 139309
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-06-30.csv",
+      "sha256": "023fa89ac350be9040728eb269b999cd28854a0c89a2d1ca1f63df4212c7794a",
+      "size": 139194
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-01.csv",
+      "sha256": "8f7b1663fca169c59cc5d2a500b3bdd7e0be106d19d0b474cc3ee01e59f583fa",
+      "size": 139340
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-02.csv",
+      "sha256": "d7fe4e3249199c5e5105c95aacd900b2e8fc274a2eed5d207c931811d8d10193",
+      "size": 139217
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-03.csv",
+      "sha256": "d0c7c7d0c7810711cdfc5faa8bb06a66a6b61792c56ec86af04b7437d661b987",
+      "size": 138593
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-04.csv",
+      "sha256": "f96ec4eef852fbb535f4ca35d4ddf40be1459a869c7ea25286939adce24f4bdb",
+      "size": 137985
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-05.csv",
+      "sha256": "106e2cc68ba1b191b016b87059ca85213fcefaecce520db01a87dfceaa873b63",
+      "size": 137978
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-06.csv",
+      "sha256": "82fe3954f1aafa58b04e0f04cac38e00178a2070cb3c31718212574fbe139b25",
+      "size": 139141
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-07.csv",
+      "sha256": "c92c871fdd04451b358ac600df27fa51fe39c83a865edf18bf53c2d17d31fba5",
+      "size": 138948
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-08.csv",
+      "sha256": "1b7e6e9a2e6a9bee307bfd483fdf4166d433d5d0f2f0f3871ea607812697ced8",
+      "size": 139114
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-09.csv",
+      "sha256": "4b43ad5f7ddb84c6f08a5c6d1d6a9fbd4565b6962a68177fe76feea74ae40a8a",
+      "size": 138802
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-10.csv",
+      "sha256": "a6873cc01c366160b4fc802cfb4f13a30a948347be09d367f801b0ecbda46885",
+      "size": 138856
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-11.csv",
+      "sha256": "cfb97ed8e59c49434efa7ba59bbdec05beb014890014c97394bc1cf59d88eee3",
+      "size": 137751
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-12.csv",
+      "sha256": "6b40f5b20b8d330849cef0cc229546e20eff0899d700b5872a16034b141970eb",
+      "size": 138191
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-13.csv",
+      "sha256": "6ea52dded894a795e2734f1fe75d94dde7a6df73090d8bc5b80b6801ea067a6c",
+      "size": 139202
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-14.csv",
+      "sha256": "301034615d56764bb277c08806f7a9cc7a875c809726009f5b25c938bc7a1361",
+      "size": 138972
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-15.csv",
+      "sha256": "027b0a4386e2ee924b9dca81d1afe8a17939eb06263d437db309eb16493f3f29",
+      "size": 138848
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-16.csv",
+      "sha256": "0d30a227d0b58aafa90448b5c401e452a8d8fc075a274e44bdbebdbc4aa5a06d",
+      "size": 138841
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-17.csv",
+      "sha256": "db7eedb17f57644fb54efb2d1e5e4f0648fd2b6aa29e2c685a8c0e6e6b06adac",
+      "size": 139103
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-18.csv",
+      "sha256": "8e696e99686808d86b44b8aab6154fd211d3eab0c656b058168ddbf19d7c3fbc",
+      "size": 137550
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-19.csv",
+      "sha256": "74b75d94c582c8d246e288146c005b294fbac271d083f95f39012741093e0b51",
+      "size": 137773
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-20.csv",
+      "sha256": "4c1529160c029d33d9e748b6ed0b242d53f67197fcaf8e09f642a1e0d6b758f5",
+      "size": 139150
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-21.csv",
+      "sha256": "a7d3d1f00ac877000badd687afad5cc9269ad3c53d5b1cc5137ba70863479a0f",
+      "size": 139129
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-22.csv",
+      "sha256": "624c7f107da650b9c1e0ea9cfdbfcba990a17f3f91c711fab13771b8857ced44",
+      "size": 139110
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-23.csv",
+      "sha256": "1ffd31a1a63cf14bfbaaf7e38a86ebb41548165bbbcb9e3a09c477f1ab917c2d",
+      "size": 138652
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-24.csv",
+      "sha256": "a13529d2e05d8c836a65d3f7bc5ed7fdf110366b6bec6515e8f6ea9d5bb90765",
+      "size": 138675
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-25.csv",
+      "sha256": "4e7857365d7aa89623dd1e0b313322d09c4a13b5284b74815726c0c0c3beb4fc",
+      "size": 137526
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-26.csv",
+      "sha256": "27d1d6c5b0f89137158e873d8b7664c7b53438be0bb35076160eae243971ad74",
+      "size": 137571
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-27.csv",
+      "sha256": "d652cf454d372cf94940395392296267ce003ffec49809efbc63a1c03c8e284e",
+      "size": 138767
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-28.csv",
+      "sha256": "76ae179ea6491ce29ed97e71d419376a64c050ddd09233e4a3580e9688318f78",
+      "size": 138600
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-29.csv",
+      "sha256": "55d02d2f90dda8d86677a2bcf44b192c526174ae3cd6563c1118d8e7f5b520b7",
+      "size": 139062
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-30.csv",
+      "sha256": "d963f6f95fb37bbe3833d31ffc347041b89f6711cda739b4429df5a1b1037cca",
+      "size": 138936
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-07-31.csv",
+      "sha256": "64830d088fdbb5c56fa8c3d8863461a39d02391898e1bdd9c2022e0dda1ed0e8",
+      "size": 138919
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-01.csv",
+      "sha256": "52688af8c30142538887d87a8c67cd62e9670437a6689c94c64a7ae8f5438524",
+      "size": 137274
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-02.csv",
+      "sha256": "5055c2f056da96585796c057c38ea990d10bf2939345e47b66da3fdbe0a5da22",
+      "size": 137623
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-03.csv",
+      "sha256": "2363001264d48de891203173e865063192cc185b457c3f1ace07c533ae0d82db",
+      "size": 138588
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-04.csv",
+      "sha256": "348fc32c9a2784b3a2dbe5d85697ac8b8eb900d22c85d6fc5027e4b51180028b",
+      "size": 138455
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-05.csv",
+      "sha256": "92393ffe5f086e68b47faabc06e6c3009419c8de293fefa3887313652fc11ef4",
+      "size": 138396
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-06.csv",
+      "sha256": "ef6d0fa033e7199eb12df736ef560c6c4108bfcdaaa0d6331f4006e725f27c44",
+      "size": 138072
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-07.csv",
+      "sha256": "45a2337c6b1b5289bb4e752a34d5d254fb0c152e8f464ec0c32674863f078399",
+      "size": 138324
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-08.csv",
+      "sha256": "1a4be012c1c9dd2fd80d4124408c7660ef511d77cfbfe4cd690d3232f38864c3",
+      "size": 136906
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-09.csv",
+      "sha256": "e0a617a0253e399ee6f814f1d5e8ccd041a32d1cf5c7fd7e2aaf467baca1ee8c",
+      "size": 137161
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-10.csv",
+      "sha256": "637b81d5dd3f54cbe76a919e08b36c317901e0b0c134936b2347a19af9a2da10",
+      "size": 138436
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-11.csv",
+      "sha256": "66aca7434ab30c09798c3ca2fc0d096645502fe0bc5cabd4ab81e0868053e21c",
+      "size": 138054
+    },
+    {
+      "data_row_count": 1439,
+      "line_count": 1440,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-12.csv",
+      "sha256": "6f7003a82e5964e33b3857e0012254ca602b3913ff98ed0c842a186fb32d5fb7",
+      "size": 138159
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-13.csv",
+      "sha256": "77b2805cf48ea2f959ff901d0e1f3adb9e6fc53440ccca2e8c30423fabb14b7f",
+      "size": 138146
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-14.csv",
+      "sha256": "1b91049a4e4b7377ce8546fc44020eeefadc4c3026f98bf0845b4d2bf5c33f98",
+      "size": 138403
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-15.csv",
+      "sha256": "71967f9b59d09ccb2473fcb598e329bd2b445ef90970fbbc25a23ba6ab3647e8",
+      "size": 136905
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-16.csv",
+      "sha256": "c5bea7041ffcf401657cb32ed435c32b48d197eba396c6dd715a534e24de96c7",
+      "size": 136737
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-17.csv",
+      "sha256": "a1f89546cdb5df7ea9914f76806a2e04795fe37e9470b3d9fb274247d94d7cc4",
+      "size": 138365
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-18.csv",
+      "sha256": "43e3b3ab7aabe21f326b5a06ec5a41cd017d499adb04bc7c5886f82394912e4b",
+      "size": 137972
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-19.csv",
+      "sha256": "fa2a73d649f5adb9c0526bb0ad7a7e8e4f8129f06586c43905004faf9f34b268",
+      "size": 139233
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-20.csv",
+      "sha256": "6a486d8c6801ebd283a0a2ddc4dbcc1137b5a414c128966b101e132d30b788fa",
+      "size": 140626
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-21.csv",
+      "sha256": "6b4c5dd88a24a6898c4160e44cbea736a407207406aac3eae8801dc0641e703a",
+      "size": 141248
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-22.csv",
+      "sha256": "746d31890cc773feccf73137dc86364fb38b4631d9cbfbb5412fff947a984453",
+      "size": 139167
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-23.csv",
+      "sha256": "0c450fe27eac86e07c1222b313f72f452da3970dcf7a7330172684db514d87d0",
+      "size": 138930
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-24.csv",
+      "sha256": "38d011ac9dd723017c160f0f00b2878ba2faa77b08d1de590878014db5efea30",
+      "size": 140188
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-25.csv",
+      "sha256": "831b6495a982951cb8348acd50717a777421461f62d7f678db9c3f6e38a9f3e3",
+      "size": 139950
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-26.csv",
+      "sha256": "9c1958abbad4b4c5b7b8d443184a0c6149adb67907e3baf4895712119dcd2b30",
+      "size": 139040
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-27.csv",
+      "sha256": "9ebaaa2f561a844ee824331f158f85f0908e7a0e481e8de3a93b997c3cefa105",
+      "size": 139181
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-28.csv",
+      "sha256": "0978c674d20dc12e48fec5e49ecaf5faa2363ecabf7d02f1ed0f0f5baf34e96d",
+      "size": 139263
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-29.csv",
+      "sha256": "13584aace7c256fd448db42a698aa3e04762c0b43532a91de70f92026ebac179",
+      "size": 137768
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-30.csv",
+      "sha256": "fd9521ba743852b6f14c5d7a6403ea183c9176b62cb9737c72977b76f23ca15d",
+      "size": 138087
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-08-31.csv",
+      "sha256": "64a2dc4381771df6ea2a80c73385685204e81f58c2b25bd3ab31b90c0e01022d",
+      "size": 139092
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-01.csv",
+      "sha256": "a94d3da8744089e1b327a2d166e386787955580c94d0e45e3b6d6274834ba901",
+      "size": 138924
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-02.csv",
+      "sha256": "d60196fb03d291d11e03cf8d18e9c8c2fee6b157dd74b634a705f7e64b966f84",
+      "size": 138772
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-03.csv",
+      "sha256": "8e89334c11a896c6f55eb194af219c6e6d9ed76a8b1b6dea5df6b36ed207c322",
+      "size": 139312
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-04.csv",
+      "sha256": "d544d87661ed2c2be1498a282816650e07bc22b1b485ccc9076d8f705de3e481",
+      "size": 138998
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-05.csv",
+      "sha256": "edab19bd8afc26563022cc345851aeb3c21dfdd295e890aa0bb6a3aa32e3d9f5",
+      "size": 137727
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-06.csv",
+      "sha256": "53ce46eea9c3da62072c50b2ee7a6848d71c8978f346de486cb553f3fb8e1634",
+      "size": 137919
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-07.csv",
+      "sha256": "9b68cb639bc31cd7c0e4f54a9f80aff1c7e3ac6de019cec9051efae5e490526e",
+      "size": 138378
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-08.csv",
+      "sha256": "95ca76555618a18ea975b23f21b3c2900486495f009a2248cff9dc03e8a9ec4f",
+      "size": 139286
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-09.csv",
+      "sha256": "d39948c548ae6809cdb935a29a72bc07a61481350df5b92614071f943ce4f765",
+      "size": 138767
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-10.csv",
+      "sha256": "0030c06f69b4f1480efebc50a8c31a14d3a6aebb5d16bcb168b57c676614b066",
+      "size": 138738
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-11.csv",
+      "sha256": "7556025bc28a111add8fc2629b5673f640e477ddd9617a9ad9eea03c7c8bc3c3",
+      "size": 138907
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-12.csv",
+      "sha256": "66f88a7b51b8a7baa9a79fb15db36845054c6d306c2676545bbe4709a9417580",
+      "size": 137353
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-13.csv",
+      "sha256": "e314eb7b99f2e87ec4ad77a7f9646e0512b22d932d206979d7aaf484eb250307",
+      "size": 137538
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-14.csv",
+      "sha256": "e4ee185f85e2b2f15fab1a710662f84311bb9da3d205db9008b9aab7ae013bd0",
+      "size": 138861
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-15.csv",
+      "sha256": "18942c365fe538db85bda880261d182506943727b5aef310aeefa7076a143e5e",
+      "size": 139182
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-16.csv",
+      "sha256": "3847ebddfc165e5b2dd58d32065d2edf9bfcdf73f5270d34827bb0adbd089f94",
+      "size": 138771
+    },
+    {
+      "data_row_count": 1440,
+      "line_count": 1441,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-17.csv",
+      "sha256": "3686c3675a2d824451c31b2f72ead4323c817f7323b1a9482d370172d46c2c99",
+      "size": 138244
+    },
+    {
+      "data_row_count": 1025,
+      "line_count": 1026,
+      "path": "server_journals\\vwap_portfolio_2026-09-18\\normalized_agg\\daily\\2026-09-18.csv",
+      "sha256": "a87bd52b650cfa564b22f66c7fbf098d72bf5e044390fff4064cdea348eacccc",
+      "size": 99303
+    },
+    {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\quality\\recovery_manifest.json",
+      "sha256": "8e6f4dfbef417c274d24ccd63719c8d22515e9ec4ff619d41b65ac8cb94e4757",
+      "size": 10785
+    },
+    {
+      "data_row_count": 20160,
+      "line_count": 20161,
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\quality\\recovery_quality_2026-04-23_1705_to_2026-05-06_2251.csv",
+      "sha256": "b50bdbe779f714a61a51fe37363d10d8cbdcb387f239375b1c07071d0873e65d",
+      "size": 9229219
+    },
+    {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\quality\\recovery_report_2026-04-23_1705_to_2026-05-06_2251.md",
+      "sha256": "5bfe99a62546b92e52d193201b60c965cfa87cbf00a20783ccde8f50128c96da",
+      "size": 1468
+    }
+  ],
+  "output_artifacts": [
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\comparison_variant_metrics.csv",
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\comparison_variant_trades.csv",
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\comparison_variant_monthly.csv",
+      "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2
+    },
+    {
+      "data_row_count": 12,
+      "line_count": 13,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\comparison_variant_loss_filter.csv",
+      "sha256": "7c2d555ca8de3261fa2f1c8e9c6799c9de47d3d13a2c11bd348276d4dd3c4e4c",
+      "size": 1107
+    },
+    {
+      "data_row_count": 2,
+      "line_count": 3,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\other_candidate_groups_inventory.csv",
+      "sha256": "0f2a0343f89819b445d5d4c36e1abb43bfedeb58c5a5daf029e72272a5afed01",
+      "size": 297
+    },
+    {
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\summary.md",
+      "sha256": "a9455a85a62dfe336b70b6532365f46ec36e3ae4e4f2faa5af21b827bec390d4",
+      "size": 2295
+    },
+    {
+      "data_row_count": 96,
+      "line_count": 97,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\normalized_candidates.csv",
+      "sha256": "e6534610afeaa8737d24e18e7d66f864a25caf6ee83e659dc2719fe5479f2f0b",
+      "size": 77709
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\candidate_quality.csv",
+      "sha256": "34ed73ad4f251b7690693e79f2850df448334c903d0488839ce484d09b6cf555",
+      "size": 58
+    },
+    {
+      "data_row_count": 0,
+      "line_count": 1,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\candidate_loss_filter_exclusions.csv",
+      "sha256": "025598e4b7d0dc3fbc095b6137a94b49c9b072b6156569fe0f4350b678845645",
+      "size": 130
+    },
+    {
+      "data_row_count": 1130,
+      "line_count": 1130,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\replay_events.jsonl",
+      "sha256": "6f19ec31514520b77a971e2ba0654e4f1b558e1208ace0e4ad138d8231942e06",
+      "size": 296100
+    },
+    {
+      "data_row_count": 96,
+      "line_count": 97,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\portfolio_trades.csv",
+      "sha256": "5221183c43eafefc6415584ffc074d55ff256eb42c188c4941b9529351137f64",
+      "size": 98015
+    },
+    {
+      "data_row_count": 208,
+      "line_count": 209,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\trade_legs.csv",
+      "sha256": "a939fa27f24dfc8d75c28846e3b468efc76fd316a3b046b30ac67800f02b915f",
+      "size": 30963
+    },
+    {
+      "data_row_count": 45,
+      "line_count": 46,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\position_lock_opportunity_cost.csv",
+      "sha256": "b965ee4bdd06322c20b329dc0b8889eec9efc282eacb27712382bb86762cbddf",
+      "size": 14215
+    },
+    {
+      "data_row_count": 26,
+      "line_count": 27,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\candidate_group_metrics.csv",
+      "sha256": "b9d2d73c3cbe51bda7d8d62b44d4918688994df2db1bac0968e10db7272325a6",
+      "size": 10179
+    },
+    {
+      "data_row_count": 1,
+      "line_count": 2,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\portfolio_metrics.csv",
+      "sha256": "1cb6d561c655564d2074c2c7c9b5c9933f0e4e2fb08cd6ad269b156822aa363e",
+      "size": 403
+    },
+    {
+      "data_row_count": 39,
+      "line_count": 40,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\equity_curve.csv",
+      "sha256": "545c261aef28701504799b7ea3dc102b7e15851d2fd73bb2f4235c864a8ee8ef",
+      "size": 3538
+    },
+    {
+      "data_row_count": 39,
+      "line_count": 40,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\drawdown.csv",
+      "sha256": "e7b2f9a85cf78ccae020c3aa9be9f994bbea17b2abddd6e49c396fc16c978f36",
+      "size": 4258
+    },
+    {
+      "data_row_count": 41,
+      "line_count": 42,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\parity_report.csv",
+      "sha256": "3dc12dbc280d1c78187210c807ee7221760bdf4236f53026d024bb06b8a6ee74",
+      "size": 9078
+    },
+    {
+      "data_row_count": 96,
+      "line_count": 97,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\same_bar_sensitivity.csv",
+      "sha256": "5152c789b21a2b5628e77e4451b3476554370586f238a1b4f7c8d79a0cd6a133",
+      "size": 14429
+    },
+    {
+      "data_row_count": 96,
+      "line_count": 97,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\cost_sensitivity.csv",
+      "sha256": "00999212fcfeb1079d626808827fb9cc21432fde2c634a465420b829bb6265de",
+      "size": 12382
+    },
+    {
+      "data_row_count": 96,
+      "line_count": 97,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\loss_avoidance_counterfactual.csv",
+      "sha256": "28194876be545be1a7dc5e846b5b084fb1751e1cedc84673839335c1c90a1b2c",
+      "size": 21162
+    },
+    {
+      "data_row_count": 3,
+      "line_count": 4,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\loss_avoidance_metrics.csv",
+      "sha256": "2e724042c854cb576c178f86b87242bcc943d661d158cc7a340edcd7c7ce32ad",
+      "size": 1030
+    },
+    {
+      "data_row_count": 18,
+      "line_count": 19,
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\loss_avoidance_coverage.csv",
+      "sha256": "939b0660bfd407682bd4ec7f9761d19bedc2e8ce628ff68287d8161aaa97e7c8",
+      "size": 1984
+    },
+    {
+      "path": "backtests\\vwap_distance_single_position_gt1200_20260918_v1\\loss_avoidance_summary.md",
+      "sha256": "2074800fa01bd75d29cd749c31f363d808484c03d64e79415a892ac9f8b86fa4",
+      "size": 6038
+    }
+  ],
+  "replay_modes": [
+    "executor_portfolio"
+  ],
+  "research_analysis": {
+    "applied_candidate_loss_filter": {
+      "blocked_candidate_count": 0,
+      "input_candidate_count": 96,
+      "kept_candidate_count": 96,
+      "policy": "NONE",
+      "unknown_kept_count": 0,
+      "unknown_policy": "NOT_APPLICABLE"
+    },
+    "artifact_content_sha256": "8484b52f317e4357ebbed86187e459fa9379b6fb5cb94836193e85a66e425595",
+    "classification_invalid_count": 0,
+    "comparison_variant_distribution": {},
+    "discovery_period_end_exclusive_utc": "2026-06-01T00:00:00+00:00",
+    "price_contour": "btcusdc_spot",
+    "requested_comparison_setup_variants": [],
+    "validation_period_start_utc": "2026-06-01T00:00:00+00:00"
+  },
+  "resolved_config": {
+    "commission_calibration_count": 0,
+    "commission_calibration_source": "PINNED_SPEC_REFERENCE_0_000744",
+    "commission_rate": 0.000744,
+    "conversion_model_id": "COMPLETED_MINUTE_BTCUSDC_SPOT_TO_BTCUSDT_REFERENCE_CLOSE_RATIO_V0_2",
+    "cooldown_seconds": 180,
+    "cost_model_id": "COMMISSION_TURNOVER_RATE_V0_1",
+    "description": "Single-position isolated distance cohort; today_flat separately assumes flat at start of day; V8 guarded Plan B deployed trail; no live changes",
+    "entry_expiry_bars": 2,
+    "entry_offset_usd": 0.5,
+    "entry_slippage_bps": 0.0,
+    "execution_policy_id": "EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2",
+    "execution_symbol": "BTCUSDC",
+    "exit_slippage_bps": 1.0,
+    "experiment_id": "vwap_distance_single_position_gt1200_20260918_v1",
+    "fill_model_id": "LIMIT_THEN_MARKET_90S_GUARDED_V0_1",
+    "fixed_notional_usdc": 3000.0,
+    "initial_stop_policy": "volume_confirmed_swing",
+    "initial_swing_buffer_usd": 50.0,
+    "initial_swing_lr": 25,
+    "initial_swing_max_distance_usd": 1200.0,
+    "initial_swing_price_source": "extreme",
+    "initial_swing_require_full_window": true,
+    "live_entry_timeout_seconds": 90,
+    "min_notional": 5.0,
+    "min_qty": 1e-05,
+    "planb_abort_if_past_tp1": true,
+    "planb_max_dev_r_mult": 0.25,
+    "planb_max_dev_usd": 0.0,
+    "planb_price_proxy": "SECOND_NEXT_BAR_OPEN",
+    "planb_require_price": true,
+    "price_contour": "btcusdc_spot",
+    "qty_step": 1e-05,
+    "quality_policy_id": "EFFECTIVE_FEED_RECOVERY_QUALITY_V0_1",
+    "replay_feed_symbol": "BTCUSDC_SPOT_1M",
+    "same_bar_policy_id": "CONSERVATIVE_STOP_FIRST_V0_1",
+    "signal_feature_feed_symbol": "BTCUSDT_USDM_FUTURES_ENRICHED",
+    "signal_price_symbol": "BTCUSDT_REFERENCE",
+    "sl_limit_gap_ticks": 2,
+    "sl_pct": 0.002,
+    "slippage_model_id": "FIXED_BPS_ADVERSE",
+    "stop_slippage_bps": 2.0,
+    "swing_lookback_minutes": 1440,
+    "symbol": "BTCUSDC",
+    "tick_size": 0.01,
+    "tp_r_multipliers": [
+      1.0,
+      2.0
+    ],
+    "trail_confirm_buffer_usd": 20.0,
+    "trail_step_usd": 25.0,
+    "trail_swing_buffer_usd": 50.0,
+    "trail_swing_lookback": 240,
+    "trail_swing_lr": 25,
+    "usdt_usdc_ratio_max": 1.05,
+    "usdt_usdc_ratio_min": 0.95,
+    "utility_policy_id": "SCOUT_UTILITY_V0_1"
+  },
+  "run_fingerprint": "57278eaf272a3be6a81b80e4646ce484bf21a6d0d64e9bbed0ba5748e874c098",
+  "signal_feed_quality_counts": {
+    "PRICE_VOLUME_OI_RECOVERED": 19067,
+    "REAL_ENRICHED": 248624
+  }
+}

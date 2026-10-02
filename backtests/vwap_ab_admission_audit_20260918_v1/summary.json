@@ -1,0 +1,149 @@
+{
+  "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+  "evaluated": 28,
+  "primary_candidates": 27,
+  "primary_decisions": {
+    "KEEP": 19,
+    "BLOCK": 6,
+    "UNKNOWN_KEEP": 2
+  },
+  "primary_components": {
+    "A_block": 4,
+    "B_block": 4,
+    "both_block": 2,
+    "B_unknown": 2
+  },
+  "validation": {
+    "checked": 6
+  },
+  "feed_provenance": {
+    "2026-03-19.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-19.csv",
+      "sha256": "2786da84b078b6af99f12e2c42a818a9b4ad98b3cc4be2bb043f66e4a8c3b490"
+    },
+    "2026-03-26.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-26.csv",
+      "sha256": "4a69471dd5bb55d085de0dcebc194c3ca69dc440816de518ddb0194de703da9c"
+    },
+    "2026-03-30.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-03-30.csv",
+      "sha256": "fee792c4ea7efd3b75814e6f8f97233d4ec97257e9a0c0f7b19ea226b6e3f9e7"
+    },
+    "2026-04-02.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-02.csv",
+      "sha256": "e5662d53a184c2a11bb07b98d95d445bfddbe261da484368a9ee83788966688f"
+    },
+    "2026-04-13.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-13.csv",
+      "sha256": "4ef67ad1d448af703207c77e5d0fcca899ac9056a22e7dce6aff1db534418dca"
+    },
+    "2026-04-19.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-19.csv",
+      "sha256": "2ddb6cfa5cc146316d954fd8bbbd802ac950c8652b58b271539759a2b417f5be"
+    },
+    "2026-04-21.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-21.csv",
+      "sha256": "3be4d0dfa8223333e3c986fef6ff032ba13b03a9f845c11a440fd5e9acc183d1"
+    },
+    "2026-04-22.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-22.csv",
+      "sha256": "6a6035eaf036d3f174716e558d8959adca06d59c0a4e992b726969de26c443bf"
+    },
+    "2026-04-27.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-27.csv",
+      "sha256": "433b88b382aceaed0edb26896262e5e8316cb59f86feabfd3cd177aa68a02644"
+    },
+    "2026-04-29.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-04-29.csv",
+      "sha256": "6c9742eb2c3bd4647679cbe945b2a1d8ab70dd7ec05fc44468354f1b719254cb"
+    },
+    "2026-05-23.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-05-23.csv",
+      "sha256": "ed86967eec11ace2cbd08013adf096c6ded329a355410fe6b55bca8ab25963f2"
+    },
+    "2026-05-24.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-05-24.csv",
+      "sha256": "739b0a57ff487f86abab67749541afc6d79c17e3e56574814c17253ca5386d9f"
+    },
+    "2026-06-02.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-02.csv",
+      "sha256": "8fd410c5306ce1f96cbcfeb5b71414db19c3022922f8e709865aa1083ae323a2"
+    },
+    "2026-06-03.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-03.csv",
+      "sha256": "fdd013edd8505596b5e988e8b58478504bdbda039d8ee8444001c66e4745e15a"
+    },
+    "2026-06-05.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-05.csv",
+      "sha256": "b2b8e9e8e830b2b6fbadfe37cfb5412a2af96223e8cf747d4ef5756ce065401b"
+    },
+    "2026-06-07.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-06-07.csv",
+      "sha256": "06f5840d875231907607503ea37de3ec8ae30c868a4f9d539ede7b8af7b9f2e5"
+    },
+    "2026-07-01.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-01.csv",
+      "sha256": "6faaf2f9f1544070b1ec23fed215b71da47a6eb6df80ba2849814c455cee9280"
+    },
+    "2026-07-08.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-08.csv",
+      "sha256": "d905a9982d59bbb05c9aaa7519ca952c6d5acb9a9876ad0f59a7293bf720e67f"
+    },
+    "2026-07-31.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-07-31.csv",
+      "sha256": "d0b9f82517eff90bc8899d955ebfc7de5b7be561d47d9e665134eb3b46e72bf0"
+    },
+    "2026-08-25.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\recovery_clock_v2_2026-09-08\\effective_feed\\2026-08-25.csv",
+      "sha256": "dfb2231d03eb711aa0d59c155586618d045561a96624121bfe8f3bc692ba79b9"
+    },
+    "2026-08-27.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-27.csv",
+      "sha256": "d23663eb2457277f9b06cdff26597c894569df5f84111a7e02ae894349f23794"
+    },
+    "2026-08-28.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-28.csv",
+      "sha256": "6cfa0cf95be28baf2a82ae6996607010c034d71ea71cab92590d1b2c4e50a64f"
+    },
+    "2026-08-30.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-30.csv",
+      "sha256": "bc3b6aac9026f9ba3ba519c32d1c73650c44aabc29fa03c5aafadbcb319d89a1"
+    },
+    "2026-08-31.csv": {
+      "path": "D:\\Project_V\\btc-orderflow-system\\deltascout\\research_material\\source_archives\\vps_refresh_2026-08-31\\enriched_feed\\2026-08-31.csv",
+      "sha256": "3e16feb4b87023e9ccef0da67538345c3e5d40a4e01bed23b508e906f012b786"
+    },
+    "2026-09-04.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-04.csv",
+      "sha256": "2f53dcd61cd643183e27bcc077b9003d461cd053bd6d8d1b1ad289e9879b9604"
+    },
+    "2026-09-10.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-10.csv",
+      "sha256": "a83fb890ced04b3fd4c16f7a83c853dea65b8b1f1ead052bb6652381ca988143"
+    },
+    "2026-09-13.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-13.csv",
+      "sha256": "934da9a9af7e46d113857789590874a38a267cf5a7c51b27ba8481a5c4425a4b"
+    },
+    "2026-09-14.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-14.csv",
+      "sha256": "a0828d3f942c2057a5ccb309addf686fa3753bb24837d8838a480587c9b885f9"
+    },
+    "2026-09-15.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-15.csv",
+      "sha256": "30d18f4dbed3f56acc2a4550a17b2f77a49ba0415c09fd18223483755eae2937"
+    },
+    "2026-09-16.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-16.csv",
+      "sha256": "d56a1e97ffdf10c9f44807ff56ee712d5c7c4d491b58b6c070d89f7529f5d1cf"
+    },
+    "2026-09-18.csv": {
+      "path": "D:\\Project_V\\Executor\\server_journals\\2026-09-18\\shi_feed\\2026-09-18.csv",
+      "sha256": "aabe8765d4f9174f494456c6a1ba41919b4f884e9ab9bed8b7423f9514e22a00"
+    }
+  },
+  "audit_script_sha256": "5d093b3d3810069e7c90ae99400518d79952b1fec8550356800eb348859734cf",
+  "policy_sha256": "1624d5cf5ec0107b7c557086423cbe5bca45b9a85b5ed7be0edbd44f99313d1e",
+  "quality_sidecar_sha256": "b50bdbe779f714a61a51fe37363d10d8cbdcb387f239375b1c07071d0873e65d",
+  "notes": "A/B states are blocker matches (true means BLOCK). Policy union does not reconstruct historical fail-open circuit, budget, state/audit I/O errors. UNKNOWN is not PASS."
+}

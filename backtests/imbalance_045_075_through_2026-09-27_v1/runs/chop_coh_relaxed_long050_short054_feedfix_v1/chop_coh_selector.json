@@ -1,0 +1,30 @@
+{
+  "experiment_id": "chop_coh_relaxed_long050_short054_feedfix_v1",
+  "bands": {
+    "LONG": [
+      0.5,
+      0.69
+    ],
+    "SHORT": [
+      0.54,
+      0.69
+    ]
+  },
+  "candidate_sources": [
+    "PEAK_EMIT_BASELINE",
+    "imb_band",
+    "chop_coh"
+  ],
+  "chop_coh_ab_input": {
+    "total": 29,
+    "accepted_live_semantics": 20,
+    "blocked": 9
+  },
+  "selector_counts": {
+    "baseline_kept": 102,
+    "imb_band_kept": 20,
+    "chop_coh_kept": 40,
+    "shadow_ab_blocked_baseline_or_imb": 8
+  },
+  "production_changed": false
+}

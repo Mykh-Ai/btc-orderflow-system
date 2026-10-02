@@ -1,0 +1,9 @@
+[
+  {
+    "candidate_id": "SCOUT_fb0782c502d88b2b0e08",
+    "signal_ts_utc": "2026-05-04T10:08:00+00:00",
+    "side": "SHORT",
+    "reason": "INITIAL_STOP_WRONG_SIDE_AFTER_FILL",
+    "detail": "INITIAL_STOP_WRONG_SIDE_AFTER_FILL candidate=SCOUT_fb0782c502d88b2b0e08 side=SHORT fill_ts=2026-05-04T10:09:00+00:00 fill=78823.71 stop=78506.11 planned_entry=78014.72 ratio=0.9897640514340249"
+  }
+]

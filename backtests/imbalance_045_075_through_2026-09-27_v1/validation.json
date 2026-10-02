@@ -1,0 +1,79 @@
+{
+  "status": "PASS",
+  "checks": [
+    {
+      "check": "deltascout_cutoff",
+      "status": "PASS",
+      "last": "2026-09-27.jsonl"
+    },
+    {
+      "check": "legacy_feed_cutoff",
+      "status": "PASS",
+      "last": "2026-09-27.csv"
+    },
+    {
+      "check": "enriched_feed_cutoff",
+      "status": "PASS",
+      "last": "2026-09-27.csv"
+    },
+    {
+      "check": "execution_feed_quality",
+      "status": "PASS",
+      "days": 195
+    },
+    {
+      "check": "baseline_054_069_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 34,
+      "evaluable_trades": 33
+    },
+    {
+      "check": "lower_045_069_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 52,
+      "evaluable_trades": 51
+    },
+    {
+      "check": "upper_054_075_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 55,
+      "evaluable_trades": 53
+    },
+    {
+      "check": "combined_045_075_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 73,
+      "evaluable_trades": 71
+    },
+    {
+      "check": "long_lower_045_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 47,
+      "evaluable_trades": 46
+    },
+    {
+      "check": "long_lower_050_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 40,
+      "evaluable_trades": 39
+    },
+    {
+      "check": "short_lower_050_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 37,
+      "evaluable_trades": 36
+    },
+    {
+      "check": "baseline_long_only_feedfix_v1",
+      "status": "PASS",
+      "candidates_after_ab": 19,
+      "evaluable_trades": 19
+    },
+    {
+      "check": "chop_coh_relaxed_long050_short054_feedfix_v2",
+      "status": "PASS",
+      "candidates_after_ab": 60,
+      "evaluable_trades": 59
+    }
+  ]
+}

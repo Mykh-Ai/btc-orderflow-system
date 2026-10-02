@@ -1,0 +1,2 @@
+candidate_group,inventory_subgroup,candidate_count,long_count,short_count,signal_core_complete_count,comparison_complete_count,comparison_applicable_count,loss_filter_union_known_count
+PEAK_EMIT_BASELINE,loss_avoidance_union,1,0,1,1,0,0,1
