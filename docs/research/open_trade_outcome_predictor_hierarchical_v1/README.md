@@ -8,4 +8,4 @@ The prompt asks `TP1_FIRST` versus `SL_FIRST`, then, only after `TP1_FIRST`, `TP
 
 The pre-call [chronology audit](CHRONOLOGY_AUDIT.md) found an inconsistent timezone interpretation in `EX_EN_1779900918`. All 20 calls are made for paired inspection; the primary scored comparison excludes that case from **both** predictors. No frozen input is edited.
 
-Blind call status: 20/20 completed with no transport or validation errors. The blind results are in `blind_run/`. Outcome comparison must be run only after the blind results are committed as a checkpoint; no outcome metric belongs in this pre-checkpoint document.
+Blind call status: 20/20 completed with no transport or validation errors. The blind results were committed as `cf45a81` before outcome comparison. The paired development evaluation is in `paired_evaluation.json` and `EVALUATION.md`.
