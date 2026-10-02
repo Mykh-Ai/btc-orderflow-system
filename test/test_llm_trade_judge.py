@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -116,16 +117,17 @@ class TestCutoffAndEvidence(unittest.TestCase):
     def test_build_pretrade_evidence_pack_can_attach_market_monitor_snapshot_gap(self):
         judge.configure({
             "SYMBOL": "BTCUSDC",
+            "LLM_TRADE_JUDGE_ENABLED": True,
             "LLM_TRADE_JUDGE_CONTEXT_ENABLED": False,
-            "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True,
-            "LLM_TRADE_JUDGE_MARKET_MONITOR_CURRENT_FEED": "missing-market-monitor-feed.csv",
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": False,
+            "LLM_TRADE_JUDGE_MARKET_MONITOR_CONTEXT_FEED": "missing-market-monitor-feed.csv",
         })
         pack = judge.build_pretrade_evidence_pack(_pos(), {}, "EXITS_PLACED_V15")
         snapshot = pack["market_monitor_snapshot"]
         self.assertTrue(snapshot["enabled"])
-        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v1")
-        self.assertIn("market_monitor_snapshot_current_feed_not_found", snapshot["data_gaps"])
-        self.assertIn("market_monitor_snapshot_current_feed_not_found", pack["data_gaps"])
+        self.assertEqual(snapshot["schema_version"], "market_monitor_snapshot_error_v39a")
+        self.assertIn("market_monitor_snapshot_context_feed_not_found", snapshot["data_gaps"])
+        self.assertIn("market_monitor_snapshot_context_feed_not_found", pack["data_gaps"])
 
     def test_build_pretrade_evidence_pack_preserves_raw_peak_fields(self):
         src_evt = {
@@ -341,15 +343,16 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
             {"analysis_cutoff_ts": "2026-01-01T00:00:00Z"},
             {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": False},
         )
-        self.assertFalse(disabled["enabled"])
-        self.assertIn("market_monitor_snapshot_disabled", disabled["data_gaps"])
+        self.assertTrue(disabled["enabled"])
+        self.assertEqual(disabled["schema_version"], "market_monitor_snapshot_error_v39a")
+        self.assertIn("market_monitor_snapshot_context_feed_missing", disabled["data_gaps"])
 
         missing = judge.build_market_monitor_snapshot_until_cutoff(
             {"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "symbol": "BTCUSDC"},
             {"LLM_TRADE_JUDGE_MARKET_MONITOR_SNAPSHOT_ENABLED": True},
         )
         self.assertTrue(missing["enabled"])
-        self.assertIn("market_monitor_snapshot_current_feed_missing", missing["data_gaps"])
+        self.assertIn("market_monitor_snapshot_context_feed_missing", missing["data_gaps"])
 
     def test_build_market_monitor_snapshot_resolves_current_feed_dir_from_cutoff(self):
         with tempfile.TemporaryDirectory() as td:
@@ -361,11 +364,7 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
                 },
             )
             self.assertTrue(missing["enabled"])
-            self.assertIn("market_monitor_snapshot_current_feed_not_found", missing["data_gaps"])
-            self.assertEqual(
-                missing["source_paths"]["resolved_current_feed"],
-                os.path.join(td, "2026-06-07.csv"),
-            )
+            self.assertIn("market_monitor_snapshot_context_feed_missing", missing["data_gaps"])
 
     def test_market_structure_state_marks_seller_dominance_above_support_not_range(self):
         feed = pd.DataFrame(
@@ -428,20 +427,37 @@ class TestMarketContextUntilCutoff(unittest.TestCase):
         self.assertLessEqual(state["metrics"]["close_position"], 0.35)
 
     def test_prompt_mentions_market_context_and_no_hindsight(self):
-        prompt = judge.build_llm_trade_judge_prompt({"analysis_cutoff_ts": "2026-01-01T00:00:00Z", "market_context": {"enabled": True}})
-        self.assertIn("market_context.deltascout", prompt)
-        self.assertIn("market_monitor_snapshot", prompt)
-        self.assertIn("descriptive pre-cutoff Market Monitor snapshot", prompt)
+        monitor = {
+            "schema_version": "market_monitor_snapshot_v39a",
+            "quality": {"readiness": "READY", "incomplete_windows": []},
+            "lineage": {"base_scope": "continuous_1440_closed_minutes"},
+            "market_state": {"source": "base_monitor_v1_continuous_1440m"},
+            "market_structure_state": {"source": "base_monitor_v1_continuous_1440m"},
+            "windows": {
+                str(minutes): {
+                    "expected_rows": minutes,
+                    "rows_used": minutes,
+                    "complete": True,
+                    "metrics_valid": True,
+                    "missing_timestamps": [],
+                    "duplicate_rows": 0,
+                }
+                for minutes in (5, 15, 30, 60, 240, 1440)
+            },
+        }
+        prompt = judge.build_llm_trade_judge_prompt({
+            "analysis_cutoff_ts": "2026-01-01T00:00:00Z",
+            "market_context": {"enabled": True},
+            "market_monitor_snapshot": monitor,
+        })
+        self.assertIn("decision_cutoff_utc", prompt)
+        self.assertIn('"monitor_snapshot":', prompt)
         self.assertIn("market_structure_state", prompt)
-        self.assertIn("avoid misreading bearish expansion as range/support", prompt)
-        self.assertIn("Do not infer future outcome", prompt)
-        self.assertIn("normalized UTC", prompt)
-        self.assertIn("Do not use raw timestamps for filtering", prompt)
-        self.assertIn("use REJECT", prompt)
-        self.assertIn("Calibrate verdict strictly", prompt)
-        self.assertIn("late chase", prompt)
-        self.assertIn("local 60m/240m extreme", prompt)
-        self.assertIn("Prefer UNCLEAR when broad 1d/3d/7d context", prompt)
+        self.assertIn("Do not infer later prices, fills, outcomes", prompt)
+        self.assertIn('"future_data_allowed":false', prompt)
+        self.assertIn("SUPPORT", prompt)
+        self.assertIn("REJECT", prompt)
+        self.assertIn("UNCLEAR", prompt)
 
 
 class TestVerdictJournal(unittest.TestCase):
@@ -506,6 +522,27 @@ class TestVerdictJournal(unittest.TestCase):
 
 
 class TestRealOpenAIMode(unittest.TestCase):
+    def setUp(self):
+        # These tests exercise verdict/journal/API behavior with valid monitor
+        # input; the real feed routing is covered separately.
+        self.monitor_patch = patch.object(
+            judge, "build_market_monitor_snapshot_until_cutoff",
+            return_value={
+                "enabled": True,
+                "schema_version": "market_monitor_snapshot_v39a",
+                "quality": {"incomplete_windows": [], "readiness": "READY"},
+                "lineage": {"base_scope": "continuous_1440_closed_minutes"},
+                "market_state": {"source": "base_monitor_v1_continuous_1440m", "value": {}},
+                "market_structure_state": {"source": "base_monitor_v1_continuous_1440m", "value": {}},
+                "windows": {str(n): {
+                    "expected_rows": n, "rows_used": n, "complete": True,
+                    "metrics_valid": True, "missing_timestamps": [], "duplicate_rows": 0,
+                } for n in (5, 15, 30, 60, 240, 1440)},
+            },
+        )
+        self.monitor_patch.start()
+        self.addCleanup(self.monitor_patch.stop)
+
     def _configure(self, journal, *, client=None, webhook=None, notify=True, saved=None):
         judge.configure(
             {

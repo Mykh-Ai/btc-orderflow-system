@@ -88,6 +88,7 @@ def build_market_monitor_snapshot_v39a(
     structure = _structure_summary(windows, current_price)
     zones = _zone_summary(base_snapshot)
     market_state = _market_state_summary(base_snapshot, windows)
+    market_structure_state = _market_structure_state_summary(base_snapshot)
     state_memory, next_state = _advance_state(
         previous_state=previous_state,
         state_load=state_load,
@@ -98,7 +99,7 @@ def build_market_monitor_snapshot_v39a(
         quality=quality,
     )
     effective_zones = zones if zones.get("available") else next_state.get("liquidity_zones", zones)
-    if state_path is not None and persist_state:
+    if state_path is not None and persist_state and not quality["incomplete_windows"]:
         _write_state(Path(state_path), next_state)
 
     source_files = sorted({str(x) for x in current["SourceFile"].dropna().tolist()})
@@ -119,6 +120,7 @@ def build_market_monitor_snapshot_v39a(
         },
         "windows": windows,
         "market_state": market_state,
+        "market_structure_state": market_structure_state,
         "structure": structure,
         "liquidity_zones": effective_zones,
         "state_memory": state_memory,
@@ -134,6 +136,7 @@ def build_market_monitor_snapshot_v39a(
                 else ""
             ),
             "base_monitor_contract": BASE_CONTRACT_VERSION if base_snapshot is not None else "not_supplied",
+            "base_scope": (lineage or {}).get("base_scope", ""),
             "state_file": str(state_path) if state_path is not None else "",
             "state_schema_version": STATE_SCHEMA_VERSION,
         },
@@ -207,9 +210,26 @@ def _window_metrics(frame: pd.DataFrame, *, minutes: int, cutoff: pd.Timestamp) 
             "rows_used": 0,
             "complete": False,
             "status": "EMPTY",
-            "missing_timestamps": [_format_ts(ts) for ts in expected[:10]],
+            "missing_timestamps": [_format_ts(ts) for ts in expected],
             "duplicate_rows": 0,
             "data_quality_counts": {},
+        }
+    if not complete:
+        return {
+            "start_timestamp": _format_ts(start),
+            "end_timestamp": _format_ts(cutoff),
+            "expected_rows": int(len(expected)),
+            "rows_used": int(len(window)),
+            "complete": False,
+            "status": "PARTIAL",
+            "missing_timestamps": [_format_ts(ts) for ts in missing],
+            "duplicate_rows": duplicate_count,
+            "data_quality_counts": quality_counts,
+            "recovered_degraded": bool(recovered),
+            "metrics_valid": False,
+            "delta": None,
+            "delta_pct": None,
+            "open_interest_change": None,
         }
     total_qty = float(window["TotalQty"].sum())
     open_price = float(window.iloc[0]["OpenPrice"])
@@ -220,8 +240,9 @@ def _window_metrics(frame: pd.DataFrame, *, minutes: int, cutoff: pd.Timestamp) 
         "expected_rows": int(len(expected)),
         "rows_used": int(len(window)),
         "complete": bool(complete),
+        "metrics_valid": True,
         "status": status,
-        "missing_timestamps": [_format_ts(ts) for ts in missing[:10]],
+        "missing_timestamps": [_format_ts(ts) for ts in missing],
         "duplicate_rows": duplicate_count,
         "data_quality_counts": quality_counts,
         "recovered_degraded": bool(recovered),
@@ -259,7 +280,7 @@ def _quality_summary(
         "current_data_quality_counts": counts,
         "recovered_degraded_present": "RECOVERED_DEGRADED" in counts,
         "incomplete_windows": missing_windows,
-        "readiness": "READY_WITH_RECOVERED_DATA" if "RECOVERED_DEGRADED" in counts else "READY",
+        "readiness": "PARTIAL" if missing_windows else "READY_WITH_RECOVERED_DATA" if "RECOVERED_DEGRADED" in counts else "READY",
     }
 
 
@@ -267,7 +288,7 @@ def _structure_summary(windows: Mapping[str, Mapping[str, Any]], current_price: 
     levels: list[dict[str, Any]] = []
     for key in ("240", "1440"):
         metrics = windows.get(key, {})
-        if not metrics.get("rows_used"):
+        if not metrics.get("complete"):
             continue
         for role, field in (("SUPPORT_OBSERVED_LOW", "low"), ("RESISTANCE_OBSERVED_HIGH", "high")):
             levels.append(
@@ -305,17 +326,23 @@ def _zone_summary(base_snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
 
 def _market_state_summary(base_snapshot: Mapping[str, Any] | None, windows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     if base_snapshot:
-        structure_state = base_snapshot.get("market_structure_state")
-        if isinstance(structure_state, Mapping) and structure_state:
-            return {"source": "base_monitor_snapshot_v1", "value": _json_safe(structure_state)}
         market_state = base_snapshot.get("market_state")
         if isinstance(market_state, Mapping) and market_state:
-            return {"source": "base_monitor_snapshot_v1", "value": _json_safe(market_state)}
+            return {"source": "base_monitor_v1_continuous_1440m", "value": _json_safe(market_state)}
     m = windows.get("1440", {})
+    if not m.get("complete"):
+        return {"source": "unavailable", "value": None}
     delta = float(m.get("delta", 0.0) or 0.0)
     change = float(m.get("price_change_pct", 0.0) or 0.0)
     bias = "BULLISH_FLOW" if delta > 0 and change >= 0 else "BEARISH_FLOW" if delta < 0 and change <= 0 else "MIXED_FLOW"
     return {"source": "v39a_descriptive_fallback", "value": {"bias": bias}}
+
+
+def _market_structure_state_summary(base_snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+    value = (base_snapshot or {}).get("market_structure_state")
+    if isinstance(value, Mapping) and value:
+        return {"source": "base_monitor_v1_continuous_1440m", "value": _json_safe(value)}
+    return {"source": "unavailable", "value": None}
 
 
 def _load_state(state_path: str | Path | None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
