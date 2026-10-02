@@ -1,0 +1,15 @@
+{"schema": 1, "event": "DELTA_MIN", "seq": 1, "ts": "2026-03-16 14:44:00", "kind": "short", "delta": -40.62, "vol": 108.97, "imb": 0.373, "price": 74175.922294, "vwap": 73138, "poc": 74120}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 2, "ts": "2026-03-16 14:44:00", "kind": "short", "reject_reason": "no_prev_peak", "delta": -40.62, "vol": 108.97, "imb": 0.373, "price": 74175.922294, "vwap": 73138}
+{"schema": 1, "event": "DELTA_MIN", "seq": 3, "ts": "2026-03-16 15:30:00", "kind": "short", "delta": -42.66, "vol": 101.67, "imb": 0.42, "price": 73746.708674, "vwap": 73246, "poc": 74120}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 4, "ts": "2026-03-16 15:30:00", "kind": "short", "reject_reason": "vwap_side", "delta": -42.66, "vol": 101.67, "imb": 0.42, "price": 73746.708674, "vwap": 73246}
+{"schema": 1, "event": "DELTA_MIN", "seq": 5, "ts": "2026-03-16 15:40:00", "kind": "short", "delta": -96.78, "vol": 166.22, "imb": 0.582, "price": 73156.681514, "vwap": 73272, "poc": 74120}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 6, "ts": "2026-03-16 15:40:00", "kind": "short", "reject_reason": "3of3_fail", "delta": -96.78, "vol": 166.22, "imb": 0.582, "price": 73156.681514, "vwap": 73272, "prev_price": 73746.708674, "prev_vol": 101.66825, "prev_vwap": 73246}
+{"schema": 1, "event": "DELTA_MAX", "seq": 7, "ts": "2026-03-16 18:52:00", "kind": "long", "delta": 52.46, "vol": 60.13, "imb": 0.872, "price": 73895.932167, "vwap": 73384, "poc": 73980}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 8, "ts": "2026-03-16 18:52:00", "kind": "long", "reject_reason": "direction_mismatch", "delta": 52.46, "vol": 60.13, "imb": 0.872, "price": 73895.932167, "vwap": 73384}
+{"schema": 1, "event": "DELTA_MAX", "seq": 9, "ts": "2026-03-16 19:09:00", "kind": "long", "delta": 114.88, "vol": 195.12, "imb": 0.589, "price": 74148.108226, "vwap": 73398, "poc": 73980}
+{"schema": 1, "event": "DELTA_MIN", "seq": 1, "ts": "2026-03-16 20:00:00", "kind": "short", "delta": -24.44, "vol": 41.25, "imb": 0.592, "price": 73902.013835, "vwap": 73441, "poc": 73980}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 2, "ts": "2026-03-16 20:00:00", "kind": "short", "reject_reason": "no_prev_peak", "delta": -24.44, "vol": 41.25, "imb": 0.592, "price": 73902.013835, "vwap": 73441}
+{"schema": 1, "event": "DELTA_MIN", "seq": 3, "ts": "2026-03-16 20:01:00", "kind": "short", "delta": -77.19, "vol": 115.72, "imb": 0.667, "price": 73846.435484, "vwap": 73443, "poc": 73980}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 4, "ts": "2026-03-16 20:01:00", "kind": "short", "reject_reason": "vwap_side", "delta": -77.19, "vol": 115.72, "imb": 0.667, "price": 73846.435484, "vwap": 73443}
+{"schema": 1, "event": "DELTA_MIN", "seq": 5, "ts": "2026-03-16 23:55:00", "kind": "short", "delta": -43.74, "vol": 49.69, "imb": 0.88, "price": 74773.941678, "vwap": 73625, "poc": 73980}
+{"schema": 1, "event": "CANDIDATE_COMPARISON_REJECT", "seq": 6, "ts": "2026-03-16 23:55:00", "kind": "short", "reject_reason": "vwap_side", "delta": -43.74, "vol": 49.69, "imb": 0.88, "price": 74773.941678, "vwap": 73625}

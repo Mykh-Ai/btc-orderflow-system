@@ -1,0 +1,7 @@
+MANIFEST.csv text eol=lf
+*.sha256 text eol=lf
+SHA256SUMS.txt text eol=lf
+README.md text eol=lf
+enriched_feed/*.csv -text -eol
+legacy_feed/*.csv -text -eol
+deltascout/*.jsonl -text -eol
