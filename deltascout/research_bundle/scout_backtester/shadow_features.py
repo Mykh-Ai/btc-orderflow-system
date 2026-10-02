@@ -115,6 +115,8 @@ def enrich_shadow_flags(
             replace(
                 candidate,
                 shadow_flags={
+                    **{key: value for key, value in candidate.shadow_flags.items()
+                       if key in {"vwap_distance_usd", "downstream_admission_status"}},
                     **flags,
                     "same_side_peak_count_24h": len(values),
                     "same_side_peak_percentile_24h": percentile,

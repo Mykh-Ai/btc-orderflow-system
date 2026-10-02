@@ -54,6 +54,18 @@ python -m deltascout.research_bundle.scout_backtester.cli `
   --fill-model MARKETABLE_LIMIT_NEXT_BAR_V0_1 `
   --same-bar-policy CONSERVATIVE_STOP_FIRST_V0_1 `
   --cost-model COMMISSION_TURNOVER_RATE_V0_1 `
+  --initial-stop-policy volume_confirmed_swing `
+  --swing-lookback-minutes 1440 `
+  --initial-swing-price-source extreme `
+  --initial-swing-lr 25 `
+  --initial-swing-buffer-usd 50 `
+  --initial-swing-max-distance-usd 1200 `
+  --initial-swing-require-full-window `
+  --trail-swing-lookback 240 `
+  --trail-swing-lr 25 `
+  --trail-swing-buffer-usd 50 `
+  --trail-step-usd 25 `
+  --trail-confirm-buffer-usd 20 `
   --replay-modes independent_opportunity,executor_portfolio `
   --experiment-id scout_peak_vs_almost_peak_btcusdc_spot_dual_feed_v1
 ```
@@ -108,6 +120,40 @@ remain admitted under the fail-open contract. Audit the blocked identities in
 `candidate_loss_filter_exclusions.csv` and the counts in the manifest's
 `research_analysis.applied_candidate_loss_filter` object.
 
+## VWAP-distance DELTA cohort
+
+For the requested isolated counterfactual of archived distance rejects, replace
+the baseline candidate-group argument with:
+
+```text
+--candidate-groups VWAP_DISTANCE_REJECT
+--candidate-loss-filter NONE
+```
+
+An empty/nonexistent candidate-root is allowed if raw-archive-root contains the
+recorded distance rejects. Keep the complete raw archive for shadow history;
+do not rewrite rejects into fabricated PEAK_EMIT records. No separate DELTA row
+is replayed: the original-side terminal rejection supplies the candidate.
+The normalizer records PRE_ADMISSION_REJECT and downstream admission not evaluated.
+Existing default/OTHER_COMPARISON_REJECT selection remains unchanged unless this
+new group is requested.
+
+For a separate >$1200 cohort, add `--vwap-distance-min-usd 1200` and choose a new
+experiment id. It is strictly greater, not >=, and is not a live filter setting.
+Audit the distance in normalized_candidates.csv shadow_flags and the selector
+in run_manifest.json. Do not confuse it with initial-swing-max-distance-usd.
+
+Use the declared V8/guarded Plan B settings for the requested experiment, full
+historical structural coverage and official Spot execution provenance. Missing
+coverage, incomplete trades or stop-selection errors must remain explicit;
+do not force them into losses/wins. Distinguish independent opportunities from
+one-position portfolio outcomes and nearby actual admitted trades.
+Interpretation: these deltas may fail later gates; the result does not measure
+the sole effect of removing VWAP from live DeltaScout. For the Executor analyst
+workflow, append results and run links to
+`D:/Project_V/Executor/backtests/AB_FILTER_REVIEW.md` under a separate non-AB
+VWAP-distance research heading; do not classify them as AB vetoes.
+
 ## Validation before interpreting results
 
 ```powershell
@@ -127,6 +173,12 @@ Require all synthetic state-machine tests to pass. Then review:
 5. `loss_avoidance_summary.md`, including protected outcomes blocked per cohort;
 6. `same_bar_sensitivity.csv` and `cost_sensitivity.csv`;
 7. `summary.md` only after the evidence tables above.
+
+For live loss-filter counterfactuals, the compiler treats
+`PEAK_LOSS_FILTER_REJECT` as the primary blocked-signal record. If that second audit
+row is absent, a durable `PEAK_LOSS_FILTER_DECISION` with
+`effective_action=BLOCK` and a complete `would_be_peak` is accepted as a fallback.
+When both rows exist, they deduplicate to one `FILTER_REJECTED` PEAK candidate.
 
 ## Portfolio quality boundary
 

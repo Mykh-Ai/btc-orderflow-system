@@ -24,6 +24,32 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, object]])
         writer.writerows(rows)
 
 
+def test_cli_defaults_match_deployed_executor_stop_contracts() -> None:
+    args = build_parser().parse_args(
+        [
+            "--candidate-root", "reviews",
+            "--feed-root", "feed",
+            "--execution-feed-root", "execution",
+            "--date-from", "2026-01-01",
+            "--date-to", "2026-01-01",
+            "--candidate-groups", "PEAK_EMIT_BASELINE",
+            "--experiment-id", "defaults",
+        ]
+    )
+    assert args.initial_stop_policy == "volume_confirmed_swing"
+    assert args.swing_lookback_minutes == 1440
+    assert args.initial_swing_price_source == "extreme"
+    assert args.initial_swing_lr == 25
+    assert args.initial_swing_buffer_usd == 50.0
+    assert args.initial_swing_max_distance_usd == 1200.0
+    assert args.initial_swing_require_full_window is True
+    assert args.trail_swing_lookback == 240
+    assert args.trail_swing_lr == 25
+    assert args.trail_swing_buffer_usd == 50.0
+    assert args.trail_step_usd == 25.0
+    assert args.trail_confirm_buffer_usd == 20.0
+
+
 def test_cli_materializes_required_artifacts_and_rejects_overwrite(tmp_path: Path) -> None:
     reviews = tmp_path / "reviews"
     raw = tmp_path / "raw_archive"
@@ -65,11 +91,19 @@ def test_cli_materializes_required_artifacts_and_rejects_overwrite(tmp_path: Pat
             "--date-from", day,
             "--date-to", day,
             "--candidate-groups", "PEAK_EMIT_BASELINE",
+            "--initial-stop-policy", "window_extreme",
+            "--swing-lookback-minutes", "10",
             "--experiment-id", "e2e",
         ]
     )
     manifest = run(args)
     assert manifest.exists()
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["resolved_config"]["trail_swing_lookback"] == 240
+    assert payload["resolved_config"]["trail_swing_lr"] == 25
+    assert payload["resolved_config"]["trail_swing_buffer_usd"] == 50.0
+    assert payload["resolved_config"]["trail_step_usd"] == 25.0
+    assert payload["resolved_config"]["trail_confirm_buffer_usd"] == 20.0
     required = {
         "run_manifest.json", "normalized_candidates.csv", "candidate_quality.csv",
         "replay_events.jsonl", "independent_trades.csv", "portfolio_trades.csv",
@@ -126,6 +160,11 @@ def test_cli_usdt_signal_contour_reuses_quality_checked_signal_bars(tmp_path: Pa
             "--date-from", day,
             "--date-to", day,
             "--candidate-groups", "PEAK_EMIT_BASELINE",
+            "--initial-stop-policy", "window_extreme",
+            "--swing-lookback-minutes", "10",
+            "--initial-swing-price-source", "close",
+            "--initial-swing-buffer-usd", "0",
+            "--no-initial-swing-require-full-window",
             "--experiment-id", "usdt-contour",
         ]
     )

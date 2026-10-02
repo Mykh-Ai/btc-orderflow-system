@@ -1,0 +1,31 @@
+{
+  "schema_version": "llm_trade_judge_verdict_v1",
+  "verdict_id": "llmj-6a3c7bd7fbb34c57be298c749671dd57",
+  "created_at": "2026-08-31T08:59:56.556435+00:00",
+  "trade_key": "EX_EN_1788166698",
+  "trigger": "EXITS_PLACED_V15",
+  "is_primary": true,
+  "model": "gpt-5.5",
+  "llm_call_status": "success",
+  "verdict": "REJECT",
+  "competitive_side": "LLM_REJECT",
+  "confidence": 0.74,
+  "setup_class": "continuation_pressure",
+  "reason_codes": [
+    "local_15m_60m_240m_buy_flow_supports_direction_but_is_already_extended",
+    "entry_near_60m_and_240m_high_with_close_position_0_9825",
+    "delta_peak_is_not_strong_enough_to_justify_late_continuation_chase",
+    "price_above_vwap_and_rolling_vwap_by_about_0_3pct_indicates_stretched_entry_not_discount",
+    "high_confidence_resistance_78958_81500_sits_before_and_around_tp1",
+    "broad_3d_bearish_flow_and_1d_negative_delta_conflict_with_local_long"
+  ],
+  "risk_flags": [
+    "late_chase_into_local_extreme",
+    "overhead_supply_resistance_near_target",
+    "tp1_inside_significant_resistance_zone",
+    "local_bullish_flow_vs_broad_bearish_context_conflict",
+    "30d_context_recovered_degraded",
+    "support_below_entry_but_not_enough_for_fresh_edge"
+  ],
+  "summary_ua": "Лонг має локальне підтвердження потоком, але вхід зроблено майже на 60m/240m максимумі після вже розтягнутого руху. Поточний peak помірний, ціна ~0.3% вище VWAP, а сильна зона опору 78958–81500 починається до/біля TP1. Ширший 3d контекст ведмежий, тому чистої свіжої переваги для long на вході немає."
+}

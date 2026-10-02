@@ -16,6 +16,8 @@ from .contracts import (
     Candidate,
     CandidateQualityRow,
     REQUIRED_GROUPS,
+    SUPPORTED_GROUPS,
+    VWAP_DISTANCE_GROUP,
 )
 
 
@@ -117,18 +119,37 @@ def _normalize_filter_reject(row: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_filter_block_decision(row: dict[str, Any]) -> dict[str, Any] | None:
+    if (
+        _text(row.get("event")) != "PEAK_LOSS_FILTER_DECISION"
+        or _text(row.get("effective_action")).upper() != "BLOCK"
+    ):
+        return None
+    would_be_peak = row.get("would_be_peak")
+    normalized = dict(would_be_peak) if isinstance(would_be_peak, dict) else {}
+    normalized.update(row)
+    normalized["event"] = "PEAK_LOSS_FILTER_DECISION"
+    normalized["event_type"] = "PEAK_LOSS_FILTER_DECISION"
+    normalized.setdefault("reject_reason", "loss_avoidance_union")
+    return normalized
+
+
 def _load_raw_day(
     path: Path,
 ) -> tuple[
     dict[tuple[str, str, str, str], dict[str, Any]],
     dict[tuple[str, str], dict[str, Any]],
     list[tuple[int, dict[str, Any]]],
+    list[tuple[int, dict[str, Any]]],
+    list[tuple[int, dict[str, Any]]],
 ]:
     terminals: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     raw_events: dict[tuple[str, str], dict[str, Any]] = {}
     filter_rejects: list[tuple[int, dict[str, Any]]] = []
+    filter_block_decisions: list[tuple[int, dict[str, Any]]] = []
+    distance_rejects: list[tuple[int, dict[str, Any]]] = []
     if not path.exists():
-        return terminals, raw_events, filter_rejects
+        return terminals, raw_events, filter_rejects, filter_block_decisions, distance_rejects
     with path.open("r", encoding="utf-8-sig") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
@@ -145,7 +166,13 @@ def _load_raw_day(
                 terminals[_event_key(row)] = row
                 if event == "PEAK_LOSS_FILTER_REJECT":
                     filter_rejects.append((line_number, row))
-    return terminals, raw_events, filter_rejects
+                if event == "CANDIDATE_COMPARISON_REJECT" and row.get("reject_reason") == "vwap_distance":
+                    distance_rejects.append((line_number, row))
+            elif event == "PEAK_LOSS_FILTER_DECISION":
+                block_decision = _normalize_filter_block_decision(row)
+                if block_decision is not None:
+                    filter_block_decisions.append((line_number, block_decision))
+    return terminals, raw_events, filter_rejects, filter_block_decisions, distance_rejects
 
 
 def comparison_diagnostics(row: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +226,11 @@ def _comparison_diagnostics(row: dict[str, Any]) -> tuple[int | None, str | None
 
 
 def _candidate_group(event_type: str, reject_reason: str, pass_count: int | None) -> str:
-    if event_type in {"PEAK_EMIT", "PEAK_LOSS_FILTER_REJECT"}:
+    if event_type in {
+        "PEAK_EMIT",
+        "PEAK_LOSS_FILTER_REJECT",
+        "PEAK_LOSS_FILTER_DECISION",
+    }:
         return "PEAK_EMIT_BASELINE"
     if event_type == "CANDIDATE_GATE_REJECT":
         return "GATE_REJECT"
@@ -271,11 +302,17 @@ def compile_candidates(
     raw_archive_root: Path | None = None,
     candidate_groups: Iterable[str] | None = None,
     price_precision: int = 2,
+    vwap_distance_min_usd: float | None = None,
 ) -> tuple[list[Candidate], list[CandidateQualityRow]]:
     selected_groups = set(candidate_groups or REQUIRED_GROUPS)
-    unknown_groups = selected_groups.difference(REQUIRED_GROUPS)
+    unknown_groups = selected_groups.difference(SUPPORTED_GROUPS)
     if unknown_groups:
         raise BacktestContractError(f"unknown candidate groups={sorted(unknown_groups)}")
+    if vwap_distance_min_usd is not None:
+        if not math.isfinite(vwap_distance_min_usd) or vwap_distance_min_usd < 0:
+            raise BacktestContractError("vwap distance minimum must be finite and nonnegative")
+        if selected_groups != {VWAP_DISTANCE_GROUP}:
+            raise BacktestContractError("vwap distance minimum requires only VWAP_DISTANCE_REJECT")
     raw_archive_root = raw_archive_root or candidate_root.parent / "raw_archive"
     candidates: list[Candidate] = []
     quality: list[CandidateQualityRow] = []
@@ -298,6 +335,9 @@ def compile_candidates(
             pass_count, failed = comparison["pass_count"], comparison["failed"]
             reject_reason = _text(merged.get("reject_reason"))
             group = _candidate_group(event_type, reject_reason, pass_count)
+            if (event_type == "CANDIDATE_COMPARISON_REJECT"
+                    and reject_reason == "vwap_distance" and VWAP_DISTANCE_GROUP in selected_groups):
+                group = VWAP_DISTANCE_GROUP
             if reject_reason == "3of3_fail" and not comparison["valid"]:
                 quality.append(
                     CandidateQualityRow(
@@ -312,7 +352,23 @@ def compile_candidates(
             volume = _first_number(merged.get("vol"), merged.get("volume"))
             if price is None or delta is None or volume is None:
                 raise BacktestContractError("candidate requires signal price, delta, and volume")
-            identity_event_type = "PEAK_EMIT" if event_type == "PEAK_LOSS_FILTER_REJECT" else event_type
+            flags = _shadow_flags(merged)
+            if group == VWAP_DISTANCE_GROUP:
+                vwap = _first_number(merged.get("vwap"), merged.get("vwap_now"))
+                if price <= 0 or vwap is None or vwap <= 0:
+                    raise BacktestContractError("VWAP_DISTANCE_REJECT requires positive price and vwap")
+                distance = price - vwap if side == "LONG" else vwap - price
+                if distance <= 0:
+                    raise BacktestContractError("VWAP_DISTANCE_REJECT price is on the wrong VWAP side")
+                if vwap_distance_min_usd is not None and distance <= vwap_distance_min_usd:
+                    return
+                flags["vwap_distance_usd"] = distance
+                flags["downstream_admission_status"] = "NOT_EVALUATED"
+            identity_event_type = (
+                "PEAK_EMIT"
+                if event_type in {"PEAK_LOSS_FILTER_REJECT", "PEAK_LOSS_FILTER_DECISION"}
+                else event_type
+            )
             dedupe_key = (
                 signal_ts.replace(second=0, microsecond=0).isoformat(),
                 side,
@@ -351,12 +407,12 @@ def compile_candidates(
                     poc=_first_number(merged.get("poc")),
                     comparison_3of3_pass_count=pass_count,
                     comparison_3of3_failed_subconditions=failed,
-                    shadow_flags=_shadow_flags(merged),
+                    shadow_flags=flags,
                     source_path=str(source_path),
                     source_row_hash=source_hash,
                     admission_status=(
                         "FILTER_REJECTED"
-                        if event_type == "PEAK_LOSS_FILTER_REJECT"
+                        if event_type in {"PEAK_LOSS_FILTER_REJECT", "PEAK_LOSS_FILTER_DECISION"}
                         else "ADMITTED"
                         if event_type == "PEAK_EMIT"
                         else "PRE_ADMISSION_REJECT"
@@ -380,7 +436,7 @@ def compile_candidates(
         day = path.parent.name
         if day < date_from or day > date_to:
             continue
-        terminals, raw_events, _ = _load_raw_day(raw_archive_root / f"{day}.jsonl")
+        terminals, raw_events, _, _, _ = _load_raw_day(raw_archive_root / f"{day}.jsonl")
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             required = {"ts", "event_type", "kind"}
@@ -400,14 +456,25 @@ def compile_candidates(
                         merged[key] = value
                 append_candidate(merged, event_type=event_type, source_path=path, row_number=row_number)
 
-    raw_filter_reject_count = 0
+    raw_filter_counterfactual_count = 0
+    raw_distance_counterfactual_count = 0
     for raw_path in sorted(raw_archive_root.glob("*.jsonl")):
         day = raw_path.stem
         if day < date_from or day > date_to:
             continue
-        _, raw_events, filter_rejects = _load_raw_day(raw_path)
+        _, raw_events, filter_rejects, filter_block_decisions, distance_rejects = _load_raw_day(raw_path)
+        if VWAP_DISTANCE_GROUP in selected_groups:
+            for line_number, distance_reject in distance_rejects:
+                raw_distance_counterfactual_count += 1
+                merged = dict(raw_events.get(_raw_key(distance_reject), {}))
+                merged.update(distance_reject)
+                append_candidate(
+                    merged, event_type="CANDIDATE_COMPARISON_REJECT",
+                    source_path=raw_path, row_number=line_number,
+                    suppress_duplicate_quality=True,
+                )
         for line_number, filter_reject in filter_rejects:
-            raw_filter_reject_count += 1
+            raw_filter_counterfactual_count += 1
             merged = dict(raw_events.get(_raw_key(filter_reject), {}))
             merged.update(filter_reject)
             append_candidate(
@@ -417,9 +484,22 @@ def compile_candidates(
                 row_number=line_number,
                 suppress_duplicate_quality=True,
             )
+        # Process decision-only fallbacks after explicit rejects. Both map to the
+        # PEAK identity key, so a normal DECISION+REJECT pair remains one candidate.
+        for line_number, block_decision in filter_block_decisions:
+            raw_filter_counterfactual_count += 1
+            merged = dict(raw_events.get(_raw_key(block_decision), {}))
+            merged.update(block_decision)
+            append_candidate(
+                merged,
+                event_type="PEAK_LOSS_FILTER_DECISION",
+                source_path=raw_path,
+                row_number=line_number,
+                suppress_duplicate_quality=True,
+            )
 
     candidates.sort(key=lambda item: (item.signal_ts_utc, item.candidate_id))
-    if not paths and raw_filter_reject_count == 0:
+    if not paths and raw_filter_counterfactual_count == 0 and raw_distance_counterfactual_count == 0:
         raise BacktestContractError(f"no events_context CSV files found under {candidate_root}")
     return candidates, quality
 

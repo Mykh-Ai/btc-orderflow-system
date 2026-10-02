@@ -67,6 +67,8 @@ def _load_trade_outcomes_events(trade_outcomes_file: Path, source_date: str | No
     for row in read_jsonl(trade_outcomes_file):
         if not isinstance(row, dict):
             continue
+        if row.get("excluded_from_scoring") is True or row.get("test_trade") is True:
+            continue
         lc = row.get("last_closed") if isinstance(row.get("last_closed"), dict) else None
         if not lc:
             continue
@@ -131,9 +133,24 @@ def _load_manual_close_overrides(overrides_file: Path, source_date: str) -> list
     return rows
 
 
+def _has_canonical_outcome_on_date(path: Path, source_date: str) -> bool:
+    if not path.exists():
+        return False
+    for row in read_jsonl(path):
+        lc = row.get("last_closed") if isinstance(row, dict) else None
+        if not isinstance(lc, dict):
+            continue
+        ts = pd.to_datetime(lc.get("ts") or row.get("ts"), utc=True, errors="coerce")
+        if pd.notna(ts) and ts.strftime("%Y-%m-%d") == source_date:
+            return True
+    return False
+
+
 def _load_close_events(exec_log_file: Path, state_file: Path, trade_outcomes_file: Path, source_date: str) -> list[dict[str, Any]]:
     trade_events = _load_trade_outcomes_events(trade_outcomes_file, source_date=source_date)
-    if trade_events:
+    # An excluded-only canonical day must not fall back to executor.log or
+    # state:last_closed, which would reintroduce the same test trade.
+    if trade_events or _has_canonical_outcome_on_date(trade_outcomes_file, source_date):
         return trade_events
 
     # legacy/backfill compatibility path when canonical trade outcomes are unavailable

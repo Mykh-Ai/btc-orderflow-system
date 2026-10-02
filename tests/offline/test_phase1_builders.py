@@ -469,6 +469,21 @@ def test_trade_outcomes_date_aware_fallback_to_legacy(tmp_path):
     assert all(evt.get("event") != "EXEC_CLOSE" for evt in primary)
 
 
+def test_excluded_test_trade_never_reenters_close_outcomes_via_fallback(tmp_path):
+    trade_outcomes = tmp_path / "trade_outcomes.jsonl"
+    trade_outcomes.write_text(
+        '{"ts":"2026-01-01T00:30:00Z","excluded_from_scoring":true,"test_trade":true,"last_closed":{"ts":"2026-01-01T00:30:00Z","trade_key":"TEST-1","side":"SHORT"}}\n',
+        encoding="utf-8",
+    )
+    exec_log = tmp_path / "executor.log"
+    exec_log.write_text('{"action":"CLOSE","ts":"2026-01-01T00:30:00Z","trade_key":"TEST-1"}\n', encoding="utf-8")
+    state_file = tmp_path / "executor_state.json"
+    state_file.write_text('{"last_closed":{"ts":"2026-01-01T00:30:00Z","trade_key":"TEST-1"}}', encoding="utf-8")
+
+    assert _load_trade_outcomes_events(trade_outcomes, source_date="2026-01-01") == []
+    assert _load_close_events(exec_log, state_file, trade_outcomes, "2026-01-01") == []
+
+
 def test_trade_outcomes_dedupe_prefers_trade_key_identity():
     e1 = {
         "ts": "2026-01-01T00:30:00Z",

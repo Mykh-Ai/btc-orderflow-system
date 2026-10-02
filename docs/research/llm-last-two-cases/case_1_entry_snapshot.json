@@ -1,0 +1,635 @@
+{
+  "schema_version": "LLM_ENTRY_SNAPSHOT_V2",
+  "prompt_version": "LLM_ENTRY_PROMPT_V2",
+  "snapshot_type": "ENTRY_ONLY",
+  "decision_cutoff_utc": "2026-09-14T02:12:00+00:00",
+  "signal": {
+    "trade_key": "EX_EN_1789351940",
+    "symbol": "BTCUSDC",
+    "direction": "long",
+    "signal_ts_utc": "2026-09-14T02:12:00+00:00",
+    "decision_cutoff_utc": "2026-09-14T02:12:00+00:00",
+    "cutoff_source": "position.src_evt.ts",
+    "timestamp_contract": "legacy_feed_local_naive",
+    "fields": {
+      "kind": "long",
+      "price": 77250.519382,
+      "price_usdt": 77250.519382,
+      "delta": 33.73,
+      "vol": 50.75,
+      "imb": 0.665,
+      "vwap": 76991,
+      "poc": 77300,
+      "ts": "2026-09-14 04:12:00"
+    }
+  },
+  "upstream_admission": {
+    "schema_version": "DS_ENTRY_ADMISSION_V1",
+    "source": "not_present_in_signal",
+    "policy_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+    "decision": "EMITTED_WITHOUT_FILTER_PROVENANCE",
+    "effective_action": "UNKNOWN",
+    "filter_a": {
+      "status": "UNKNOWN",
+      "purpose": "Reject a weak same-side PEAK relative to the prior 24-hour same-side peak distribution.",
+      "condition": "same_side_peak_percentile_24h <= 50.0 => BLOCK"
+    },
+    "filter_b": {
+      "status": "UNKNOWN",
+      "purpose": "Reject a move with falling trusted OI and weak direction-adjusted 240-minute flow.",
+      "condition": "oi_change_60m < 0 AND directional_delta_pct_240m < 0.06 => BLOCK"
+    },
+    "combined_rule": "A OR B blocker; both known PASS values are required for KEEP.",
+    "unknown_policy": "UNKNOWN_KEEP"
+  },
+  "execution_geometry": {
+    "schema_version": "ENTRY_EXECUTION_GEOMETRY_V1",
+    "direction": "long",
+    "entry_price": 77309.91,
+    "planned_stop_loss": 76419.63,
+    "planned_take_profit_1": 78021.01,
+    "planned_take_profit_2": 78821.7,
+    "risk_distance": 890.2799999999988,
+    "take_profit_1_R": 0.7987374758502855,
+    "take_profit_2_R": 1.6981062137754364,
+    "geometry_status": "VALID",
+    "stop_policy": {
+      "INITIAL_STOP_POLICY": "VOLUME_SWING_24H_LR25"
+    }
+  },
+  "market": {
+    "monitor_snapshot": {
+      "schema_version": "market_monitor_snapshot_v1",
+      "cutoff_ts": "2026-09-14T02:12:00Z",
+      "symbol": "BTCUSDC",
+      "data_quality": {
+        "current": "RAW=133",
+        "context": "RAW=38881, RECOVERED_DEGRADED=4320",
+        "current_rows": 133,
+        "context_rows": 43201
+      },
+      "src_event": {
+        "ts": "2026-09-14 04:12:00",
+        "kind": "long",
+        "source": "DeltaScout",
+        "action": "PEAK",
+        "delta": 33.73,
+        "vol": 50.75,
+        "imb": 0.665,
+        "price": 77250.519382,
+        "vwap": 76991,
+        "poc": 77300,
+        "price_usdt": 77250.519382,
+        "entry_usdt": 77251.01,
+        "sl_usdt": 76450.0,
+        "tp1_usdt": 78052.01,
+        "tp2_usdt": 78853.02
+      },
+      "local_context": {
+        "15m": {
+          "start_timestamp": "2026-09-14T01:58:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 15,
+          "expected_minutes": 15,
+          "data_quality": "RAW=15",
+          "price_change_pct": 0.441789,
+          "total_qty": 2592.808,
+          "delta": 305.444,
+          "delta_pct": 0.11780433,
+          "open_interest_change": -86.85,
+          "funding_last": 0.0001,
+          "liq_buy_qty": 9.902,
+          "liq_sell_qty": 0.004
+        },
+        "60m": {
+          "start_timestamp": "2026-09-14T01:13:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 60,
+          "expected_minutes": 60,
+          "data_quality": "RAW=60",
+          "price_change_pct": 0.583375,
+          "total_qty": 5916.005,
+          "delta": 226.403,
+          "delta_pct": 0.03826958,
+          "open_interest_change": 96.34,
+          "funding_last": 0.0001,
+          "liq_buy_qty": 10.778,
+          "liq_sell_qty": 0.071
+        },
+        "240m": {
+          "start_timestamp": "2026-09-14T00:00:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 133,
+          "expected_minutes": 240,
+          "data_quality": "RAW=133",
+          "price_change_pct": 0.5695,
+          "total_qty": 14259.467,
+          "delta": -124.579,
+          "delta_pct": -0.00873658,
+          "open_interest_change": 25.64,
+          "funding_last": 0.0001,
+          "liq_buy_qty": 11.723,
+          "liq_sell_qty": 36.214
+        }
+      },
+      "broad_context": {
+        "1d": {
+          "start_timestamp": "2026-09-13T02:12:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 1441,
+          "data_quality": "RAW=1441",
+          "data_quality_flags": "OK",
+          "price_change_pct": 0.033398,
+          "total_qty": 79047.587,
+          "delta": -2372.623,
+          "delta_pct": -0.03001512,
+          "open_interest_change": 1488.0,
+          "funding_last": 0.0001,
+          "funding_mean": 6.79713e-05,
+          "liq_buy_qty": 52.801,
+          "liq_sell_qty": 216.603,
+          "regime_bias": "MIXED",
+          "confidence_tier": "LOW"
+        },
+        "3d": {
+          "start_timestamp": "2026-09-11T02:12:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 4321,
+          "data_quality": "RAW=4321",
+          "data_quality_flags": "OK",
+          "price_change_pct": 0.492861,
+          "total_qty": 321318.227,
+          "delta": -5780.857,
+          "delta_pct": -0.01799106,
+          "open_interest_change": -1888.5,
+          "funding_last": 0.0001,
+          "funding_mean": 5.49556e-05,
+          "liq_buy_qty": 479.403,
+          "liq_sell_qty": 580.449,
+          "regime_bias": "MIXED",
+          "confidence_tier": "LOW"
+        },
+        "7d": {
+          "start_timestamp": "2026-09-07T02:12:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 10081,
+          "data_quality": "RAW=10081",
+          "data_quality_flags": "OK",
+          "price_change_pct": -3.144298,
+          "total_qty": 840558.89,
+          "delta": -20575.966,
+          "delta_pct": -0.02447891,
+          "open_interest_change": -699.72,
+          "funding_last": 0.0001,
+          "funding_mean": 5.80482e-05,
+          "liq_buy_qty": 755.021,
+          "liq_sell_qty": 1685.842,
+          "regime_bias": "BEARISH_FLOW",
+          "confidence_tier": "HIGH"
+        },
+        "30d": {
+          "start_timestamp": "2026-08-15T02:12:00Z",
+          "end_timestamp": "2026-09-14T02:12:00Z",
+          "rows_used": 43201,
+          "data_quality": "RAW=38881, RECOVERED_DEGRADED=4320",
+          "data_quality_flags": "RECOVERED_DEGRADED",
+          "price_change_pct": 22.620058,
+          "total_qty": 4568789.019,
+          "delta": 32122.987,
+          "delta_pct": 0.00703096,
+          "open_interest_change": -7159.4,
+          "funding_last": 0.0001,
+          "funding_mean": 6.78304e-05,
+          "liq_buy_qty": 14540.982,
+          "liq_sell_qty": 7022.949,
+          "regime_bias": "BULLISH_FLOW",
+          "confidence_tier": "MEDIUM"
+        }
+      },
+      "market_state": {
+        "state": "ACCUMULATION",
+        "confidence_tier": "LOW",
+        "start_timestamp": "2026-09-14T00:00:00Z",
+        "end_timestamp": "2026-09-14T02:12:00Z",
+        "data_quality": "RAW",
+        "evidence": {
+          "classification_scope": "descriptive_daily_market_state_only",
+          "context_1d_data_quality_flags": "OK",
+          "context_1d_delta": -2372.623,
+          "context_1d_open_interest_change": 1488.0,
+          "context_1d_regime_bias": "MIXED",
+          "context_30d_data_quality_flags": "RECOVERED_DEGRADED",
+          "context_30d_delta": 32122.987,
+          "context_30d_open_interest_change": -7159.4,
+          "context_30d_regime_bias": "BULLISH_FLOW",
+          "context_3d_data_quality_flags": "OK",
+          "context_3d_delta": -5780.857,
+          "context_3d_open_interest_change": -1888.5,
+          "context_3d_regime_bias": "MIXED",
+          "context_7d_data_quality_flags": "OK",
+          "context_7d_delta": -20575.966,
+          "context_7d_open_interest_change": -699.72,
+          "context_7d_regime_bias": "BEARISH_FLOW",
+          "delta": -124.579,
+          "liq_buy_qty": 11.723,
+          "liq_sell_qty": 36.214,
+          "open_interest_change": 25.64,
+          "price_change_pct": 0.5695,
+          "significant_market_zone_count": 10,
+          "top_significant_market_zones": "significant_zone_000001|significant_zone_000002|significant_zone_000003",
+          "total_qty": 14259.467
+        }
+      },
+      "market_structure_state": {
+        "schema_version": "market_structure_state_snapshot_v1",
+        "status": "ok",
+        "state_version": "SHI_RESET_37E_ONLINE_MARKET_STRUCTURE_STATE_MEMORY_V0",
+        "classification_scope": "pre_cutoff_current_feed_window_with_snapshot_zones",
+        "market_state": "COMPRESSION_ABOVE_SUPPORT",
+        "confidence_tier": "MEDIUM",
+        "candidate_bias": "UP",
+        "candidate_strength": "MEDIUM",
+        "metrics": {
+          "price_open": 76839.4,
+          "price_close": 77277.0,
+          "price_high": 77277.0,
+          "price_low": 76350.1,
+          "price_change_pct": 0.5695,
+          "range_pct": 1.214013,
+          "close_position": 1.0,
+          "delta_pct": -0.873658,
+          "open_interest_change": 25.64
+        },
+        "oi_context": "OI_UP_DURING_UP_MOVE_PARTICIPATION_BUILD_UNCONFIRMED",
+        "support": {
+          "zone_id": "significant_zone_000008",
+          "role": "SUPPORT",
+          "price_lower": 73869.6,
+          "price_upper": 75969.1,
+          "strength_score": 70.0,
+          "confidence_tier": "MEDIUM",
+          "status": "SIGNIFICANT"
+        },
+        "resistance": {
+          "zone_id": "significant_zone_000002",
+          "role": "RESISTANCE",
+          "price_lower": 78766.0,
+          "price_upper": 81377.7,
+          "strength_score": 100.0,
+          "confidence_tier": "HIGH",
+          "status": "SIGNIFICANT"
+        },
+        "evidence_summary": "price_change_pct=0.570; range_pct=1.214; close_position=1.000; delta_pct=-0.874; support_strength=70.0; resistance_strength=100.0; seller_pressure_score=3.1; buyer_response_score=48.3; overhead_supply_score=71.1; underlying_demand_score=49.7; dominant_side=BUYER; range_quality=BIASED; support_context=present; resistance_context=present; buyer response holds above support_upper=75969.100",
+        "data_gaps": []
+      },
+      "significant_market_zones": {
+        "near_price": [
+          {
+            "zone_id": "significant_zone_000003",
+            "price_lower": 75588.0,
+            "price_upper": 78393.9,
+            "source_zone_count": 23,
+            "source_day_count": 7,
+            "dominant_zone_types": "BUY_LIQUIDATION_REPRICING_ZONE=1|DISTRIBUTION_REBALANCE_ZONE=2|MARKDOWN_VOLUME_EXPANSION_ZONE=5|MARKUP_VOLUME_EXPANSION_ZONE=4|REDISTRIBUTION_BALANCE_ZONE=2|SELL_LIQUIDATION_REPRICING_ZONE=4|TRAPPED_SELLING_ACCUMULATION_ZONE=5",
+            "significance_score": 100,
+            "confidence_tier": "HIGH",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          },
+          {
+            "zone_id": "significant_zone_000001",
+            "price_lower": 77218.2,
+            "price_upper": 79737.3,
+            "source_zone_count": 131,
+            "source_day_count": 19,
+            "dominant_zone_types": "ACCUMULATION_REBALANCE_ZONE=12|BUY_LIQUIDATION_REPRICING_ZONE=10|DISTRIBUTION_REBALANCE_ZONE=27|MARKDOWN_VOLUME_EXPANSION_ZONE=24|MARKUP_VOLUME_EXPANSION_ZONE=32|REDISTRIBUTION_BALANCE_ZONE=6|SELL_LIQUIDATION_REPRICING_ZONE=14|TRAPPED_BUYING_DISTRIBUTION_ZONE=3|TRAPPED_SELLING_ACCUMULATION_ZONE=3",
+            "significance_score": 100,
+            "confidence_tier": "HIGH",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          },
+          {
+            "zone_id": "significant_zone_000008",
+            "price_lower": 73869.6,
+            "price_upper": 75969.1,
+            "source_zone_count": 7,
+            "source_day_count": 1,
+            "dominant_zone_types": "DISTRIBUTION_REBALANCE_ZONE=1|MARKDOWN_VOLUME_EXPANSION_ZONE=1|MARKUP_VOLUME_EXPANSION_ZONE=5",
+            "significance_score": 70,
+            "confidence_tier": "MEDIUM",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RAW"
+          },
+          {
+            "zone_id": "significant_zone_000002",
+            "price_lower": 78766.0,
+            "price_upper": 81377.7,
+            "source_zone_count": 47,
+            "source_day_count": 11,
+            "dominant_zone_types": "BUY_LIQUIDATION_REPRICING_ZONE=7|DISTRIBUTION_REBALANCE_ZONE=4|MARKDOWN_VOLUME_EXPANSION_ZONE=17|MARKUP_VOLUME_EXPANSION_ZONE=5|REDISTRIBUTION_BALANCE_ZONE=7|SELL_LIQUIDATION_REPRICING_ZONE=6|TRAPPED_SELLING_ACCUMULATION_ZONE=1",
+            "significance_score": 100,
+            "confidence_tier": "HIGH",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RAW"
+          },
+          {
+            "zone_id": "significant_zone_000009",
+            "price_lower": 72819.1,
+            "price_upper": 73985.8,
+            "source_zone_count": 2,
+            "source_day_count": 2,
+            "dominant_zone_types": "MARKUP_VOLUME_EXPANSION_ZONE=2",
+            "significance_score": 62,
+            "confidence_tier": "MEDIUM",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          }
+        ],
+        "above_price": [
+          {
+            "zone_id": "significant_zone_000002",
+            "price_lower": 78766.0,
+            "price_upper": 81377.7,
+            "source_zone_count": 47,
+            "source_day_count": 11,
+            "dominant_zone_types": "BUY_LIQUIDATION_REPRICING_ZONE=7|DISTRIBUTION_REBALANCE_ZONE=4|MARKDOWN_VOLUME_EXPANSION_ZONE=17|MARKUP_VOLUME_EXPANSION_ZONE=5|REDISTRIBUTION_BALANCE_ZONE=7|SELL_LIQUIDATION_REPRICING_ZONE=6|TRAPPED_SELLING_ACCUMULATION_ZONE=1",
+            "significance_score": 100,
+            "confidence_tier": "HIGH",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RAW"
+          }
+        ],
+        "below_price": [
+          {
+            "zone_id": "significant_zone_000008",
+            "price_lower": 73869.6,
+            "price_upper": 75969.1,
+            "source_zone_count": 7,
+            "source_day_count": 1,
+            "dominant_zone_types": "DISTRIBUTION_REBALANCE_ZONE=1|MARKDOWN_VOLUME_EXPANSION_ZONE=1|MARKUP_VOLUME_EXPANSION_ZONE=5",
+            "significance_score": 70,
+            "confidence_tier": "MEDIUM",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RAW"
+          },
+          {
+            "zone_id": "significant_zone_000009",
+            "price_lower": 72819.1,
+            "price_upper": 73985.8,
+            "source_zone_count": 2,
+            "source_day_count": 2,
+            "dominant_zone_types": "MARKUP_VOLUME_EXPANSION_ZONE=2",
+            "significance_score": 62,
+            "confidence_tier": "MEDIUM",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          },
+          {
+            "zone_id": "significant_zone_000007",
+            "price_lower": 70806.9,
+            "price_upper": 73106.9,
+            "source_zone_count": 17,
+            "source_day_count": 1,
+            "dominant_zone_types": "ACCUMULATION_REBALANCE_ZONE=2|BUY_LIQUIDATION_REPRICING_ZONE=5|DISTRIBUTION_REBALANCE_ZONE=2|MARKUP_VOLUME_EXPANSION_ZONE=3|REDISTRIBUTION_BALANCE_ZONE=3|SELL_LIQUIDATION_REPRICING_ZONE=1|TRAPPED_SELLING_ACCUMULATION_ZONE=1",
+            "significance_score": 70,
+            "confidence_tier": "MEDIUM",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          },
+          {
+            "zone_id": "significant_zone_000006",
+            "price_lower": 68010.2,
+            "price_upper": 70048.2,
+            "source_zone_count": 12,
+            "source_day_count": 2,
+            "dominant_zone_types": "ACCUMULATION_REBALANCE_ZONE=2|BUY_LIQUIDATION_REPRICING_ZONE=3|MARKDOWN_VOLUME_EXPANSION_ZONE=1|MARKUP_VOLUME_EXPANSION_ZONE=6",
+            "significance_score": 77,
+            "confidence_tier": "HIGH",
+            "status": "SIGNIFICANT",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RECOVERED_DEGRADED"
+          },
+          {
+            "zone_id": "significant_zone_000010",
+            "price_lower": 65276.9,
+            "price_upper": 66513.6,
+            "source_zone_count": 1,
+            "source_day_count": 1,
+            "dominant_zone_types": "MARKUP_VOLUME_EXPANSION_ZONE=1",
+            "significance_score": 42,
+            "confidence_tier": "LOW",
+            "status": "TRACKING_ONLY",
+            "context_1d": "MIXED",
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW",
+            "context_30d": "BULLISH_FLOW",
+            "data_quality": "RAW"
+          }
+        ]
+      },
+      "liquidity_zones": {
+        "above_price": [],
+        "below_price": [
+          {
+            "zone_id": "zone_000001",
+            "side": "SELL_SIDE",
+            "zone_type": "M15_SWING_LOW_ZONE",
+            "price_lower": 76571.39515,
+            "price_upper": 76648.00485,
+            "confidence_tier": "LOW",
+            "status": "ACTIVE",
+            "data_quality": "RAW"
+          }
+        ]
+      },
+      "context_conflicts": [
+        {
+          "type": "LOCAL_BUY_FLOW_WITH_BROAD_DISTRIBUTION_CONTEXT",
+          "severity": "MEDIUM",
+          "description": "Local buy-flow context differs from broad 3d/7d market context.",
+          "evidence": {
+            "local_60m_delta": 226.403,
+            "context_3d": "MIXED",
+            "context_7d": "BEARISH_FLOW"
+          }
+        }
+      ],
+      "monitor_artifacts": {
+        "market_context_windows_csv": "",
+        "significant_market_zones_csv": "",
+        "market_state_timeline_csv": ""
+      },
+      "boundary": "descriptive market-state snapshot only",
+      "diagnostics": {
+        "current_rows": 133,
+        "context_rows": 43201,
+        "local_inventory_zone_count": 2,
+        "context_inventory_zone_count": 698,
+        "registry_stats": {
+          "carried_loaded": 0,
+          "new_created": 1,
+          "carried_forward": 1,
+          "merged": 0,
+          "expired": 0,
+          "crossed_unclassified": 0,
+          "active_registry": 1,
+          "active_forward": 1,
+          "consumed": 0,
+          "chopped_through": 0
+        }
+      },
+      "enabled": true
+    },
+    "context": {
+      "enabled": true,
+      "cutoff_ts": "2026-09-14T02:12:00Z",
+      "lookback_hours": 24.0,
+      "ts_source_timezone": "Europe/Bratislava",
+      "timestamp_contract": "legacy_feed_local_naive",
+      "deltascout": {
+        "source_path": "/data/logs/deltascout.log",
+        "events_total_read": 326,
+        "events_used": 1,
+        "peak_context": {
+          "count_total": 1,
+          "count_long": 1,
+          "count_short": 0,
+          "last_peak": {
+            "ts": "2026-09-14 04:12:00",
+            "ts_raw": "2026-09-14 04:12:00",
+            "ts_utc": "2026-09-14T02:12:00Z",
+            "timestamp_contract": "legacy_feed_local_naive",
+            "kind": "long",
+            "delta": 33.73,
+            "vol": 50.75,
+            "imb": 0.665,
+            "price": 77250.519382,
+            "vwap": 76991,
+            "poc": 77300,
+            "source": "DeltaScout",
+            "action": "PEAK"
+          },
+          "last_5_peaks": [
+            {
+              "ts": "2026-09-14 04:12:00",
+              "ts_raw": "2026-09-14 04:12:00",
+              "ts_utc": "2026-09-14T02:12:00Z",
+              "timestamp_contract": "legacy_feed_local_naive",
+              "kind": "long",
+              "delta": 33.73,
+              "vol": 50.75,
+              "imb": 0.665,
+              "price": 77250.519382,
+              "vwap": 76991,
+              "poc": 77300,
+              "source": "DeltaScout",
+              "action": "PEAK"
+            }
+          ],
+          "max_delta_long": 33.73,
+          "max_delta_short": null,
+          "avg_delta_long": 33.73,
+          "avg_delta_short": null,
+          "recent_same_direction_count_60m": 1,
+          "recent_opposite_direction_count_60m": 0,
+          "current_peak": {
+            "ts": "2026-09-14 04:12:00",
+            "kind": "long",
+            "delta": 33.73,
+            "vol": 50.75,
+            "imb": 0.665,
+            "price": 77250.519382,
+            "vwap": 76991,
+            "poc": 77300,
+            "source": "DeltaScout",
+            "action": "PEAK"
+          },
+          "current_peak_delta_percentile_24h": 100.0,
+          "price_vs_vwap": 259.5193819999986,
+          "price_vs_vwap_pct": 0.3370775571170638,
+          "price_vs_poc": -49.480618000001414,
+          "price_vs_poc_pct": -0.06401114877102383,
+          "data_gaps": []
+        }
+      },
+      "aggregated": {
+        "source_path": "/data/feed/aggregated.csv",
+        "rows_used": 1441,
+        "context": {
+          "rows_used": 1441,
+          "last_close": 77300.0,
+          "return_15m_pct": 0.4443982431975883,
+          "return_60m_pct": 0.575086523198626,
+          "return_240m_pct": 0.43395785151885247,
+          "volatility_60m": 0.05625425580284112,
+          "high_60m": 77300.0,
+          "low_60m": 76636.0,
+          "high_240m": 77300.0,
+          "low_240m": 76389.0,
+          "buy_qty_sum_60m": 347.5877300000001,
+          "sell_qty_sum_60m": 319.41792000000004,
+          "buy_sell_delta_60m": 28.16981000000004,
+          "buy_sell_imbalance_60m": 0.042233240453060684,
+          "cumulative_delta_24h_approx": 206.7165799999994,
+          "rolling_vwap_approx": 76978.06343232344,
+          "price_vs_rolling_vwap_pct": 0.4182185850383144,
+          "data_gaps": []
+        }
+      },
+      "data_gaps": []
+    }
+  },
+  "quality": {
+    "status": "PARTIAL",
+    "gaps": [
+      "UPSTREAM_FILTER_PROVENANCE_MISSING"
+    ],
+    "monitor_data_gaps": [],
+    "entry_assessment_only": true,
+    "future_data_allowed": false
+  },
+  "lineage": {
+    "monitor_schema_version": "market_monitor_snapshot_v1",
+    "market_context_schema_version": null,
+    "input_sha256": "9c9530e24ada0f48e2547301903ff98b2f63dba0d90d379e109797ae0ca43562"
+  }
+}

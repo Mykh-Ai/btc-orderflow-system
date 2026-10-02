@@ -1,0 +1,19 @@
+{
+  "source_sha256": {
+    "entry_snapshot.py": "9c0fed77884aef8e76917e76b540b929012cfc760c79cda993fcb37f83ea9682",
+    "executor.log": "e9c075cd0dce84de68bb9283b3383db2326cdc339fb2dfb6dd0338cc723c2767",
+    "executor_state.json": "387099184eeb16d925065f3c444cb69f68b015c3d4f820738e04fc989c2cb53a",
+    "llm_trade_judge.py": "15a4657fb5aedf67427698ebfb8697f9e609829a559e031a8a8f791f9ab70d1d",
+    "llm_trade_verdicts.jsonl": "37094f67f281a4ebdc4a53f3ded49740d355a39d39891e45ba3324bde1d42462",
+    "trade_execution_snapshots.jsonl": "58823541076d8595e6a11c4484bce91a5466b39e633f1e5b4370acd62a855c1a",
+    "trade_outcomes.jsonl": "fb244e31aa9126dc9bc64da1d30f8a872bffaf680cca6178e349c62a84d4d11f"
+  },
+  "case_keys": [
+    "EX_EN_1789351940",
+    "EX_EN_1788166698"
+  ],
+  "case_1_prompt_sha256": "96264449e4000df66cda7752516f9921edd03fce83437267e6d9eaf56a18c15c",
+  "case_1_prompt_hash_matches_journal": true,
+  "case_2_prompt_hash_stored": false,
+  "case_2_entry_snapshot_stored": false
+}

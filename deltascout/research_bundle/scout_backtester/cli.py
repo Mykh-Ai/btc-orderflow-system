@@ -20,6 +20,8 @@ from .contracts import (
     Candidate,
     CandidateQualityRow,
     ReplayConfig,
+    REQUIRED_GROUPS,
+    VWAP_DISTANCE_GROUP,
 )
 from .feed_loader import load_feed, quality_counts
 from .ledger import write_csv, write_replay_events, write_trade_ledger, write_trade_legs
@@ -147,6 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date-to", required=True)
     parser.add_argument("--candidate-groups", required=True)
     parser.add_argument(
+        "--vwap-distance-min-usd", type=float, default=None,
+        help="Opt-in VWAP_DISTANCE_REJECT cohort only: retain directional distance strictly above this USD value.",
+    )
+    parser.add_argument(
         "--comparison-setup-variants",
         default="",
         help="Optional comma-separated ALMOST 2/3 failed-gate variants to replay in isolation.",
@@ -191,22 +197,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-slippage-bps", type=float, default=0.0)
     parser.add_argument("--exit-slippage-bps", type=float, default=1.0)
     parser.add_argument("--stop-slippage-bps", type=float, default=2.0)
-    parser.add_argument("--swing-lookback-minutes", type=int, default=180)
+    parser.add_argument("--swing-lookback-minutes", type=int, default=1440)
     parser.add_argument(
         "--initial-stop-policy",
         choices=("window_extreme", "volume_confirmed_swing"),
-        default="window_extreme",
+        default="volume_confirmed_swing",
     )
     parser.add_argument(
         "--initial-swing-price-source",
         choices=("close", "extreme"),
-        default="close",
+        default="extreme",
         help="Build the initial swing stop from closes or LONG lows / SHORT highs.",
     )
-    parser.add_argument("--initial-swing-buffer-usd", type=float, default=0.0)
+    parser.add_argument("--initial-swing-buffer-usd", type=float, default=50.0)
     parser.add_argument("--initial-swing-lr", type=int, default=25)
-    parser.add_argument("--initial-swing-max-distance-usd", type=float, default=0.0)
-    parser.add_argument("--initial-swing-require-full-window", action="store_true")
+    parser.add_argument("--initial-swing-max-distance-usd", type=float, default=1200.0)
+    parser.add_argument(
+        "--initial-swing-require-full-window",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--trail-swing-lookback", type=int, default=240)
+    parser.add_argument("--trail-swing-lr", type=int, default=25)
+    parser.add_argument("--trail-swing-buffer-usd", type=float, default=50.0)
+    parser.add_argument("--trail-step-usd", type=float, default=25.0)
+    parser.add_argument("--trail-confirm-buffer-usd", type=float, default=20.0)
     return parser
 
 
@@ -277,6 +292,7 @@ def run(args: argparse.Namespace) -> Path:
     candidate_selection = {
         "comparison_setup_variants": comparison_setup_variants,
         "loss_filter_policy": args.candidate_loss_filter,
+        "vwap_distance_min_usd": args.vwap_distance_min_usd,
     }
     unknown_variants = sorted(set(comparison_setup_variants).difference(VARIANTS))
     if unknown_variants:
@@ -316,6 +332,11 @@ def run(args: argparse.Namespace) -> Path:
         initial_swing_lr=args.initial_swing_lr,
         initial_swing_max_distance_usd=args.initial_swing_max_distance_usd,
         initial_swing_require_full_window=args.initial_swing_require_full_window,
+        trail_swing_lookback=args.trail_swing_lookback,
+        trail_swing_lr=args.trail_swing_lr,
+        trail_swing_buffer_usd=args.trail_swing_buffer_usd,
+        trail_step_usd=args.trail_step_usd,
+        trail_confirm_buffer_usd=args.trail_confirm_buffer_usd,
         execution_policy_id=execution_policy_id,
         fill_model_id=args.fill_model,
         same_bar_policy_id=args.same_bar_policy,
@@ -333,6 +354,7 @@ def run(args: argparse.Namespace) -> Path:
         date_to=args.date_to,
         raw_archive_root=raw_archive_root,
         candidate_groups=candidate_groups,
+        vwap_distance_min_usd=args.vwap_distance_min_usd,
     )
     if comparison_setup_variants:
         candidates = [
@@ -349,6 +371,8 @@ def run(args: argparse.Namespace) -> Path:
         date_from=args.date_from,
         date_to=args.date_to,
         raw_archive_root=raw_archive_root,
+        candidate_groups=(REQUIRED_GROUPS + (VWAP_DISTANCE_GROUP,)
+                          if VWAP_DISTANCE_GROUP in candidate_groups else REQUIRED_GROUPS),
     )
     candidate_quality = inventory_quality
     history_days = max(1, config.swing_lookback_minutes // 1440 + 1)

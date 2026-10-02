@@ -33,6 +33,10 @@ REQUIRED_GROUPS = (
     "OTHER_COMPARISON_REJECT",
 )
 
+# Opt-in cohort: legacy OTHER_COMPARISON_REJECT/default selection stays intact.
+VWAP_DISTANCE_GROUP = "VWAP_DISTANCE_REJECT"
+SUPPORTED_GROUPS = REQUIRED_GROUPS + (VWAP_DISTANCE_GROUP,)
+
 
 class BacktestContractError(RuntimeError):
     """Raised when deterministic replay inputs violate a declared contract."""
@@ -135,20 +139,20 @@ class ReplayConfig:
     planb_abort_if_past_tp1: bool = True
     planb_price_proxy: str = "SECOND_NEXT_BAR_OPEN"
     sl_pct: float = 0.002
-    swing_lookback_minutes: int = 180
-    initial_stop_policy: str = "window_extreme"
-    initial_swing_price_source: str = "close"
-    initial_swing_buffer_usd: float = 0.0
+    swing_lookback_minutes: int = 1440
+    initial_stop_policy: str = "volume_confirmed_swing"
+    initial_swing_price_source: str = "extreme"
+    initial_swing_buffer_usd: float = 50.0
     initial_swing_lr: int = 25
-    initial_swing_max_distance_usd: float = 0.0
-    initial_swing_require_full_window: bool = False
+    initial_swing_max_distance_usd: float = 1200.0
+    initial_swing_require_full_window: bool = True
     tp_r_multipliers: tuple[float, float] = (1.0, 2.0)
     cooldown_seconds: int = 180
     trail_swing_lookback: int = 240
-    trail_swing_lr: int = 2
+    trail_swing_lr: int = 25
     trail_swing_buffer_usd: float = 50.0
-    trail_step_usd: float = 20.0
-    trail_confirm_buffer_usd: float = 0.0
+    trail_step_usd: float = 25.0
+    trail_confirm_buffer_usd: float = 20.0
     usdt_usdc_ratio_min: float = 0.95
     usdt_usdc_ratio_max: float = 1.05
     sl_limit_gap_ticks: int = 2

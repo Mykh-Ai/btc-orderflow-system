@@ -275,12 +275,17 @@ def write_variant_summary(
     all_rows = {row["comparison_cohort"]: row for row in metrics if row["period"] == "ALL" and row["side"] == "ALL"}
     validation = {row["comparison_cohort"]: row for row in metrics if row["period"] == "VALIDATION" and row["side"] == "ALL"}
     variants = [all_rows[name] for name in VARIANTS if name in all_rows]
+    peak_only = "PEAK_EMIT_BASELINE" in all_rows and not variants
     worst = min(variants, key=lambda row: row["mean_net_pnl_per_fill_usdc"] if row["mean_net_pnl_per_fill_usdc"] is not None else float("inf")) if variants else None
     union = {row["comparison_setup_variant"]: row for row in loss_filter if row["filter_component"] == "UNION_A_OR_B"}
     lines = [
-        "# ALMOST PEAK 2/3 failed-gate variants",
+        "# PEAK replay with live A-or-B filter" if peak_only else "# ALMOST PEAK 2/3 failed-gate variants",
         "",
-        "The candidate identity and original `candidate_group` are preserved. `comparison_setup_variant` is an additive research dimension.",
+        (
+            "This report covers the filtered `PEAK_EMIT_BASELINE` cohort under the resolved replay contract."
+            if peak_only
+            else "The candidate identity and original `candidate_group` are preserved. `comparison_setup_variant` is an additive research dimension."
+        ),
         "",
         "## Frozen chronology",
         "",
@@ -288,14 +293,17 @@ def write_variant_summary(
         "- Validation: signal timestamp on or after `2026-06-01T00:00:00Z`.",
         "- The boundary was fixed before variant outcome aggregation.",
         "",
-        "## Classification control",
-        "",
-        f"- Current replay price failed: {distribution.get('ALMOST_2OF3_PRICE_FAIL', 0)}.",
-        f"- Current replay volume failed: {distribution.get('ALMOST_2OF3_VOLUME_FAIL', 0)}.",
-        f"- Current replay VWAP failed: {distribution.get('ALMOST_2OF3_VWAP_FAIL', 0)}.",
-        "- Frozen v3 control through `2026-08-18`: `66 price / 74 volume / 107 vwap`; enforced by a separate regression test.",
-        f"- Invalid/ambiguous comparison rows: {sum(row.reason in {'COMPARISON_CLASSIFICATION_INVALID', 'ALMOST_2OF3_VARIANT_INVALID'} for row in quality)}.",
     ]
+    if not peak_only:
+        lines.extend([
+            "## Classification control",
+            "",
+            f"- Current replay price failed: {distribution.get('ALMOST_2OF3_PRICE_FAIL', 0)}.",
+            f"- Current replay volume failed: {distribution.get('ALMOST_2OF3_VOLUME_FAIL', 0)}.",
+            f"- Current replay VWAP failed: {distribution.get('ALMOST_2OF3_VWAP_FAIL', 0)}.",
+            "- Frozen v3 control through `2026-08-18`: `66 price / 74 volume / 107 vwap`; enforced by a separate regression test.",
+            f"- Invalid/ambiguous comparison rows: {sum(row.reason in {'COMPARISON_CLASSIFICATION_INVALID', 'ALMOST_2OF3_VARIANT_INVALID'} for row in quality)}.",
+        ])
     if applied_candidate_loss_filter and applied_candidate_loss_filter.get("policy") != "NONE":
         lines.extend([
             "",
@@ -327,7 +335,15 @@ def write_variant_summary(
     if worst:
         lines.append(f"- Worst full-history subgroup by expectancy: `{worst['comparison_cohort']}` at {_fmt(worst['mean_net_pnl_per_fill_usdc'])} USDC/fill.")
     positive = [row["comparison_cohort"] for row in variants if float(row["mean_net_pnl_per_fill_usdc"] or 0.0) > 0]
-    lines.append(f"- Positive full-history expectancy: {', '.join(f'`{name}`' for name in positive) if positive else 'none' }.")
+    if peak_only:
+        peak = all_rows["PEAK_EMIT_BASELINE"]
+        label = "positive" if float(peak["mean_net_pnl_per_fill_usdc"] or 0.0) > 0 else "non-positive"
+        lines.append(
+            f"- Filtered PEAK full-history expectancy is {label}: "
+            f"{_fmt(peak['mean_net_pnl_per_fill_usdc'])} USDC/fill."
+        )
+    else:
+        lines.append(f"- Positive full-history expectancy: {', '.join(f'`{name}`' for name in positive) if positive else 'none' }.")
     for name in VARIANTS:
         row = validation.get(name)
         if row:
@@ -373,7 +389,12 @@ def write_variant_summary(
         if float(row["mean_net_pnl_per_fill_usdc"] or 0.0) > 0
     }
     continuation = [name for name in positive if name in validation_positive]
-    if continuation:
+    if peak_only:
+        recommendation = (
+            "- This is the current filtered PEAK cohort; interpret it as an Executor-parity "
+            "backtest, not as evidence for promoting a new signal rule."
+        )
+    elif continuation:
         recommendation = (
             "- Recommended next step: continue only "
             + ", ".join(f"`{name}`" for name in continuation)

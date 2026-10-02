@@ -166,6 +166,21 @@ def test_trade_key_based_processed_marker_works(tmp_path):
     assert _processed_marker(latest) == "trade_key:TK-555"
 
 
+def test_test_trade_close_does_not_trigger_pipeline(tmp_path, monkeypatch):
+    trade_file = tmp_path / "trade_outcomes.jsonl"
+    test_row = {**_valid_row(trade_key="TEST-1"), "excluded_from_scoring": True, "test_trade": True}
+    _write_lines(trade_file, [json.dumps(test_row)])
+    state_file = tmp_path / "state.json"
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("test trade must not start the analytics pipeline")
+
+    monkeypatch.setattr("scripts.offline.run_post_close_watcher.subprocess.run", fail_run)
+
+    assert run(_args(tmp_path, trade_file, state_file)) == 0
+    assert not state_file.exists()
+
+
 def test_fallback_processed_marker_works_without_trade_key(tmp_path):
     trade_file = tmp_path / "trade_outcomes.jsonl"
     _write_lines(trade_file, [json.dumps(_valid_row(trade_key=None, ts="2026-01-03T05:45:00Z", reason="sl", side="short"))])

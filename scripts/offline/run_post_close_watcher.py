@@ -71,6 +71,8 @@ def _load_latest_valid_close(trade_outcomes_file: Path) -> dict[str, Any] | None
     latest: dict[str, Any] | None = None
     latest_ts = None
     for _, row in _iter_jsonl_rows(trade_outcomes_file):
+        if row.get("excluded_from_scoring") is True or row.get("test_trade") is True:
+            continue
         close_record = _extract_close_record(row)
         if not close_record:
             continue

@@ -193,3 +193,36 @@ def test_variant_summary_identifies_pre_replay_filter_without_reapplying_claim(t
     assert "Candidates before / blocked / kept: 70 / 40 / 30" in output
     assert "residual reapplication diagnostic" in output
     assert "The union filter is not portable" not in output
+
+
+def test_variant_summary_labels_peak_only_report_and_expectancy(tmp_path) -> None:
+    metrics = [
+        {
+            "comparison_cohort": "PEAK_EMIT_BASELINE",
+            "period": "ALL",
+            "side": "ALL",
+            "candidate_count": 10,
+            "filled_count": 8,
+            "plain_sl_count": 3,
+            "tp1_sl_count": 2,
+            "protected_count": 3,
+            "net_pnl_usdc": 40.0,
+            "mean_net_pnl_per_fill_usdc": 5.0,
+            "profit_factor": 1.5,
+            "average_r": 0.2,
+            "total_r": 1.6,
+            "max_drawdown_usdc": 20.0,
+        }
+    ]
+    output = write_variant_summary(
+        tmp_path / "summary.md",
+        config=ReplayConfig(experiment_id="peak-only"),
+        metrics=metrics,
+        loss_filter=[],
+        quality=[],
+        distribution={},
+    ).read_text(encoding="utf-8")
+
+    assert output.startswith("# PEAK replay with live A-or-B filter")
+    assert "Filtered PEAK full-history expectancy is positive: 5.00 USDC/fill." in output
+    assert "No failed-gate subgroup" not in output

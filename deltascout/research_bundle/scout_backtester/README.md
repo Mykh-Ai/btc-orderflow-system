@@ -22,6 +22,8 @@ Core boundaries:
 - frozen signal-cutoff BTCUSDC/BTCUSDT conversion ratio for the initial plan;
 - BTCUSDT Low/High trailing swings, BTCUSDT Close-only confirmation, and a fresh
   same-minute historical BTCUSDC/BTCUSDT conversion proxy for each trail quote;
+- deployed trailing defaults frozen explicitly as 240 completed one-minute rows,
+  LR25, `$50` swing buffer, `$25` minimum improvement, and `$20` confirmation buffer;
 - OHLC execution with explicit same-bar policies;
 - fixed-notional USDC economics with declared commission and slippage;
 - independent-opportunity and one-position portfolio views;
@@ -60,10 +62,39 @@ partial-fill fidelity.
 Generated experiments are local-only under
 `deltascout/research_material/backtests/<experiment_id>/`.
 
-## Opt-in volume-backed initial stop research
+Blocked live PEAKs normally enter the candidate set through
+`PEAK_LOSS_FILTER_REJECT`. As a durability fallback, the compiler also reconstructs
+a `FILTER_REJECTED` PEAK candidate from `PEAK_LOSS_FILTER_DECISION` when its
+`effective_action` is `BLOCK`. An explicit reject is processed first, and the shared
+PEAK identity key deduplicates the normal decision-plus-reject pair.
 
-The default remains `window_extreme` with the declared baseline parameters. The
-research-only `volume_confirmed_swing` policy selects the highest-volume confirmed
+## Opt-in VWAP-distance DELTA counterfactuals
+
+Select `--candidate-groups VWAP_DISTANCE_REJECT` to compile archived
+`CANDIDATE_COMPARISON_REJECT` / `reject_reason=vwap_distance` directly from
+`--raw-archive-root`. Daily events-context CSVs are optional for this cohort.
+Only the terminal reject becomes a candidate; its paired DELTA_MAX/MIN does not
+create a second trade. CSV/raw copies deduplicate to the existing identity.
+Without this opt-in, existing CSV-based OTHER_COMPARISON_REJECT behavior remains
+unchanged. This group is not added to the default inventory selection.
+
+To isolate distance strictly greater than $1200, additionally use
+`--vwap-distance-min-usd 1200`. This selector requires the isolated distance
+cohort, accepts finite nonnegative values, and is stored in candidate_selection
+in the fingerprint/manifest. Omit it to replay all archived distance rejects;
+do not infer a historical configured VWAP threshold from the observed distance.
+Normalized candidate shadow metadata retains directional `vwap_distance_usd`
+and `downstream_admission_status=NOT_EVALUATED` through enrichment.
+
+These are PRE_ADMISSION_REJECT DELTA candidates, not emitted PEAKs or AB vetoes.
+Replay asks what would happen if the original-side delta were traded. Downstream
+comparison/gates/AB admission are not proven to pass; keep candidate-loss-filter
+NONE for the unfiltered experiment and label any AB sensitivity separately.
+V8 risk/order/trailing rules and existing quality checks are not bypassed.
+
+## Executor V8 initial stop
+
+The default `volume_confirmed_swing` policy selects the highest-volume confirmed
 fractal swing whose buffered stop remains inside the configured distance cap. It can
 require a complete lookback window and persists the selected swing evidence in every
 trade row.
@@ -79,8 +110,9 @@ Relevant CLI parameters:
 --initial-swing-require-full-window
 ```
 
-This policy is an offline counterfactual only. A missing full window or absence of an
+These are the deployed Executor V8 defaults. A missing full window or absence of an
 eligible swing becomes an explicit blocked candidate rather than a silent fallback.
+The legacy `window_extreme` policy remains available only as an explicit sensitivity.
 
 For cohort-isolated ALMOST 2/3 comparisons, optionally restrict the compiled
 candidate set with a comma-separated list of supported failed-gate variants:
@@ -103,6 +135,17 @@ To apply the frozen loss-avoidance veto before replay, use:
 Only a definite `true` is removed; unknown/untrusted component values are kept
 fail-open. The policy, counts, and excluded candidate identities are persisted in
 the manifest and `candidate_loss_filter_exclusions.csv`.
+
+Executor-parity trailing parameters are independently overridable but default to
+the deployed values:
+
+```text
+--trail-swing-lookback 240
+--trail-swing-lr 25
+--trail-swing-buffer-usd 50
+--trail-step-usd 25
+--trail-confirm-buffer-usd 20
+```
 
 Normalize official Binance Vision BTCUSDC Spot 1m archives before replay:
 

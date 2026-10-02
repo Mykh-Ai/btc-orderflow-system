@@ -126,3 +126,73 @@ def test_filter_reject_is_compiled_directly_from_raw_archive_as_peak_counterfact
     assert candidate.signal_ts_utc.isoformat() == "2026-08-20T14:30:00+00:00"
     assert candidate.shadow_flags["loss_avoidance_conservative_union"] is True
     assert candidate.shadow_flags["oi_change_60m"] == -100.0
+
+
+def test_block_decision_is_counterfactual_fallback_and_deduplicates_explicit_reject(tmp_path: Path) -> None:
+    reviews = tmp_path / "reviews"
+    raw = tmp_path / "raw_archive"
+    reviews.mkdir()
+    raw.mkdir()
+    day = "2026-08-20"
+    would_be_peak = {
+        "ts": "2026-08-20 16:30:00",
+        "source": "DeltaScout",
+        "action": "PEAK",
+        "kind": "long",
+        "delta": 125.0,
+        "vol": 200.0,
+        "imb": 0.625,
+        "price": 65000.5,
+        "vwap": 64950,
+        "poc": 64900,
+    }
+    decision = {
+        "schema": 1,
+        "event": "PEAK_LOSS_FILTER_DECISION",
+        "ts": would_be_peak["ts"],
+        "kind": "long",
+        "rule_id": "DS_PEAK_LOSS_AVOIDANCE_UNION_V1",
+        "decision": "BLOCK",
+        "effective_action": "BLOCK",
+        "component_a": True,
+        "component_b": False,
+        "union": True,
+        "would_be_peak": would_be_peak,
+    }
+    path = raw / f"{day}.jsonl"
+    path.write_text(json.dumps(decision) + "\n", encoding="utf-8")
+
+    fallback_candidates, fallback_quality = compile_candidates(
+        reviews,
+        date_from=day,
+        date_to=day,
+        raw_archive_root=raw,
+        candidate_groups=["PEAK_EMIT_BASELINE"],
+    )
+
+    assert fallback_quality == []
+    assert len(fallback_candidates) == 1
+    fallback = fallback_candidates[0]
+    assert fallback.event_type == "PEAK_LOSS_FILTER_DECISION"
+    assert fallback.admission_status == "FILTER_REJECTED"
+    assert fallback.filter_decision == "BLOCK"
+    assert fallback.signal_price == 65000.5
+
+    reject = dict(decision)
+    reject.update({"event": "PEAK_LOSS_FILTER_REJECT", "reject_reason": "loss_avoidance_union"})
+    path.write_text(
+        json.dumps(decision) + "\n" + json.dumps(reject) + "\n",
+        encoding="utf-8",
+    )
+
+    deduplicated, quality = compile_candidates(
+        reviews,
+        date_from=day,
+        date_to=day,
+        raw_archive_root=raw,
+        candidate_groups=["PEAK_EMIT_BASELINE"],
+    )
+
+    assert quality == []
+    assert len(deduplicated) == 1
+    assert deduplicated[0].event_type == "PEAK_LOSS_FILTER_REJECT"

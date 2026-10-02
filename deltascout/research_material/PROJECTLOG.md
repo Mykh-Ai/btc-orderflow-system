@@ -1,5 +1,28 @@
 # DeltaScout Project Log
 
+## 2026-09-25 — Live B-rejected LONG replayed with current V8
+
+- Synced the durable `PEAK_LOSS_FILTER_REJECT` for the 2026-09-25 11:08 UTC
+  LONG and immutable local copies of the Sep24–25 legacy structural feed.
+- Audited all daily archives for Sep17–25: this was the only new
+  `PEAK_LOSS_FILTER_REJECT` after the previously reviewed Sep16 case.
+- Live provenance is exact: A PASS; B BLOCK because trusted OI changed
+  `−339.44` over 60m while direction-adjusted 240m flow was `−0.73742%`, below
+  the `+6%` threshold. The veto was upstream; Executor received no order signal.
+- Counterfactual current-V8 dual-feed replay filled LIMIT at `85047.66`, set the
+  converted initial stop at `83889.32`, and closed `PLAIN_SL` at 12:18 UTC.
+  Modeled net was `−45.879462083022275 USDC` after commission/slippage and
+  before borrow interest; TP1/TP2 were not reached.
+- Inputs: normalized archived structural feed through 17:06 UTC; official
+  BTCUSDC Spot closed bars through 17:07 UTC. Candidate-quality issues: zero;
+  stop-first/target-first result identical; scout backtester tests: `86 passed`.
+- Evidence:
+  `deltascout/research_material/backtests/ab_rejected_2026-09-25_1108_live_agg_v8_v1/`
+  and
+  `deltascout/research_material/server_journals/2026-09-25_ab_reject/`.
+- `RESEARCHLOG.md` was not changed: this is one durable case result, not a new
+  validated setup-family conclusion or statistical proof of filter edge.
+
 ## 2026-09-11 — LLM entry boundary, A/B provenance, and v39A monitor deployment
 
 - Runtime subsystem/game name: `LLM Trade Judge Game`; the advisory component is
@@ -633,3 +656,20 @@ Use only these two prompts as normal entrypoints:
   - Use when the package is ready and you want strategic research interpretation or next-step recommendations.
 
 Do not manually choose among the deprecated stage prompts unless you are debugging an old workflow.
+
+## 2026-10-02 — Executor strategy checkpoint linkage
+
+- Added one durable strategy checkpoint to `RESEARCHLOG.md` for the selected
+  policy LONG 0.50–0.69 / SHORT 0.54–0.69 with all gates and A-or-B veto.
+- Checkpoint result: 28 resolved single-position fills, 17 TP1-positive
+  (60.71%), 11 Plain SL (39.29%), ratio 17:11, approximately 4.26 fills/month.
+- The count incorporates organic trade `EX_EN_1790867120` once; it reached TP1
+  and TP2 and closed through trailing on 2026-10-02. The trade also has a full
+  evidence-backed entry in `D:/Project_V/Executor/LOG.md`.
+- Executor replay artifacts and read-only production snapshots remain under
+  `D:/Project_V/Executor/backtests/` and `server_journals/2026-10-02/`.
+- General strategy results were removed from
+  `D:/Project_V/Executor/backtests/AB_FILTER_REVIEW.md`; that file now remains
+  limited to detailed A/B rejection cases.
+- No detector, Executor, production configuration, service, state, or order was
+  changed.

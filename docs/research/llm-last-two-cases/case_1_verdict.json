@@ -1,0 +1,34 @@
+{
+  "schema_version": "llm_trade_judge_verdict_v1",
+  "verdict_id": "llmj-818f6482e5994f039296696f53212070",
+  "created_at": "2026-09-14T02:14:27.557955+00:00",
+  "trade_key": "EX_EN_1789351940",
+  "trigger": "EXITS_PLACED_V15",
+  "is_primary": true,
+  "model": "gpt-5.5",
+  "llm_call_status": "success",
+  "verdict": "UNCLEAR",
+  "competitive_side": "LLM_REJECT",
+  "confidence": 0.48,
+  "setup_class": "continuation_pressure",
+  "reason_codes": [
+    "LOCAL_15M_60M_BUY_FLOW_SUPPORTS_LONG",
+    "PRICE_AT_60M_240M_HIGH_WITH_POSITIVE_60M_OI",
+    "DELTASCOUT_LONG_PEAK_STRONG_BUT_SAMPLE_SIZE_LOW",
+    "240M_DELTA_NEGATIVE_DESPITE_PRICE_UP",
+    "BROAD_3D_7D_CONTEXT_NOT_ALIGNED_WITH_LONG",
+    "ENTRY_INSIDE_SIGNIFICANT_NEAR_PRICE_ZONE",
+    "OVERHEAD_SUPPLY_RESISTANCE_NEAR_TARGETS",
+    "UPSTREAM_FILTER_STATUSES_UNKNOWN_NOT_PASS"
+  ],
+  "risk_flags": [
+    "UPSTREAM_FILTER_PROVENANCE_MISSING",
+    "QUALITY_STATUS_PARTIAL",
+    "CONTEXT_CONFLICT_LOCAL_BUY_FLOW_VS_BROAD_DISTRIBUTION",
+    "LONG_ENTRY_NEAR_RANGE_HIGH",
+    "SIGNIFICANT_OVERHEAD_ZONE_78766_81377",
+    "TP1_BELOW_1R",
+    "30D_CONTEXT_RECOVERED_DEGRADED"
+  ],
+  "summary_ua": "Локальний імпульс підтримує лонг: 15m/60m дельта позитивна, ціна біля максимумів, OI за 60m зростає. Але 240m дельта негативна, 3d/7d фон не підтверджує лонг, вхід відбувається всередині значущої зони з близьким верхнім опором, а upstream-фільтри мають UNKNOWN provenance. Чіткого краю для SUPPORT немає, але й прямого блокера для REJECT не видно."
+}

@@ -374,6 +374,16 @@ Required initial groups:
 | `GATE_REJECT` | terminal `CANDIDATE_GATE_REJECT` |
 | `OTHER_COMPARISON_REJECT` | remaining terminal comparison rejects |
 
+Opt-in extension: `VWAP_DISTANCE_REJECT` isolates terminal comparison rejects
+with `reject_reason=vwap_distance`, including direct raw JSONL compilation when
+events-context CSVs are absent. Without opt-in the existing OTHER mapping/default
+selection is unchanged. Paired DELTA and reject records produce one candidate;
+CSV/raw duplicates share the existing candidate identity. The event remains
+PRE_ADMISSION_REJECT, not a synthetic PEAK/AB rejection. Later admission gates
+are NOT_EVALUATED. Directional VWAP distance is retained in shadow metadata.
+Optional `vwap-distance-min-usd` selects strictly greater distances, is restricted
+to the isolated cohort, and is persisted in candidate_selection/run fingerprint.
+
 Required shadow labels:
 
 ```text
@@ -477,14 +487,20 @@ dollar profit.
 | `entry_offset_usd` | `0.5` | Executor default |
 | `entry_expiry_bars` | `2` | Deterministic one-minute approximation of the live 90-second entry timeout |
 | `sl_pct` | `0.002` | Executor default |
-| `swing_lookback_minutes` | `180` | Executor `SWING_MINS` |
+| `initial_stop_policy` | `volume_confirmed_swing` | Executor V8 `VOLUME_SWING_24H_LR25` |
+| `swing_lookback_minutes` | `1440` | Executor V8 initial-stop window |
+| `initial_swing_price_source` | `extreme` | LONG low / SHORT high |
+| `initial_swing_lr` | `25` | Executor V8 confirmed swing width |
+| `initial_swing_buffer_usd` | `50` | Executor V8 initial-stop buffer |
+| `initial_swing_max_distance_usd` | `1200` | Executor V8 distance cap |
+| `initial_swing_require_full_window` | `true` | Executor V8 full-history guard |
 | `tp_r_multipliers` | `[1, 2]` | Executor default |
 | `cooldown_seconds` | `180` | Executor default |
 | `trail_swing_lookback` | `240` rows | Executor default |
-| `trail_swing_lr` | `2` | Executor default |
+| `trail_swing_lr` | `25` | Executor default |
 | `trail_swing_buffer_usd` | `50` | Executor default |
-| `trail_step_usd` | `20` | Executor default |
-| `trail_confirm_buffer_usd` | `0` | Executor default |
+| `trail_step_usd` | `25` | Executor default |
+| `trail_confirm_buffer_usd` | `20` | Executor default |
 | `sl_limit_gap_ticks` | `2` | Executor default |
 
 Every run must materialize the resolved values in `run_manifest.json`; no important
