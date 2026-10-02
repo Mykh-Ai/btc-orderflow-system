@@ -522,3 +522,44 @@ next_actions:
 - root_cause: the OpenAI Responses call used `max_output_tokens=800`; both model responses were truncated inside JSON strings (`Unterminated string` around char 690-770), so the validator wrote `ERROR_NOT_SCORED`.
 - fix: added `LLM_TRADE_JUDGE_MAX_OUTPUT_TOKENS` with default `2000`, passed it to the Responses payload and injected test client, and retried JSON validation failures once before recording an error.
 - tests: `python -m pytest test\test_llm_trade_judge.py` -> 48 passed; `python -m pytest test\` -> 263 passed.
+
+## 2026-09-19T18:18:22Z - Manual Executor false PEAK
+
+- datetime_utc: 2026-09-19T18:18:22Z
+- trade_key: EX_EN_1789841876
+- test_id: false_peak_20260919T181748Z
+- result: тестова угода
+- source_files: `/root/volume-alert/data/logs/deltascout.log` at offset `46521`, `/root/volume-alert/data/state/executor_state.json`, `/root/volume-alert/data/state/manual_test_journal_annotation_false_peak_20260919T181748Z.json`, `backtests/FALSE_PEAK_MECHANICS_2026-09-19.md`
+- pre_trade_verdict: `ERROR_NOT_SCORED`; Executor logged `LLM_TRADE_JUDGE_ERROR` with `error_type=api_error` and durable `error_message=openai_http_429` at `2026-09-19T18:18:25Z`
+- post_trade_review: not_available
+- llm_data_requests: none_recorded
+- request_backlog_items_created: none
+- lifecycle_class: closed_manual_executor_mechanics_test
+- scoring_interpretation: exclude_manual_executor_mechanics_test
+- excluded_from_scoring: exact trade key added to `backtests/TEST_TRADE_EXCLUSIONS.csv`; after closure, the one matching row in each of the three production JSONL journals was marked `excluded_from_scoring: true`, `test_trade: true`, and `scoring_exclusion_reason: manual_false_peak_mechanics_test`; deployed offline close builder and watcher exclude the key
+- code_changes_commits: no commits; local and deployed offline analytics readers received narrow exclusion checks, without Executor restart
+- incidents_errors: OpenAI Responses API returned HTTP 429; the runtime journal saved only the status, not the API error code or `Retry-After`, so rate versus quota cause is unconfirmed. Initial production snapshot had `excluded_from_scoring: false` until the post-close annotation. Executor entry, protective exits, closure, and debt cleanup succeeded.
+- conclusions: Manual `SHORT` PEAK was injected only to test Executor mechanics. This trade is not organic strategy evidence. Keep the research designation `тестова угода` after closure.
+- next_actions: Keep this key excluded in any independent analytics consumer; if another 429 occurs, capture the API error code and `Retry-After` before changing retries or billing settings.
+
+## 2026-10-02T07:34:43Z - Organic LONG reached TP1 and TP2
+
+- datetime_utc: 2026-10-02T07:34:43.091247Z
+- trade_key: EX_EN_1790867120
+- source_files: `/root/volume-alert/data/state/llm_trade_verdicts.jsonl`, `/root/volume-alert/data/state/trade_outcomes.jsonl`, `/root/volume-alert/data/state/trade_execution_snapshots.jsonl`, `/root/volume-alert/data/logs/executor.log`, `/root/volume-alert/data/archive/deltascout/2026-10-01.jsonl`; local read-only snapshots under `server_journals/2026-10-02/`
+- pre_trade_verdict: `SUPPORT`; competitive_side `BOT`; confidence `0.67`; model `gpt-5.5`; verdict id `llmj-724292bc00c94870a4191b80a12656e2`; setup class `continuation_pressure`
+- post_trade_review: not_available
+- llm_data_requests: none_recorded
+- request_backlog_items_created: none
+- final_close_order_id: `10457388800`
+- final_close_fill_price: `85845.36`
+- close_qty: `0.01188 BTC`
+- commissions: durable execution snapshot records `0.00588747 BNB` total; Executor close summary reports `4.56240656445 USDC` approximate commission cost
+- realized_pnl: gross `+51.6175826 USDC`; Executor approximate net `+47.05517603555 USDC`; borrow interest is not separately resolved in the execution snapshot
+- lifecycle_class: `tp1_tp2_trailing_stop`; entry `84213.50`; TP1 `85118.61`; TP2 `86023.73`; final trailing fill `85845.36`
+- scoring_interpretation: organic strategy trade; DeltaScout LONG imbalance `0.626` was inside the deployed 0.50–0.69 band; durable DeltaScout admission shows A PASS, B PASS and `decision=KEEP`; count once as a TP1-positive single-position outcome
+- excluded_from_scoring: false; exact trade key is absent from `backtests/TEST_TRADE_EXCLUSIONS.csv`
+- code_changes_commits: none; this entry is evidence curation only
+- incidents_errors: execution snapshot status is `partial` because it is written before margin repayment and cannot convert all BNB commissions to quote currency; later Executor events record margin hook repayment and `POST_CLOSE_MARGIN_DEBT_CLEANUP cleanup_status=clean`. The LLM entry snapshot reported `UPSTREAM_FILTER_PROVENANCE_MISSING`, while the separate durable DeltaScout archive contains the exact A/B PASS admission record.
+- conclusions: the entry-time `SUPPORT` verdict aligned with a TP1+TP2 organic outcome. This one trade is included once in the 2026-10-02 strategy checkpoint in DeltaScout `research_material/RESEARCHLOG.md`; it is not an independent proof of model or filter edge.
+- next_actions: include this identity once in the next full-range replay/actual-trade reconciliation and prevent double counting against the current 17/28 checkpoint

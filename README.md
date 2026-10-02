@@ -1,5 +1,17 @@
 # Executor
 
+## Journals and research records
+
+- Production `/data/logs/executor.log`: runtime lifecycle and operational
+  events. It is evidence, not a research summary.
+- `LOG.md`: LLM Trade Judge Game journal for evidence-backed actual trade
+  entries.
+- `D:/Project_V/btc-orderflow-system/deltascout/research_material/RESEARCHLOG.md`:
+  canonical strategy research journal for filter, imbalance, backtest, and
+  portfolio checkpoints; its companion `PROJECTLOG.md` records workflow state.
+- `backtests/AB_FILTER_REVIEW.md`: detailed cases rejected by filter A, filter
+  B, or their union.
+
 **Executor** — автоматизований торговельний виконавець для сигналів DeltaScout PEAK. Система забезпечує повний цикл виконання угод: від отримання сигналу до закриття позиції з підтримкою trailing stop, маржинальної торгівлі та комплексних інваріантів стану.
 
 ## Зміст
