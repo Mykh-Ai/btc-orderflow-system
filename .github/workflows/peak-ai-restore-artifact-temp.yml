@@ -1,0 +1,49 @@
+name: Peak AI restore artifact temp
+
+on:
+  push:
+    branches:
+      - codex/peak-ai-restore-artifact-temp-2026-10-12
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+
+      - name: Restore archived research data with built-in SHA verification
+        run: python research/peak_ai_archive/restore.py
+
+      - name: Verify required forensic ledgers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/base/portfolio_trades.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/base/portfolio_trades_with_delta_sign.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/base/independent_trades.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/base/independent_trades_with_delta_sign.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/candidates.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/candidates.json
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/seed_audit.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/candidate_events.csv
+
+      - name: Upload forensic ledgers
+        uses: actions/upload-artifact@v4
+        with:
+          name: peak-ai-h1-forensic-ledgers
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            research/peak_ai_delta_h1_all_signs/results_v2/base/portfolio_trades.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/base/portfolio_trades_with_delta_sign.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/base/independent_trades.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/base/independent_trades_with_delta_sign.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/candidates.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/candidates.json
+            research/peak_ai_delta_h1_all_signs/results_v2/seed_audit.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/candidate_events.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/sign_analysis.json
