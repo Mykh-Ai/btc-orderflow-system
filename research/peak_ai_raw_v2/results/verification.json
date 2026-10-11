@@ -1,0 +1,373 @@
+{
+  "ledger_checks": [
+    {
+      "run": "development_base",
+      "family": "immediate_follow__all",
+      "mode": "independent",
+      "rows": 1318,
+      "closed": 1221,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__all",
+      "mode": "portfolio",
+      "rows": 1318,
+      "closed": 155,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__activity",
+      "mode": "independent",
+      "rows": 1305,
+      "closed": 1210,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__activity",
+      "mode": "portfolio",
+      "rows": 1305,
+      "closed": 152,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__resistance",
+      "mode": "independent",
+      "rows": 264,
+      "closed": 242,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__resistance",
+      "mode": "portfolio",
+      "rows": 264,
+      "closed": 106,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__trend",
+      "mode": "independent",
+      "rows": 861,
+      "closed": 833,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_follow__trend",
+      "mode": "portfolio",
+      "rows": 861,
+      "closed": 127,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__all",
+      "mode": "independent",
+      "rows": 1318,
+      "closed": 1142,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__all",
+      "mode": "portfolio",
+      "rows": 1318,
+      "closed": 156,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__activity",
+      "mode": "independent",
+      "rows": 1305,
+      "closed": 1129,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__activity",
+      "mode": "portfolio",
+      "rows": 1305,
+      "closed": 153,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__resistance",
+      "mode": "independent",
+      "rows": 264,
+      "closed": 233,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__resistance",
+      "mode": "portfolio",
+      "rows": 264,
+      "closed": 95,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__trend",
+      "mode": "independent",
+      "rows": 454,
+      "closed": 429,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "immediate_fade__trend",
+      "mode": "portfolio",
+      "rows": 454,
+      "closed": 111,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__all",
+      "mode": "independent",
+      "rows": 810,
+      "closed": 760,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__all",
+      "mode": "portfolio",
+      "rows": 810,
+      "closed": 140,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__activity",
+      "mode": "independent",
+      "rows": 802,
+      "closed": 754,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__activity",
+      "mode": "portfolio",
+      "rows": 802,
+      "closed": 139,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__resistance",
+      "mode": "independent",
+      "rows": 118,
+      "closed": 109,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__resistance",
+      "mode": "portfolio",
+      "rows": 118,
+      "closed": 61,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__trend",
+      "mode": "independent",
+      "rows": 516,
+      "closed": 498,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_follow__trend",
+      "mode": "portfolio",
+      "rows": 516,
+      "closed": 113,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__all",
+      "mode": "independent",
+      "rows": 647,
+      "closed": 597,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__all",
+      "mode": "portfolio",
+      "rows": 647,
+      "closed": 129,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__activity",
+      "mode": "independent",
+      "rows": 640,
+      "closed": 591,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__activity",
+      "mode": "portfolio",
+      "rows": 640,
+      "closed": 129,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__resistance",
+      "mode": "independent",
+      "rows": 184,
+      "closed": 169,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__resistance",
+      "mode": "portfolio",
+      "rows": 184,
+      "closed": 88,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__trend",
+      "mode": "independent",
+      "rows": 247,
+      "closed": 229,
+      "checked": true
+    },
+    {
+      "run": "development_base",
+      "family": "break_reverse__trend",
+      "mode": "portfolio",
+      "rows": 247,
+      "closed": 88,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_base",
+      "family": "break_reverse__resistance",
+      "mode": "independent",
+      "rows": 105,
+      "closed": 97,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_base",
+      "family": "break_reverse__resistance",
+      "mode": "portfolio",
+      "rows": 105,
+      "closed": 46,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_double_slippage",
+      "family": "break_reverse__resistance",
+      "mode": "independent",
+      "rows": 105,
+      "closed": 97,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_double_slippage",
+      "family": "break_reverse__resistance",
+      "mode": "portfolio",
+      "rows": 105,
+      "closed": 46,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_target_first",
+      "family": "break_reverse__resistance",
+      "mode": "independent",
+      "rows": 105,
+      "closed": 97,
+      "checked": true
+    },
+    {
+      "run": "historical_retest_target_first",
+      "family": "break_reverse__resistance",
+      "mode": "portfolio",
+      "rows": 105,
+      "closed": 46,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "immediate_follow__trend",
+      "mode": "independent",
+      "rows": 348,
+      "closed": 338,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "immediate_follow__trend",
+      "mode": "portfolio",
+      "rows": 348,
+      "closed": 60,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "immediate_fade__resistance",
+      "mode": "independent",
+      "rows": 116,
+      "closed": 103,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "immediate_fade__resistance",
+      "mode": "portfolio",
+      "rows": 116,
+      "closed": 40,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "break_follow__trend",
+      "mode": "independent",
+      "rows": 226,
+      "closed": 217,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "break_follow__trend",
+      "mode": "portfolio",
+      "rows": 226,
+      "closed": 45,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "break_reverse__resistance",
+      "mode": "independent",
+      "rows": 79,
+      "closed": 72,
+      "checked": true
+    },
+    {
+      "run": "validation_base",
+      "family": "break_reverse__resistance",
+      "mode": "portfolio",
+      "rows": 79,
+      "closed": 39,
+      "checked": true
+    }
+  ],
+  "all_passed": true
+}

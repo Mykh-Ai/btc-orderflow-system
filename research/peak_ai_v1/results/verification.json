@@ -1,0 +1,16 @@
+{
+  "tests": "92 passed",
+  "smoke": "peak_ai_handoff_smoke_20261009 completed",
+  "production_diff": "",
+  "python": "3.12.14",
+  "numpy": "2.3.5",
+  "pandas": "2.2.3",
+  "final_code_hashes": {
+    "build_report.py": "2093646032b8dca7e02818a6922135a4c17593bd16dfdd85e9d672ecc6598af0",
+    "signals.py": "b395a61a83e8d5e1f1ac51713094afee92d503083210a74ee7a5408a4b4c6379",
+    "test_signals.py": "fcb0d828fef7a4a19d162a15cb8004ff1d32a0805694f361a8bc8ca0e4e14408",
+    "run.py": "41af23c01a1973cb2733cdf74f1bad8071d9611a70c1df3e9a7e0076574bb95c"
+  },
+  "signal_hash_matches_selection": true,
+  "note": "Post-run nonsemantic changes: output-directory overwrite guard, extra invalidation test, report generator. Frozen signals unchanged."
+}

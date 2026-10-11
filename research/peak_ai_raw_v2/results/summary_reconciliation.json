@@ -1,0 +1,9 @@
+{
+  "reason": "Completed process logged 16 results but persisted metrics had only 15. Restored missing summary from completed native ledgers; every existing summary verified within 1e-7 recursively. No signal, trade or selection rule changed.",
+  "missing_families_restored": [
+    "break_reverse__trend"
+  ],
+  "original_metrics_sha256": "63ee3efa77fbb90c98503870e29caddab02150f7d67c74cab64d8c5b0fc3a6a1",
+  "restored_metrics_sha256": "fcd7d01557439f5aa126802827887d1d7ad75d70d7afc7a9fdf23cf0511ce702",
+  "existing_summaries_verified": 15
+}

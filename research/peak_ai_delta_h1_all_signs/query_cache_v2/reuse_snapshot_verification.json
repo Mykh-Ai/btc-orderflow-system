@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "frozen_prefix_records": 1685,
+  "reused_records": 1686,
+  "additional_record_timestamps": [
+    "2026-04-24T04:20:00+00:00"
+  ],
+  "explanation": "One completed native record was appended between source hashing and reading during worker shutdown; it matches the separately preserved full source exactly. Frozen source prefixes are also preserved byte-for-byte.",
+  "preserved_full_source_hashes": {
+    "part_00.jsonl": "fd5d4b15c2a173b17b85fe38d426ee947346b485f638ded3ae28a534d1e439c6",
+    "part_01.jsonl": "74f912bec3d94f0f1553852b7d0161868fec2e6f85b4a608a8ed2aa62584b26a",
+    "part_02.jsonl": "9cfa4576e70db0609656c5f8ddcfca8833bf659b5adb470e3024d5da08095f1c",
+    "part_03.jsonl": "5adb6deaac685a038cd162932e657678a191470317a00b0bbd54cb1a9ad22a25",
+    "part_04.jsonl": "00e6c277e8a0762bdab027b79e98b72f9053fe9b558c60f733ecd5d747b7cfe3",
+    "part_05.jsonl": "9616443d98810e3a20a823a7e5b39eb60effaca76cf07ee19aef49be54e17be7"
+  },
+  "all_reused_records_verified": true,
+  "applies_to": "initial rebalanced cache before final missing-query recovery",
+  "final_cache_recovery": {
+    "completed_unique_queries": 2846,
+    "reused_records": 1685,
+    "positive_candidate_parity_passed": true
+  }
+}

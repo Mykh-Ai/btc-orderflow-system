@@ -1,0 +1,115 @@
+{
+  "chosen": [
+    "immediate_follow__trend",
+    "immediate_fade__resistance",
+    "break_follow__trend",
+    "break_reverse__resistance"
+  ],
+  "ranking": [
+    {
+      "family": "immediate_follow__trend",
+      "eligible": false,
+      "pf": 0.5877753014940836,
+      "net_dd": -0.8467604675121618
+    },
+    {
+      "family": "immediate_follow__activity",
+      "eligible": false,
+      "pf": 0.565155410359817,
+      "net_dd": -0.916978545915016
+    },
+    {
+      "family": "immediate_follow__all",
+      "eligible": false,
+      "pf": 0.5614105538064698,
+      "net_dd": -0.9274247306695291
+    },
+    {
+      "family": "immediate_follow__resistance",
+      "eligible": false,
+      "pf": 0.3211176139576781,
+      "net_dd": -0.9759020688620371
+    },
+    {
+      "family": "immediate_fade__resistance",
+      "eligible": false,
+      "pf": 0.7002954914119301,
+      "net_dd": -0.8424797753446934
+    },
+    {
+      "family": "immediate_fade__activity",
+      "eligible": false,
+      "pf": 0.6346354408016209,
+      "net_dd": -0.918846373992046
+    },
+    {
+      "family": "immediate_fade__all",
+      "eligible": false,
+      "pf": 0.6262945637716575,
+      "net_dd": -0.9130472292608675
+    },
+    {
+      "family": "immediate_fade__trend",
+      "eligible": false,
+      "pf": 0.4874883056576304,
+      "net_dd": -1.0
+    },
+    {
+      "family": "break_follow__trend",
+      "eligible": false,
+      "pf": 0.624844543089473,
+      "net_dd": -0.8893470448866718
+    },
+    {
+      "family": "break_follow__resistance",
+      "eligible": false,
+      "pf": 0.6219172819904268,
+      "net_dd": -0.8021002088858995
+    },
+    {
+      "family": "break_follow__all",
+      "eligible": false,
+      "pf": 0.5064804217143245,
+      "net_dd": -0.9685139251191777
+    },
+    {
+      "family": "break_follow__activity",
+      "eligible": false,
+      "pf": 0.5036025262883073,
+      "net_dd": -0.9685034725905087
+    },
+    {
+      "family": "break_reverse__resistance",
+      "eligible": false,
+      "pf": 0.8436502706015532,
+      "net_dd": -0.7279196151580991
+    },
+    {
+      "family": "break_reverse__trend",
+      "eligible": false,
+      "pf": 0.6704613170462532,
+      "net_dd": -1.0000000000000002
+    },
+    {
+      "family": "break_reverse__activity",
+      "eligible": false,
+      "pf": 0.6428546207315402,
+      "net_dd": -0.9797794182296828
+    },
+    {
+      "family": "break_reverse__all",
+      "eligible": false,
+      "pf": 0.6409606315677745,
+      "net_dd": -0.9798839392654222
+    }
+  ],
+  "frozen_at_utc": "2026-10-09T17:24:52.878157+00:00",
+  "development_hash": "fcd7d01557439f5aa126802827887d1d7ad75d70d7afc7a9fdf23cf0511ce702",
+  "code_hashes": {
+    "metrics.py": "5d4dadac867aa86dd6a10b5109bdb9de0a36f26130a9cc1a07e0a5cd18f5d52a",
+    "run.py": "f6544c0ab43fb3555ba6a799907bb569f165df75eb02262e9024de9544e18159",
+    "signals.py": "a741e36f9f4e9f4c2069096779e58a377cc6ad5339770f1c713aa00c1f51e604",
+    "test_signals.py": "084ed9f2f3a0a13f11980b0ffa8eaf98edb342764d3eceef9a5be4a81d924865"
+  },
+  "protocol_hash": "f633b6a606a91d85c948513c56779e815282e42e7f529f09b466f8d053a3a8ef"
+}

@@ -1,0 +1,28 @@
+{
+  "raw_seeds": 2846,
+  "seed_types": {
+    "DELTA_MIN": 1429,
+    "DELTA_MAX": 1417
+  },
+  "seed_status": {
+    "NO_ELIGIBLE_ZONE": 1058,
+    "EXPIRED": 552,
+    "CONFIRMED": 516,
+    "DUPLICATE_PENDING_ZONE": 571,
+    "DUPLICATE_CONFIRMATION": 144,
+    "CANCELLED_FEED_GAP": 5
+  },
+  "armed": 1217,
+  "confirmed_unique": 516,
+  "replay_eligible": 515,
+  "bars": 224906,
+  "first_bar": "2026-03-16T19:31:00+00:00",
+  "last_bar": "2026-08-19T23:59:00+00:00",
+  "feed_gaps": 3,
+  "structure_references": 744,
+  "elapsed_seconds": 1.8885255399999892,
+  "zone_rejections": {
+    "INACTIVE_OR_INSIGNIFICANT": 5158,
+    "ELIGIBLE": 11461
+  }
+}

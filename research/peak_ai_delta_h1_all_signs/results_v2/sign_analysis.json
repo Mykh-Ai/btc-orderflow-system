@@ -1,0 +1,491 @@
+{
+  "scope": "same SHORT hypothesis; both raw delta signs; shared portfolio",
+  "seed_counts_by_sign": {
+    "NEGATIVE": 1429,
+    "POSITIVE": 1417
+  },
+  "seed_status_by_sign": {
+    "NEGATIVE": {
+      "CANCELLED_FEED_GAP": 3,
+      "CONFIRMED": 165,
+      "DUPLICATE_CONFIRMATION": 68,
+      "DUPLICATE_PENDING_ZONE": 315,
+      "EXPIRED": 216,
+      "NO_ELIGIBLE_ZONE": 662
+    },
+    "POSITIVE": {
+      "CANCELLED_FEED_GAP": 2,
+      "CONFIRMED": 351,
+      "DUPLICATE_CONFIRMATION": 76,
+      "DUPLICATE_PENDING_ZONE": 256,
+      "EXPIRED": 336,
+      "NO_ELIGIBLE_ZONE": 396
+    }
+  },
+  "runs": {
+    "base": {
+      "independent": {
+        "overall": {
+          "candidates": 515,
+          "closed": 515,
+          "unresolved": 0,
+          "wins": 192,
+          "losses": 323,
+          "net_usdc": -2612.7512592766957,
+          "gross_usdc": -42.585132899994164,
+          "commission_usdc": 2298.7200863330618,
+          "slippage_usdc": 271.44604004364,
+          "profit_factor": 0.6309918853866329,
+          "unresolved_realized_partial_net": 0.0,
+          "blocked_reasons": {}
+        },
+        "by_sign": {
+          "NEGATIVE": {
+            "candidates": 164,
+            "closed": 164,
+            "unresolved": 0,
+            "wins": 69,
+            "losses": 95,
+            "net_usdc": -455.156923819546,
+            "gross_usdc": 362.65451220000307,
+            "commission_usdc": 731.7453530059391,
+            "slippage_usdc": 86.06608301360998,
+            "profit_factor": 0.8108070309219387,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {}
+          },
+          "POSITIVE": {
+            "candidates": 351,
+            "closed": 351,
+            "unresolved": 0,
+            "wins": 123,
+            "losses": 228,
+            "net_usdc": -2157.5943354571496,
+            "gross_usdc": -405.2396450999972,
+            "commission_usdc": 1566.9747333271225,
+            "slippage_usdc": 185.37995703003,
+            "profit_factor": 0.5384518527501797,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {}
+          }
+        }
+      },
+      "portfolio": {
+        "overall": {
+          "candidates": 515,
+          "closed": 226,
+          "unresolved": 0,
+          "wins": 82,
+          "losses": 144,
+          "net_usdc": -1401.94529824407,
+          "gross_usdc": -273.1020276999967,
+          "commission_usdc": 1008.9479051284632,
+          "slippage_usdc": 119.89536541560999,
+          "profit_factor": 0.5647801149386551,
+          "unresolved_realized_partial_net": 0.0,
+          "blocked_reasons": {
+            "POSITION_ALREADY_OPEN": 289
+          }
+        },
+        "by_sign": {
+          "NEGATIVE": {
+            "candidates": 164,
+            "closed": 75,
+            "unresolved": 0,
+            "wins": 33,
+            "losses": 42,
+            "net_usdc": -406.1783297306376,
+            "gross_usdc": -31.927862399996414,
+            "commission_usdc": 334.78536018537113,
+            "slippage_usdc": 39.46510714527,
+            "profit_factor": 0.6489802406871614,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {
+              "POSITION_ALREADY_OPEN": 89
+            }
+          },
+          "POSITIVE": {
+            "candidates": 351,
+            "closed": 151,
+            "unresolved": 0,
+            "wins": 49,
+            "losses": 102,
+            "net_usdc": -995.7669685134326,
+            "gross_usdc": -241.1741653000004,
+            "commission_usdc": 674.1625449430919,
+            "slippage_usdc": 80.43025827034,
+            "profit_factor": 0.5175772944577245,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {
+              "POSITION_ALREADY_OPEN": 200
+            }
+          }
+        }
+      }
+    },
+    "double_slippage": {
+      "independent": {
+        "overall": {
+          "candidates": 515,
+          "closed": 515,
+          "unresolved": 0,
+          "wins": 185,
+          "losses": 330,
+          "net_usdc": -2884.197299320336,
+          "gross_usdc": -42.585132899994164,
+          "commission_usdc": 2298.7200863330618,
+          "slippage_usdc": 542.89208008728,
+          "profit_factor": 0.6033467091595782,
+          "unresolved_realized_partial_net": 0.0,
+          "blocked_reasons": {}
+        },
+        "by_sign": {
+          "NEGATIVE": {
+            "candidates": 164,
+            "closed": 164,
+            "unresolved": 0,
+            "wins": 68,
+            "losses": 96,
+            "net_usdc": -541.2230068331561,
+            "gross_usdc": 362.65451220000307,
+            "commission_usdc": 731.7453530059391,
+            "slippage_usdc": 172.13216602721997,
+            "profit_factor": 0.7802352855948419,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {}
+          },
+          "POSITIVE": {
+            "candidates": 351,
+            "closed": 351,
+            "unresolved": 0,
+            "wins": 117,
+            "losses": 234,
+            "net_usdc": -2342.9742924871794,
+            "gross_usdc": -405.2396450999972,
+            "commission_usdc": 1566.9747333271225,
+            "slippage_usdc": 370.75991406006,
+            "profit_factor": 0.5127525688328496,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {}
+          }
+        }
+      },
+      "portfolio": {
+        "overall": {
+          "candidates": 515,
+          "closed": 226,
+          "unresolved": 0,
+          "wins": 80,
+          "losses": 146,
+          "net_usdc": -1521.84066365968,
+          "gross_usdc": -273.1020276999967,
+          "commission_usdc": 1008.9479051284632,
+          "slippage_usdc": 239.79073083121997,
+          "profit_factor": 0.5397481131377262,
+          "unresolved_realized_partial_net": 0.0,
+          "blocked_reasons": {
+            "POSITION_ALREADY_OPEN": 289
+          }
+        },
+        "by_sign": {
+          "NEGATIVE": {
+            "candidates": 164,
+            "closed": 75,
+            "unresolved": 0,
+            "wins": 32,
+            "losses": 43,
+            "net_usdc": -445.6434368759076,
+            "gross_usdc": -31.927862399996414,
+            "commission_usdc": 334.78536018537113,
+            "slippage_usdc": 78.93021429054,
+            "profit_factor": 0.6232300325257126,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {
+              "POSITION_ALREADY_OPEN": 89
+            }
+          },
+          "POSITIVE": {
+            "candidates": 351,
+            "closed": 151,
+            "unresolved": 0,
+            "wins": 48,
+            "losses": 103,
+            "net_usdc": -1076.1972267837723,
+            "gross_usdc": -241.1741653000004,
+            "commission_usdc": 674.1625449430919,
+            "slippage_usdc": 160.86051654068,
+            "profit_factor": 0.4932535101807008,
+            "unresolved_realized_partial_net": 0.0,
+            "blocked_reasons": {
+              "POSITION_ALREADY_OPEN": 200
+            }
+          }
+        }
+      }
+    }
+  },
+  "monthly_portfolio": [
+    {
+      "month": "2026-03",
+      "delta_sign": "NEGATIVE",
+      "candidates": 16,
+      "closed": 7,
+      "unresolved": 0,
+      "wins": 4,
+      "losses": 3,
+      "net_usdc": -57.475562736086715,
+      "gross_usdc": -22.6988957999991,
+      "commission_usdc": 31.261148254737602,
+      "slippage_usdc": 3.5155186813499997,
+      "profit_factor": 0.7134207649743595,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 9
+      }
+    },
+    {
+      "month": "2026-03",
+      "delta_sign": "POSITIVE",
+      "candidates": 26,
+      "closed": 11,
+      "unresolved": 0,
+      "wins": 4,
+      "losses": 7,
+      "net_usdc": -48.29637181854315,
+      "gross_usdc": 6.503999000000853,
+      "commission_usdc": 49.093734850464,
+      "slippage_usdc": 5.7066359680800005,
+      "profit_factor": 0.67264775761814,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 15
+      }
+    },
+    {
+      "month": "2026-04",
+      "delta_sign": "NEGATIVE",
+      "candidates": 37,
+      "closed": 17,
+      "unresolved": 0,
+      "wins": 6,
+      "losses": 11,
+      "net_usdc": -229.4075322151723,
+      "gross_usdc": -144.18495179999866,
+      "commission_usdc": 75.9857716695936,
+      "slippage_usdc": 9.236808745580001,
+      "profit_factor": 0.22935988150217138,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 20
+      }
+    },
+    {
+      "month": "2026-04",
+      "delta_sign": "POSITIVE",
+      "candidates": 79,
+      "closed": 31,
+      "unresolved": 0,
+      "wins": 9,
+      "losses": 22,
+      "net_usdc": -415.36390267396655,
+      "gross_usdc": -259.9398123000013,
+      "commission_usdc": 138.55964833613524,
+      "slippage_usdc": 16.864442037830003,
+      "profit_factor": 0.3196261057982714,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 48
+      }
+    },
+    {
+      "month": "2026-05",
+      "delta_sign": "NEGATIVE",
+      "candidates": 29,
+      "closed": 16,
+      "unresolved": 0,
+      "wins": 8,
+      "losses": 8,
+      "net_usdc": -0.2757242008056835,
+      "gross_usdc": 79.27713349999988,
+      "commission_usdc": 71.3564961991656,
+      "slippage_usdc": 8.196361501639998,
+      "profit_factor": 0.9985091889912839,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 13
+      }
+    },
+    {
+      "month": "2026-05",
+      "delta_sign": "POSITIVE",
+      "candidates": 75,
+      "closed": 31,
+      "unresolved": 0,
+      "wins": 10,
+      "losses": 21,
+      "net_usdc": -123.0732055784899,
+      "gross_usdc": 31.67776439999969,
+      "commission_usdc": 138.3404178477696,
+      "slippage_usdc": 16.410552130720003,
+      "profit_factor": 0.6345316390378734,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 44
+      }
+    },
+    {
+      "month": "2026-06",
+      "delta_sign": "NEGATIVE",
+      "candidates": 19,
+      "closed": 11,
+      "unresolved": 0,
+      "wins": 5,
+      "losses": 6,
+      "net_usdc": -124.29079891430635,
+      "gross_usdc": -69.11877519999996,
+      "commission_usdc": 49.1510138031264,
+      "slippage_usdc": 6.021009911179999,
+      "profit_factor": 0.3709139879286045,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 8
+      }
+    },
+    {
+      "month": "2026-06",
+      "delta_sign": "POSITIVE",
+      "candidates": 40,
+      "closed": 16,
+      "unresolved": 0,
+      "wins": 8,
+      "losses": 8,
+      "net_usdc": 144.8210074637889,
+      "gross_usdc": 224.0480262000001,
+      "commission_usdc": 71.2496326890912,
+      "slippage_usdc": 7.9773860471199995,
+      "profit_factor": 1.699432250492673,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 24
+      }
+    },
+    {
+      "month": "2026-07",
+      "delta_sign": "NEGATIVE",
+      "candidates": 44,
+      "closed": 17,
+      "unresolved": 0,
+      "wins": 8,
+      "losses": 9,
+      "net_usdc": 73.1017652083151,
+      "gross_usdc": 157.4501695000015,
+      "commission_usdc": 75.76147471502641,
+      "slippage_usdc": 8.58692957666,
+      "profit_factor": 1.3919844719140702,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 27
+      }
+    },
+    {
+      "month": "2026-07",
+      "delta_sign": "POSITIVE",
+      "candidates": 92,
+      "closed": 45,
+      "unresolved": 0,
+      "wins": 12,
+      "losses": 33,
+      "net_usdc": -519.3763474083003,
+      "gross_usdc": -293.6254131000006,
+      "commission_usdc": 201.0770823568296,
+      "slippage_usdc": 24.67385195147,
+      "profit_factor": 0.20587722966955274,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 47
+      }
+    },
+    {
+      "month": "2026-08",
+      "delta_sign": "NEGATIVE",
+      "candidates": 19,
+      "closed": 7,
+      "unresolved": 0,
+      "wins": 2,
+      "losses": 5,
+      "net_usdc": -67.83047687258161,
+      "gross_usdc": -32.65254260000002,
+      "commission_usdc": 31.269455543721595,
+      "slippage_usdc": 3.9084787288599996,
+      "profit_factor": 0.245339778139583,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 12
+      }
+    },
+    {
+      "month": "2026-08",
+      "delta_sign": "POSITIVE",
+      "candidates": 39,
+      "closed": 17,
+      "unresolved": 0,
+      "wins": 6,
+      "losses": 11,
+      "net_usdc": -34.478148497921524,
+      "gross_usdc": 50.16127050000086,
+      "commission_usdc": 75.84202886280241,
+      "slippage_usdc": 8.79739013512,
+      "profit_factor": 0.6814401673398446,
+      "unresolved_realized_partial_net": 0.0,
+      "blocked_reasons": {
+        "POSITION_ALREADY_OPEN": 22
+      }
+    }
+  ],
+  "verification": {
+    "passed": true,
+    "count": 34,
+    "checks": [
+      "all_raw_deltas_accounted",
+      "both_signs_admitted",
+      "all_candidates_short",
+      "armed_and_confirmed_counts",
+      "all_candidate_deadlines",
+      "strict_reclaim",
+      "price_above_zone_at_trigger",
+      "preexisting_levels",
+      "frozen_stop_cutoff",
+      "original_delta_attribution",
+      "nearest_significant_zone",
+      "both_signs_share_pending_timer",
+      "base/independent/matched_candidate_sign",
+      "base/independent/economic_totals",
+      "base/independent/entry_after_confirmation",
+      "base/independent/protective_stop",
+      "base/independent/sign_partition_sums",
+      "base/portfolio/no_overlapping_positions",
+      "base/portfolio/matched_candidate_sign",
+      "base/portfolio/economic_totals",
+      "base/portfolio/entry_after_confirmation",
+      "base/portfolio/protective_stop",
+      "base/portfolio/sign_partition_sums",
+      "double_slippage/independent/matched_candidate_sign",
+      "double_slippage/independent/economic_totals",
+      "double_slippage/independent/entry_after_confirmation",
+      "double_slippage/independent/protective_stop",
+      "double_slippage/independent/sign_partition_sums",
+      "double_slippage/portfolio/no_overlapping_positions",
+      "double_slippage/portfolio/matched_candidate_sign",
+      "double_slippage/portfolio/economic_totals",
+      "double_slippage/portfolio/entry_after_confirmation",
+      "double_slippage/portfolio/protective_stop",
+      "double_slippage/portfolio/sign_partition_sums"
+    ]
+  },
+  "query_cache_positive_parity": {
+    "passed": true,
+    "exact_candidate_records": 400,
+    "exact_seed_statuses": 2846,
+    "comparison": "original completed v1 output"
+  }
+}

@@ -212,7 +212,7 @@ class ReplayConfig:
             )
         if self.planb_price_proxy != "SECOND_NEXT_BAR_OPEN":
             raise BacktestContractError(f"unsupported planb_price_proxy={self.planb_price_proxy}")
-        if self.initial_stop_policy not in {"window_extreme", "volume_confirmed_swing"}:
+        if self.initial_stop_policy not in {"window_extreme", "volume_confirmed_swing", "candidate_sweep"}:
             raise BacktestContractError(f"unsupported initial_stop_policy={self.initial_stop_policy}")
         if self.initial_swing_lr <= 0:
             raise BacktestContractError(f"initial_swing_lr must be positive, got {self.initial_swing_lr}")
