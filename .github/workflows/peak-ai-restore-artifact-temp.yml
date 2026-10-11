@@ -30,6 +30,8 @@ jobs:
           test -s research/peak_ai_delta_h1_all_signs/results_v2/candidates.json
           test -s research/peak_ai_delta_h1_all_signs/results_v2/seed_audit.csv
           test -s research/peak_ai_delta_h1_all_signs/results_v2/candidate_events.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/structural_inventory.csv
+          test -s research/peak_ai_delta_h1_all_signs/results_v2/zone_selection_audit.csv
 
       - name: Upload forensic ledgers
         uses: actions/upload-artifact@v4
@@ -46,4 +48,6 @@ jobs:
             research/peak_ai_delta_h1_all_signs/results_v2/candidates.json
             research/peak_ai_delta_h1_all_signs/results_v2/seed_audit.csv
             research/peak_ai_delta_h1_all_signs/results_v2/candidate_events.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/structural_inventory.csv
+            research/peak_ai_delta_h1_all_signs/results_v2/zone_selection_audit.csv
             research/peak_ai_delta_h1_all_signs/results_v2/sign_analysis.json
