@@ -1,0 +1,165 @@
+{
+  "independent": {
+    "candidates": 400,
+    "filled": 400,
+    "closed": 400,
+    "unresolved": 0,
+    "net_usdc": -2546.020218384417,
+    "gross_usdc": -337.5762146999963,
+    "commission_usdc": 1785.6381195808008,
+    "slippage_usdc": 422.80588410362,
+    "profit_factor": 0.5342717811980814,
+    "net_wins": 138,
+    "tp1_hits": 195,
+    "max_closed_equity_drawdown_usdc": 2720.169813402402,
+    "unresolved_realized_partial_net": 0,
+    "status_counts": {
+      "FILLED": 400
+    },
+    "lifecycle_counts": {
+      "TP1_SL": 101,
+      "TP1_TP2_TRAILING_STOP": 94,
+      "PLAIN_SL": 205
+    },
+    "blocked_reasons": {},
+    "monthly_by_signal_month": {
+      "2026-03": {
+        "closed": 29,
+        "net_usdc": -93.51299127300378
+      },
+      "2026-04": {
+        "closed": 93,
+        "net_usdc": -1424.6585368257026
+      },
+      "2026-05": {
+        "closed": 84,
+        "net_usdc": -208.25383329031777
+      },
+      "2026-06": {
+        "closed": 45,
+        "net_usdc": 298.37136586542505
+      },
+      "2026-07": {
+        "closed": 108,
+        "net_usdc": -997.50394749607
+      },
+      "2026-08": {
+        "closed": 41,
+        "net_usdc": -120.46227536474781
+      }
+    }
+  },
+  "portfolio": {
+    "candidates": 400,
+    "filled": 210,
+    "closed": 210,
+    "unresolved": 0,
+    "net_usdc": -1352.947892580773,
+    "gross_usdc": -193.74927090000068,
+    "commission_usdc": 937.471539964572,
+    "slippage_usdc": 221.7270817162,
+    "profit_factor": 0.536505166089432,
+    "net_wins": 73,
+    "tp1_hits": 103,
+    "max_closed_equity_drawdown_usdc": 1412.3357334143889,
+    "unresolved_realized_partial_net": 0,
+    "status_counts": {
+      "FILLED": 210,
+      "BLOCKED": 190
+    },
+    "lifecycle_counts": {
+      "TP1_SL": 53,
+      "TP1_TP2_TRAILING_STOP": 50,
+      "PLAIN_SL": 107,
+      "NO_TRADE": 190
+    },
+    "blocked_reasons": {
+      "POSITION_ALREADY_OPEN": 190
+    },
+    "monthly_by_signal_month": {
+      "2026-03": {
+        "closed": 22,
+        "net_usdc": -169.29145382535273
+      },
+      "2026-04": {
+        "closed": 44,
+        "net_usdc": -649.1373706985808
+      },
+      "2026-05": {
+        "closed": 41,
+        "net_usdc": -121.13884346730406
+      },
+      "2026-06": {
+        "closed": 24,
+        "net_usdc": 63.94386882054253
+      },
+      "2026-07": {
+        "closed": 59,
+        "net_usdc": -391.8786568772714
+      },
+      "2026-08": {
+        "closed": 20,
+        "net_usdc": -85.44543653280626
+      }
+    }
+  },
+  "integrity_errors": [],
+  "config": {
+    "experiment_id": "peak_ai_delta_h1_v1_20261010",
+    "description": "Raw DELTA_MAX -> frozen H1/H4 zone -> H1 reclaim within four hours",
+    "price_contour": "btcusdc_spot",
+    "symbol": "BTCUSDC",
+    "signal_price_symbol": "BTCUSDT_REFERENCE",
+    "signal_feature_feed_symbol": "BTCUSDT_SPOT_LEGACY",
+    "replay_feed_symbol": "BTCUSDC_SPOT_1M",
+    "execution_symbol": "BTCUSDC",
+    "fixed_notional_usdc": 3000.0,
+    "tick_size": 0.01,
+    "qty_step": 1e-05,
+    "min_qty": 1e-05,
+    "min_notional": 5.0,
+    "entry_offset_usd": 0.5,
+    "entry_expiry_bars": 2,
+    "live_entry_timeout_seconds": 90,
+    "planb_max_dev_r_mult": 0.25,
+    "planb_max_dev_usd": 0.0,
+    "planb_require_price": true,
+    "planb_abort_if_past_tp1": true,
+    "planb_price_proxy": "SECOND_NEXT_BAR_OPEN",
+    "sl_pct": 0.002,
+    "swing_lookback_minutes": 1440,
+    "initial_stop_policy": "candidate_sweep",
+    "initial_swing_price_source": "extreme",
+    "initial_swing_buffer_usd": 50.0,
+    "initial_swing_lr": 25,
+    "initial_swing_max_distance_usd": 1200.0,
+    "initial_swing_require_full_window": true,
+    "tp_r_multipliers": [
+      1.0,
+      2.0
+    ],
+    "cooldown_seconds": 180,
+    "trail_swing_lookback": 240,
+    "trail_swing_lr": 25,
+    "trail_swing_buffer_usd": 50.0,
+    "trail_step_usd": 25.0,
+    "trail_confirm_buffer_usd": 20.0,
+    "usdt_usdc_ratio_min": 0.95,
+    "usdt_usdc_ratio_max": 1.05,
+    "sl_limit_gap_ticks": 2,
+    "execution_policy_id": "EXECUTOR_V15_REPLAY_DUAL_FEED_V0_2",
+    "fill_model_id": "LIMIT_THEN_MARKET_90S_GUARDED_V0_1",
+    "same_bar_policy_id": "CONSERVATIVE_STOP_FIRST_V0_1",
+    "cost_model_id": "COMMISSION_TURNOVER_RATE_V0_1",
+    "slippage_model_id": "FIXED_BPS_ADVERSE",
+    "commission_rate": 0.000744,
+    "commission_calibration_source": "PINNED_SPEC_REFERENCE_0_000744",
+    "commission_calibration_count": 0,
+    "entry_slippage_bps": 0.0,
+    "exit_slippage_bps": 2,
+    "stop_slippage_bps": 4,
+    "conversion_model_id": "COMPLETED_MINUTE_BTCUSDC_SPOT_TO_BTCUSDT_REFERENCE_CLOSE_RATIO_V0_2",
+    "quality_policy_id": "EFFECTIVE_FEED_RECOVERY_QUALITY_V0_1",
+    "utility_policy_id": "SCOUT_UTILITY_V0_1"
+  }
+}

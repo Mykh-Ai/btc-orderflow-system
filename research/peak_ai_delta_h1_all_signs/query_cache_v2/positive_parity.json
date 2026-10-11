@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "exact_candidate_records": 400,
+  "exact_seed_statuses": 2846,
+  "comparison": "original completed v1 output"
+}

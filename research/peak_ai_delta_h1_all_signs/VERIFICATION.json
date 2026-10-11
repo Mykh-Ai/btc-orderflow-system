@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-11",
+  "correction": "Both numeric signs may trigger the same SHORT hypothesis; shared pending state and shared portfolio",
+  "new_contract_checks_passed": 7,
+  "test_runner": "stdlib unittest",
+  "prior_v1_results_preserved": true,
+  "original_strategy_changed_only_in": [
+    "raw DELTA_MIN admission",
+    "research family identity"
+  ],
+  "query_cache_positive_candidate_parity": {
+    "passed": true,
+    "exact_candidates": 400,
+    "exact_seed_statuses": 2846
+  },
+  "completed_campaign": true,
+  "implementation_commit": "33f1cd9",
+  "production_changes": false,
+  "remote_push": false,
+  "actual_unique_queries_verified": 2846,
+  "ledger_checks": {
+    "passed": true,
+    "count": 34,
+    "checks": [
+      "all_raw_deltas_accounted",
+      "both_signs_admitted",
+      "all_candidates_short",
+      "armed_and_confirmed_counts",
+      "all_candidate_deadlines",
+      "strict_reclaim",
+      "price_above_zone_at_trigger",
+      "preexisting_levels",
+      "frozen_stop_cutoff",
+      "original_delta_attribution",
+      "nearest_significant_zone",
+      "both_signs_share_pending_timer",
+      "base/independent/matched_candidate_sign",
+      "base/independent/economic_totals",
+      "base/independent/entry_after_confirmation",
+      "base/independent/protective_stop",
+      "base/independent/sign_partition_sums",
+      "base/portfolio/no_overlapping_positions",
+      "base/portfolio/matched_candidate_sign",
+      "base/portfolio/economic_totals",
+      "base/portfolio/entry_after_confirmation",
+      "base/portfolio/protective_stop",
+      "base/portfolio/sign_partition_sums",
+      "double_slippage/independent/matched_candidate_sign",
+      "double_slippage/independent/economic_totals",
+      "double_slippage/independent/entry_after_confirmation",
+      "double_slippage/independent/protective_stop",
+      "double_slippage/independent/sign_partition_sums",
+      "double_slippage/portfolio/no_overlapping_positions",
+      "double_slippage/portfolio/matched_candidate_sign",
+      "double_slippage/portfolio/economic_totals",
+      "double_slippage/portfolio/entry_after_confirmation",
+      "double_slippage/portfolio/protective_stop",
+      "double_slippage/portfolio/sign_partition_sums"
+    ]
+  },
+  "query_orchestration_commit": "cd12223",
+  "preparation_recovery": {
+    "initial_completion_marker_claimed": 2846,
+    "records_found_before_recovery": 2838,
+    "resumed_before_candidate_generation": true,
+    "verified_after_recovery": 2846,
+    "cause": "Not established; the incomplete cache was not used for candidate generation."
+  }
+}

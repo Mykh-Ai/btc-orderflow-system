@@ -1,0 +1,48 @@
+{
+  "selected": "failed_extreme_30",
+  "eligible": false,
+  "rankings": [
+    {
+      "family": "failed_extreme_30",
+      "eligible": false,
+      "min_pf": 0.9361630453501562,
+      "validation_net_dd": 2.344940206883542
+    },
+    {
+      "family": "failed_extreme_15",
+      "eligible": false,
+      "min_pf": 0.8757213282775047,
+      "validation_net_dd": 1.6528762130330374
+    },
+    {
+      "family": "continuation_15",
+      "eligible": false,
+      "min_pf": 0.4855722899998476,
+      "validation_net_dd": -0.7944212250196725
+    },
+    {
+      "family": "continuation_30",
+      "eligible": false,
+      "min_pf": 0.40994517908945954,
+      "validation_net_dd": -0.8313818602854123
+    },
+    {
+      "family": "pullback_30",
+      "eligible": false,
+      "min_pf": 0.2789429771883364,
+      "validation_net_dd": -0.1400942039629309
+    },
+    {
+      "family": "pullback_15",
+      "eligible": false,
+      "min_pf": 0.2703641082265871,
+      "validation_net_dd": -0.17994051700228814
+    }
+  ],
+  "frozen_at_utc": "2026-10-09T10:10:15.046802+00:00",
+  "test_outcomes_seen": false,
+  "development_hash": "2391dda4504d7e565599084942ad43ad201f61bf8c1f53abebb988ca87f3cdcc",
+  "validation_hash": "097bf99a61831ce62f5c8f22def0c133f2f554f37ace3544d29c0a34f4dce3aa",
+  "signal_code_hash": "b395a61a83e8d5e1f1ac51713094afee92d503083210a74ee7a5408a4b4c6379",
+  "protocol_hash": "fcdd196c1ae021f8811fff592336d172bd7e34e10c8d5ee76f996b0a0a07ad88"
+}

@@ -1,0 +1,39 @@
+{
+  "selected": "break_reverse__resistance",
+  "eligible": false,
+  "rankings": [
+    {
+      "family": "break_reverse__resistance",
+      "eligible": false,
+      "min_pf": 0.8436502706015532,
+      "validation_net_dd": -0.031064657263377714
+    },
+    {
+      "family": "immediate_fade__resistance",
+      "eligible": false,
+      "min_pf": 0.7002954914119301,
+      "validation_net_dd": 0.4540032213424223
+    },
+    {
+      "family": "break_follow__trend",
+      "eligible": false,
+      "min_pf": 0.624844543089473,
+      "validation_net_dd": 0.4295475921218811
+    },
+    {
+      "family": "immediate_follow__trend",
+      "eligible": false,
+      "min_pf": 0.5877753014940836,
+      "validation_net_dd": -0.4383579688154181
+    }
+  ],
+  "frozen_at_utc": "2026-10-09T17:26:39.436765+00:00",
+  "code_hashes": {
+    "metrics.py": "5d4dadac867aa86dd6a10b5109bdb9de0a36f26130a9cc1a07e0a5cd18f5d52a",
+    "run.py": "f6544c0ab43fb3555ba6a799907bb569f165df75eb02262e9024de9544e18159",
+    "signals.py": "a741e36f9f4e9f4c2069096779e58a377cc6ad5339770f1c713aa00c1f51e604",
+    "test_signals.py": "084ed9f2f3a0a13f11980b0ffa8eaf98edb342764d3eceef9a5be4a81d924865"
+  },
+  "validation_hash": "8c9232a7c217b04b180c4029b77d6af41789436f9a618fcf41e70d0f2af14e65",
+  "historical_retest_is_not_fresh_holdout": true
+}

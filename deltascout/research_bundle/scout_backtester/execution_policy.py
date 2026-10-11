@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+import math
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from .contracts import (
@@ -184,6 +185,41 @@ def compute_targets(side: str, entry: float, stop: float, config: ReplayConfig) 
     return values[0], values[1]
 
 
+def select_candidate_sweep_stop(candidate: Candidate, entry: float,
+                                bars: list[FeedBar], config: ReplayConfig) -> InitialSwingSelection:
+    """Opt-in research SHORT anchor, verified against the complete as-of feed.
+
+    Never accepts an arbitrary stop supplied in metadata and never falls back to
+    another policy. No production Executor code calls this replay-only function.
+    """
+    try:
+        start = datetime.fromisoformat(candidate.shadow_flags["sweep_start_ts"])
+        end = datetime.fromisoformat(candidate.shadow_flags["sweep_end_ts"])
+        declared_high = float(candidate.shadow_flags["sweep_high"])
+        declared_stop = float(candidate.shadow_flags["sweep_stop_price"])
+        buffer = float(candidate.shadow_flags["stop_buffer_fraction"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InitialStopSelectionError("INVALID_CANDIDATE_SWEEP_METADATA", str(exc)) from exc
+    if (candidate.side != "SHORT" or start.tzinfo is None or end.tzinfo is None
+        or end != candidate.signal_ts_utc or start > end or buffer != .0001
+        or not all(math.isfinite(x) for x in (declared_high,declared_stop,buffer))):
+        raise InitialStopSelectionError("INVALID_CANDIDATE_SWEEP_INTERVAL")
+    window = [b for b in bars if start <= b.ts <= end]
+    if (not window or window[0].ts != start or window[-1].ts != end
+        or len(window) != int((end-start)/timedelta(minutes=1))+1
+        or any(b.is_synthetic or b.volume <= 0 for b in window)
+        or any(b.ts-a.ts != timedelta(minutes=1) for a,b in zip(window,window[1:]))):
+        raise InitialStopSelectionError("INCOMPLETE_CANDIDATE_SWEEP_INTERVAL")
+    highest = max(window, key=lambda b: (b.high,b.ts))
+    expected_stop = highest.high*(1+buffer)
+    if not math.isclose(declared_high, highest.high, rel_tol=0,abs_tol=1e-8) or not math.isclose(declared_stop, expected_stop, rel_tol=0,abs_tol=1e-8):
+        raise InitialStopSelectionError("CANDIDATE_SWEEP_ANCHOR_MISMATCH")
+    stop = ceil_to_step(expected_stop, config.tick_size)
+    if stop <= entry:
+        raise InitialStopSelectionError("CANDIDATE_SWEEP_STOP_NOT_PROTECTIVE")
+    return InitialSwingSelection(stop, highest.ts, highest.high, highest.volume, 1, 1)
+
+
 def build_execution_plan(
     candidate: Candidate,
     reference_bars: list[FeedBar],
@@ -204,7 +240,7 @@ def build_execution_plan(
     if execution_cutoff <= 0 or execution_bars[execution_cutoff - 1].ts != candidate.signal_ts_utc:
         raise BacktestContractError("missing exact execution-feed signal minute")
     window_bars = reference_bars[max(0, cutoff - config.swing_lookback_minutes):cutoff]
-    if config.initial_swing_require_full_window and len(window_bars) < config.swing_lookback_minutes:
+    if config.initial_stop_policy != "candidate_sweep" and config.initial_swing_require_full_window and len(window_bars) < config.swing_lookback_minutes:
         raise InitialStopSelectionError(
             "NO_FULL_INITIAL_SWING_WINDOW",
             f"bars={len(window_bars)} required={config.swing_lookback_minutes}",
@@ -230,7 +266,10 @@ def build_execution_plan(
         )
     entry_usdt = build_entry_price(candidate.side, candidate.signal_price, config)
     selected_swing: InitialSwingSelection | None = None
-    if config.initial_stop_policy == "volume_confirmed_swing":
+    if config.initial_stop_policy == "candidate_sweep":
+        selected_swing = select_candidate_sweep_stop(candidate, entry_usdt, reference_bars[:cutoff], config)
+        stop_usdt = selected_swing.stop
+    elif config.initial_stop_policy == "volume_confirmed_swing":
         selected_swing = select_volume_confirmed_initial_stop(
             candidate.side,
             entry_usdt,

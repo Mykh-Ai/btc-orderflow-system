@@ -1,0 +1,5 @@
+{
+  "command": "python -m pytest -q tests/offline/scout_backtester research/peak_ai_raw_v2/test_signals.py",
+  "summary": "96 passed (86 existing replay + 10 raw-entry tests)",
+  "production_tracked_diff": "empty at experiment start"
+}
