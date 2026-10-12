@@ -1,0 +1,18 @@
+unittest.case.FunctionTestCase (<lambda>)
+SHORT admission DELTA_MAX sign -1 ... ok
+unittest.case.FunctionTestCase (<lambda>)
+SHORT admission DELTA_MAX sign 1 ... ok
+unittest.case.FunctionTestCase (<lambda>)
+SHORT admission DELTA_MIN sign -1 ... ok
+unittest.case.FunctionTestCase (<lambda>)
+SHORT admission DELTA_MIN sign 1 ... ok
+unittest.case.FunctionTestCase (<lambda>)
+Shared timer first sign -1 ... ok
+unittest.case.FunctionTestCase (<lambda>)
+Shared timer first sign 1 ... ok
+unittest.case.FunctionTestCase (test_strategy_diff_is_only_event_admission_and_research_identity) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.008s
+
+OK

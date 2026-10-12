@@ -1,0 +1,135 @@
+$ git blame research/peak_ai_delta_h1_all_signs/engine.py
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   1) """Delta-first, frozen-zone, four-hour H1 research candidate lifecycle."""
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   2) from __future__ import annotations
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   3) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   4) from datetime import timedelta
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   5) import hashlib
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   6) import math
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   7) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   8) from deltascout.research_bundle.scout_backtester.contracts import Candidate
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200   9) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  10) FAMILY = "PEAK_AI_DELTA_H1_ALL_SIGNS_SHORT_V2"
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  11) HORIZON = timedelta(hours=4)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  12) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  13) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  14) class DeltaH1Engine:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  15)     def __init__(self, monitor):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  16)         self.monitor = monitor
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  17)         self.pending = {}
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  18)         self.attempted = set()
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  19)         self.audit = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  20)         self.events = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  21)         self.zone_evidence = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  22)         self.candidates = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  23)         self.last_bar = None
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  24)         self.hour = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  25)         self.confirmed_keys = {}
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  26) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  27)     def _event(self, row, ts, event, **fields):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  28)         self.events.append({"seed_id": row["seed_id"], "ts": ts.isoformat(),
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  29)                             "event": event, "zone_id": row.get("zone_id", ""), **fields})
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  30) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  31)     def _finish(self, row, ts, status):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  32)         row["status"] = status
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  33)         row["finished_at"] = ts.isoformat()
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  34)         self._event(row, ts, status)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  35)         self.pending.pop(row["zone_id"], None)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  36) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  37)     def step(self, bar, seeds=()):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  38)         if self.last_bar is not None and bar.ts <= self.last_bar.ts:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  39)             raise ValueError("feed must advance strictly")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  40)         valid = (not bar.is_synthetic and bar.volume > 0
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  41)                  and all(math.isfinite(x) for x in (bar.open,bar.high,bar.low,bar.close,bar.volume))
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  42)                  and 0 < bar.low <= min(bar.open,bar.close) <= max(bar.open,bar.close) <= bar.high)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  43)         gap = self.last_bar is not None and bar.ts-self.last_bar.ts != timedelta(minutes=1)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  44)         if gap or not valid:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  45)             for row in list(self.pending.values()):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  46)                 self._finish(row, bar.ts, "CANCELLED_FEED_GAP" if gap else "CANCELLED_INVALID_BAR")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  47)             self.hour = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  48)         bucket = (bar.ts-timedelta(minutes=1)).replace(minute=0,second=0,microsecond=0)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  49)         if self.hour and (self.hour[0].ts-timedelta(minutes=1)).replace(minute=0,second=0,microsecond=0) != bucket:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  50)             self.hour = []
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  51)         if valid:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  52)             self.hour.append(bar)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  53)         closed_h1 = (valid and bar.ts.minute == 0 and bar.ts.second == 0
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  54)                      and len(self.hour) == 60 and self.hour[0].ts == bar.ts-timedelta(minutes=59))
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  55)         for row in list(self.pending.values()):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  56)             if bar.ts > row["_deadline"]:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  57)                 self._finish(row, row["_deadline"], "EXPIRED")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  58)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  59)             row["sweep_high"] = max(row["sweep_high"], bar.high)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  60)             if closed_h1 and bar.ts > row["_seed"].ts:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  61)                 self._event(row, bar.ts, "H1_CLOSE", close=bar.close, lower=row["lower"],
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  62)                             deadline=row["deadline"], complete_minutes=60)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  63)                 if bar.close < row["lower"]:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  64)                     self._confirm(row, bar)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  65)                     continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  66)             if bar.ts == row["_deadline"]:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  67)                 self._finish(row, bar.ts, "EXPIRED")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  68)         for seed in seeds:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  69)             if seed.ts != bar.ts:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  70)                 raise ValueError("seed must be evaluated at its exact minute")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  71)             row = {"seed_id": seed.seed_id, "seed_ts": seed.ts.isoformat(), "event": seed.event,
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  72)                    "delta": seed.delta, "volume": seed.volume, "price": bar.close,
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  73)                    "source_path": seed.source_path, "source_line": seed.source_line}
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  74)             self.audit.append(row)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  75)             if abs(seed.delta-(bar.buy_qty-bar.sell_qty)) > .011 or abs(seed.volume-bar.volume) > .011:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  76)                 raise ValueError(f"journal/feed mismatch {seed.seed_id}")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  77)             if seed.event not in {"DELTA_MAX", "DELTA_MIN"}:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  78)                 row["status"] = "OUT_OF_SCOPE_NON_DELTA_EVENT"
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  79)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  80)             if not valid or gap:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  81)                 row["status"] = "INVALID_TRIGGER_CONTEXT"
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  82)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  83)             zones, counts, evidence = self.monitor.query(seed.ts)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  84)             row.update(counts)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  85)             self.zone_evidence.extend(dict(seed_id=seed.seed_id, **e) for e in evidence)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  86)             if not zones:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  87)                 row["status"] = "NO_ELIGIBLE_ZONE"
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  88)                 self._event(row, bar.ts, row["status"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  89)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  90)             zone = zones[0]
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  91)             zone_id = zone["zone_id"]
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  92)             episode = (zone_id, zone["crossed_at"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  93)             row.update(zone_id=zone_id, lower=float(zone["price_lower"]), upper=float(zone["price_upper"]),
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  94)                        bucket=zone["bucket"], significance_score=zone["significance_score"],
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  95)                        level_available_at=zone["available_at"], crossed_at=zone["crossed_at"],
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  96)                        sweep_start_ts=zone["sweep_start_ts"], sweep_high=zone["sweep_high"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  97)             if zone_id in self.pending:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  98)                 row.update(status="DUPLICATE_PENDING_ZONE", parent_seed_id=self.pending[zone_id]["seed_id"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200  99)                 self._event(row, bar.ts, row["status"], parent_seed_id=row["parent_seed_id"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 100)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 101)             if episode in self.attempted:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 102)                 row["status"] = "EPISODE_ALREADY_ATTEMPTED"
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 103)                 continue
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 104)             self.attempted.add(episode)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 105)             deadline = seed.ts+HORIZON
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 106)             row.update(status="PENDING", deadline=deadline.isoformat(), _deadline=deadline, _seed=seed)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 107)             self.pending[zone_id] = row
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 108)             self._event(row, bar.ts, "ARMED", lower=row["lower"], upper=row["upper"], deadline=row["deadline"])
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 109)         self.last_bar = bar
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 110) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 111)     def _confirm(self, row, bar):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 112)         seed = row["_seed"]
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 113)         key = (bar.ts, "SHORT")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 114)         if key in self.confirmed_keys:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 115)             row["parent_candidate_id"] = self.confirmed_keys[key]
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 116)             self._finish(row, bar.ts, "DUPLICATE_CONFIRMATION")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 117)             return
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 118)         candidate_id = "PAH1_"+hashlib.sha256(f"{seed.seed_id}|{row['zone_id']}|{bar.ts.isoformat()}".encode()).hexdigest()[:20]
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 119)         self.confirmed_keys[key] = candidate_id
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 120)         self._finish(row, bar.ts, "CONFIRMED")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 121)         row.update(candidate_id=candidate_id, confirmation_price=bar.close,
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 122)                    stop_anchor=row["sweep_high"]*1.0001)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 123)         flags = {k:v for k,v in row.items() if not k.startswith("_")}
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 124)         flags.update(sweep_stop_price=row["stop_anchor"], sweep_high=row["sweep_high"],
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 125)                      sweep_end_ts=bar.ts.isoformat(), stop_buffer_fraction=.0001)
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 126)         self.candidates.append(Candidate(candidate_id, seed.local_ts, bar.ts, "SHORT", FAMILY,
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 127)             FAMILY, None, bar.close, seed.delta, seed.volume, abs(seed.delta)/seed.volume,
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 128)             None,None,None,None,flags,seed.source_path,seed.row_hash))
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 129) 
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 130)     def finish(self):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 131)         if self.last_bar:
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 132)             for row in list(self.pending.values()):
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 133)                 self._finish(row, self.last_bar.ts, "RIGHT_CENSORED_END_OF_DATA")
+56ecaa17 (Mykhailo 2026-10-11 22:19:34 +0200 134)         return [{k:v for k,v in r.items() if not k.startswith("_")} for r in self.audit]

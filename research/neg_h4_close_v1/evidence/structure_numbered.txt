@@ -1,0 +1,501 @@
+$ nl -ba ../aitrader-monitor/market_monitor/structure.py
+     1	from __future__ import annotations
+     2	
+     3	import pandas as pd
+     4	
+     5	
+     6	M15_SWING_LEFT_RIGHT = 2
+     7	H1_SWING_LEFT_RIGHT = 2
+     8	H4_SWING_LEFT_RIGHT = 1
+     9	EQUAL_LEVEL_TOLERANCE_BPS = 5
+    10	SESSION_DEFINITIONS = [
+    11	    ("ASIA", 0, 8),
+    12	    ("EUROPE", 8, 16),
+    13	    ("US", 16, 24),
+    14	]
+    15	
+    16	STRUCTURE_LEVEL_COLUMNS = [
+    17	    "level_id",
+    18	    "created_at",
+    19	    "level_timestamp",
+    20	    "timeframe",
+    21	    "level_type",
+    22	    "source_timeframe_primary",
+    23	    "side",
+    24	    "price",
+    25	    "htf_level_type",
+    26	    "htf_origin_timestamp",
+    27	    "htf_origin_price",
+    28	    "htf_confirmation_timestamp",
+    29	    "source_start",
+    30	    "source_end",
+    31	    "touch_count",
+    32	    "strength_score",
+    33	    "status",
+    34	    "data_quality",
+    35	    "source_level_ids",
+    36	]
+    37	
+    38	
+    39	def build_structure_levels(feed: pd.DataFrame) -> pd.DataFrame:
+    40	    if feed.empty:
+    41	        return pd.DataFrame(columns=STRUCTURE_LEVEL_COLUMNS)
+    42	
+    43	    frame = feed.sort_values("Timestamp", kind="mergesort").copy()
+    44	    frame["day"] = frame["Timestamp"].dt.floor("D")
+    45	    rows: list[dict[str, object]] = []
+    46	    rows.extend(_daily_reference_levels(frame))
+    47	    rows.extend(_finalized_session_levels(frame))
+    48	    rows.extend(_confirmed_swing_levels(frame, "M15", M15_SWING_LEFT_RIGHT))
+    49	    rows.extend(_confirmed_swing_levels(frame, "H1", H1_SWING_LEFT_RIGHT))
+    50	    rows.extend(_confirmed_swing_levels(frame, "H4", H4_SWING_LEFT_RIGHT))
+    51	
+    52	    levels = _assign_level_ids(pd.DataFrame(rows, columns=STRUCTURE_LEVEL_COLUMNS))
+    53	    equal_levels = _equal_level_rows(levels)
+    54	    if not equal_levels.empty:
+    55	        equal_levels = _assign_level_ids(
+    56	            equal_levels, start_index=len(levels) + 1
+    57	        )
+    58	        levels = pd.concat([levels, equal_levels], ignore_index=True)
+    59	        levels = _sort_levels(levels)
+    60	    pattern_levels = _pattern_structure_level_rows(levels)
+    61	    if not pattern_levels.empty:
+    62	        pattern_levels = _assign_level_ids(pattern_levels, start_index=len(levels) + 1)
+    63	        levels = pd.concat([levels, pattern_levels], ignore_index=True)
+    64	        levels = _sort_levels(levels)
+    65	    return levels
+    66	
+    67	
+    68	def aggregate_timeframe(feed: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    69	    rules = {"M15": "15min", "H1": "h", "H4": "4h"}
+    70	    if timeframe not in rules:
+    71	        raise ValueError(f"Unsupported timeframe: {timeframe}")
+    72	    columns = [
+    73	        "Timestamp",
+    74	        "OpenPrice",
+    75	        "HiPrice",
+    76	        "LowPrice",
+    77	        "ClosePrice",
+    78	        "TotalQty",
+    79	        "Trades",
+    80	        "BuyQty",
+    81	        "SellQty",
+    82	        "OpenInterest",
+    83	        "FundingRate",
+    84	        "DataQuality",
+    85	        "source_start",
+    86	        "source_end",
+    87	    ]
+    88	    if feed.empty:
+    89	        return pd.DataFrame(columns=columns)
+    90	
+    91	    rule = rules[timeframe]
+    92	    frame = feed.sort_values("Timestamp", kind="mergesort").copy()
+    93	    frame["bar_timestamp"] = frame["Timestamp"].dt.floor(rule)
+    94	    bars = (
+    95	        frame.groupby("bar_timestamp", sort=True)
+    96	        .agg(
+    97	            Timestamp=("bar_timestamp", "first"),
+    98	            OpenPrice=("OpenPrice", "first"),
+    99	            HiPrice=("HiPrice", "max"),
+   100	            LowPrice=("LowPrice", "min"),
+   101	            ClosePrice=("ClosePrice", "last"),
+   102	            TotalQty=("TotalQty", "sum"),
+   103	            Trades=("Trades", "sum"),
+   104	            BuyQty=("BuyQty", "sum"),
+   105	            SellQty=("SellQty", "sum"),
+   106	            OpenInterest=("OpenInterest", "last"),
+   107	            FundingRate=("FundingRate", "last"),
+   108	            DataQuality=("DataQuality", _quality_values),
+   109	            source_start=("Timestamp", "min"),
+   110	            source_end=("Timestamp", "max"),
+   111	        )
+   112	        .reset_index(drop=True)
+   113	    )
+   114	    return bars[columns]
+   115	
+   116	
+   117	def _daily_reference_levels(frame: pd.DataFrame) -> list[dict[str, object]]:
+   118	    rows: list[dict[str, object]] = []
+   119	    days = list(frame.groupby("day", sort=True))
+   120	    for index, (_, group) in enumerate(days):
+   121	        day_start = group["Timestamp"].min()
+   122	        open_row = group.sort_values("Timestamp", kind="mergesort").iloc[0]
+   123	        rows.append(
+   124	            _level_row(
+   125	                created_at=open_row["Timestamp"],
+   126	                level_timestamp=open_row["Timestamp"],
+   127	                timeframe="D1",
+   128	                level_type="DAY_OPEN",
+   129	                side="NEUTRAL",
+   130	                price=open_row["OpenPrice"],
+   131	                source_start=day_start,
+   132	                source_end=open_row["Timestamp"],
+   133	                touch_count=1,
+   134	                strength_score=45,
+   135	                data_quality=_quality(group),
+   136	            )
+   137	        )
+   138	        if index == 0:
+   139	            continue
+   140	
+   141	        _, previous = days[index - 1]
+   142	        previous_start = previous["Timestamp"].min()
+   143	        previous_end = previous["Timestamp"].max()
+   144	        high_row = previous.sort_values(
+   145	            ["HiPrice", "Timestamp"], ascending=[False, True], kind="mergesort"
+   146	        ).iloc[0]
+   147	        low_row = previous.sort_values(
+   148	            ["LowPrice", "Timestamp"], ascending=[True, True], kind="mergesort"
+   149	        ).iloc[0]
+   150	        rows.append(
+   151	            _level_row(
+   152	                created_at=day_start,
+   153	                level_timestamp=high_row["Timestamp"],
+   154	                timeframe="D1",
+   155	                level_type="PDH",
+   156	                side="BUY_SIDE",
+   157	                price=high_row["HiPrice"],
+   158	                source_start=previous_start,
+   159	                source_end=previous_end,
+   160	                touch_count=_touch_count(previous, high_row["HiPrice"], "HiPrice"),
+   161	                strength_score=85,
+   162	                data_quality=_quality(previous),
+   163	            )
+   164	        )
+   165	        rows.append(
+   166	            _level_row(
+   167	                created_at=day_start,
+   168	                level_timestamp=low_row["Timestamp"],
+   169	                timeframe="D1",
+   170	                level_type="PDL",
+   171	                side="SELL_SIDE",
+   172	                price=low_row["LowPrice"],
+   173	                source_start=previous_start,
+   174	                source_end=previous_end,
+   175	                touch_count=_touch_count(previous, low_row["LowPrice"], "LowPrice"),
+   176	                strength_score=85,
+   177	                data_quality=_quality(previous),
+   178	            )
+   179	        )
+   180	    return rows
+   181	
+   182	
+   183	def _finalized_session_levels(frame: pd.DataFrame) -> list[dict[str, object]]:
+   184	    rows: list[dict[str, object]] = []
+   185	    max_ts = frame["Timestamp"].max()
+   186	    for day, day_group in frame.groupby("day", sort=True):
+   187	        for session_name, start_hour, end_hour in SESSION_DEFINITIONS:
+   188	            session_start = day + pd.Timedelta(hours=start_hour)
+   189	            session_end = day + pd.Timedelta(hours=end_hour)
+   190	            mask = (day_group["Timestamp"] >= session_start) & (
+   191	                day_group["Timestamp"] < session_end
+   192	            )
+   193	            session = day_group.loc[mask].sort_values("Timestamp", kind="mergesort")
+   194	            if session.empty or max_ts < session_end - pd.Timedelta(minutes=1):
+   195	                continue
+   196	            high_row = session.sort_values(
+   197	                ["HiPrice", "Timestamp"], ascending=[False, True], kind="mergesort"
+   198	            ).iloc[0]
+   199	            low_row = session.sort_values(
+   200	                ["LowPrice", "Timestamp"], ascending=[True, True], kind="mergesort"
+   201	            ).iloc[0]
+   202	            rows.append(
+   203	                _level_row(
+   204	                    created_at=session_end,
+   205	                    level_timestamp=high_row["Timestamp"],
+   206	                    timeframe="SESSION",
+   207	                    level_type=f"{session_name}_HIGH",
+   208	                    side="BUY_SIDE",
+   209	                    price=high_row["HiPrice"],
+   210	                    source_start=session_start,
+   211	                    source_end=session_end,
+   212	                    touch_count=_touch_count(session, high_row["HiPrice"], "HiPrice"),
+   213	                    strength_score=55,
+   214	                    data_quality=_quality(session),
+   215	                )
+   216	            )
+   217	            rows.append(
+   218	                _level_row(
+   219	                    created_at=session_end,
+   220	                    level_timestamp=low_row["Timestamp"],
+   221	                    timeframe="SESSION",
+   222	                    level_type=f"{session_name}_LOW",
+   223	                    side="SELL_SIDE",
+   224	                    price=low_row["LowPrice"],
+   225	                    source_start=session_start,
+   226	                    source_end=session_end,
+   227	                    touch_count=_touch_count(session, low_row["LowPrice"], "LowPrice"),
+   228	                    strength_score=55,
+   229	                    data_quality=_quality(session),
+   230	                )
+   231	            )
+   232	    return rows
+   233	
+   234	
+   235	def _confirmed_swing_levels(
+   236	    frame: pd.DataFrame, timeframe: str, left_right: int
+   237	) -> list[dict[str, object]]:
+   238	    bars = aggregate_timeframe(frame, timeframe)
+   239	    rows: list[dict[str, object]] = []
+   240	    if len(bars) < left_right * 2 + 1:
+   241	        return rows
+   242	
+   243	    for index in range(left_right, len(bars) - left_right):
+   244	        current = bars.iloc[index]
+   245	        left = bars.iloc[index - left_right : index]
+   246	        right = bars.iloc[index + 1 : index + left_right + 1]
+   247	        created_at = bars.iloc[index + left_right]["Timestamp"]
+   248	        if current["HiPrice"] > left["HiPrice"].max() and current["HiPrice"] > right["HiPrice"].max():
+   249	            rows.append(
+   250	                _level_row(
+   251	                    created_at=created_at,
+   252	                    level_timestamp=_timestamp_for_price(
+   253	                        frame,
+   254	                        current["source_start"],
+   255	                        current["source_end"],
+   256	                        "HiPrice",
+   257	                        current["HiPrice"],
+   258	                    ),
+   259	                    timeframe=timeframe,
+   260	                    level_type=f"{timeframe}_SWING_HIGH",
+   261	                    side="BUY_SIDE",
+   262	                    price=current["HiPrice"],
+   263	                    source_start=current["source_start"],
+   264	                    source_end=current["source_end"],
+   265	                    touch_count=1,
+   266	                    strength_score=_swing_strength_score(timeframe),
+   267	                    data_quality=current["DataQuality"],
+   268	                )
+   269	            )
+   270	        if current["LowPrice"] < left["LowPrice"].min() and current["LowPrice"] < right["LowPrice"].min():
+   271	            rows.append(
+   272	                _level_row(
+   273	                    created_at=created_at,
+   274	                    level_timestamp=_timestamp_for_price(
+   275	                        frame,
+   276	                        current["source_start"],
+   277	                        current["source_end"],
+   278	                        "LowPrice",
+   279	                        current["LowPrice"],
+   280	                    ),
+   281	                    timeframe=timeframe,
+   282	                    level_type=f"{timeframe}_SWING_LOW",
+   283	                    side="SELL_SIDE",
+   284	                    price=current["LowPrice"],
+   285	                    source_start=current["source_start"],
+   286	                    source_end=current["source_end"],
+   287	                    touch_count=1,
+   288	                    strength_score=_swing_strength_score(timeframe),
+   289	                    data_quality=current["DataQuality"],
+   290	                )
+   291	            )
+   292	    return rows
+   293	
+   294	
+   295	def _swing_strength_score(timeframe: str) -> int:
+   296	    if timeframe == "H4":
+   297	        return 75
+   298	    if timeframe == "H1":
+   299	        return 65
+   300	    if timeframe == "M15":
+   301	        return 50
+   302	    return 45
+   303	
+   304	
+   305	def _equal_level_rows(levels: pd.DataFrame) -> pd.DataFrame:
+   306	    if levels.empty:
+   307	        return pd.DataFrame(columns=STRUCTURE_LEVEL_COLUMNS)
+   308	    sources = levels[
+   309	        levels["level_type"].isin(
+   310	            {
+   311	                "PDH",
+   312	                "PDL",
+   313	                "ASIA_HIGH",
+   314	                "ASIA_LOW",
+   315	                "EUROPE_HIGH",
+   316	                "EUROPE_LOW",
+   317	                "US_HIGH",
+   318	                "US_LOW",
+   319	                "H1_SWING_HIGH",
+   320	                "H1_SWING_LOW",
+   321	                "H4_SWING_HIGH",
+   322	                "H4_SWING_LOW",
+   323	            }
+   324	        )
+   325	    ].copy()
+   326	    rows: list[dict[str, object]] = []
+   327	    rows.extend(_cluster_equal_side(sources[sources["side"] == "BUY_SIDE"], "EQUAL_HIGHS"))
+   328	    rows.extend(_cluster_equal_side(sources[sources["side"] == "SELL_SIDE"], "EQUAL_LOWS"))
+   329	    if not rows:
+   330	        return pd.DataFrame(columns=STRUCTURE_LEVEL_COLUMNS)
+   331	    return pd.DataFrame(rows, columns=STRUCTURE_LEVEL_COLUMNS)
+   332	
+   333	
+   334	def _cluster_equal_side(levels: pd.DataFrame, level_type: str) -> list[dict[str, object]]:
+   335	    if len(levels) < 2:
+   336	        return []
+   337	    rows: list[dict[str, object]] = []
+   338	    ordered = levels.sort_values(["price", "created_at", "level_id"], kind="mergesort")
+   339	    cluster: list[pd.Series] = []
+   340	    for _, level in ordered.iterrows():
+   341	        if not cluster:
+   342	            cluster = [level]
+   343	            continue
+   344	        cluster_mid = sum(float(item["price"]) for item in cluster) / len(cluster)
+   345	        tolerance = cluster_mid * EQUAL_LEVEL_TOLERANCE_BPS / 10000
+   346	        if abs(float(level["price"]) - cluster_mid) <= tolerance:
+   347	            cluster.append(level)
+   348	        else:
+   349	            rows.extend(_equal_cluster_to_rows(cluster, level_type))
+   350	            cluster = [level]
+   351	    rows.extend(_equal_cluster_to_rows(cluster, level_type))
+   352	    return rows
+   353	
+   354	
+   355	def _equal_cluster_to_rows(
+   356	    cluster: list[pd.Series], level_type: str
+   357	) -> list[dict[str, object]]:
+   358	    if len(cluster) < 2:
+   359	        return []
+   360	    prices = [float(level["price"]) for level in cluster]
+   361	    created_at = max(pd.Timestamp(level["created_at"]) for level in cluster)
+   362	    source_start = min(pd.Timestamp(level["source_start"]) for level in cluster)
+   363	    source_end = max(pd.Timestamp(level["source_end"]) for level in cluster)
+   364	    level_timestamp = min(pd.Timestamp(level["level_timestamp"]) for level in cluster)
+   365	    source_ids = sorted(str(level["level_id"]) for level in cluster)
+   366	    return [
+   367	        _level_row(
+   368	            created_at=created_at,
+   369	            level_timestamp=level_timestamp,
+   370	            timeframe="CLUSTER",
+   371	            level_type=level_type,
+   372	            side="BUY_SIDE" if level_type == "EQUAL_HIGHS" else "SELL_SIDE",
+   373	            price=sum(prices) / len(prices),
+   374	            source_start=source_start,
+   375	            source_end=source_end,
+   376	            touch_count=len(cluster),
+   377	            strength_score=min(100, 70 + len(cluster) * 5),
+   378	            data_quality=_quality_values([level["data_quality"] for level in cluster]),
+   379	            source_level_ids="|".join(source_ids),
+   380	        )
+   381	    ]
+   382	
+   383	
+   384	def _pattern_structure_level_rows(levels: pd.DataFrame) -> pd.DataFrame:
+   385	    if levels.empty:
+   386	        return pd.DataFrame(columns=STRUCTURE_LEVEL_COLUMNS)
+   387	    rows: list[dict[str, object]] = []
+   388	    for _, level in levels[levels["level_type"].isin({"EQUAL_HIGHS", "EQUAL_LOWS"})].iterrows():
+   389	        level_type = "DOUBLE_TOP_HIGH" if level["level_type"] == "EQUAL_HIGHS" else "DOUBLE_BOTTOM_LOW"
+   390	        source_ids = str(level.get("source_level_ids", "") or level.get("level_id", ""))
+   391	        rows.append(
+   392	            _level_row(
+   393	                created_at=level["created_at"],
+   394	                level_timestamp=level["level_timestamp"],
+   395	                timeframe="PATTERN",
+   396	                level_type=level_type,
+   397	                side=level["side"],
+   398	                price=level["price"],
+   399	                source_start=level["source_start"],
+   400	                source_end=level["source_end"],
+   401	                touch_count=int(level["touch_count"]),
+   402	                strength_score=min(100, int(level["strength_score"]) + 5),
+   403	                data_quality=level["data_quality"],
+   404	                source_level_ids=source_ids,
+   405	            )
+   406	        )
+   407	    return pd.DataFrame(rows, columns=STRUCTURE_LEVEL_COLUMNS)
+   408	
+   409	
+   410	def _assign_level_ids(levels: pd.DataFrame, start_index: int = 1) -> pd.DataFrame:
+   411	    levels = levels.reindex(columns=STRUCTURE_LEVEL_COLUMNS)
+   412	    if levels.empty:
+   413	        return levels
+   414	    levels = _sort_levels(levels)
+   415	    levels["level_id"] = [
+   416	        f"level_{idx:06d}" for idx in range(start_index, start_index + len(levels))
+   417	    ]
+   418	    return levels
+   419	
+   420	
+   421	def _sort_levels(levels: pd.DataFrame) -> pd.DataFrame:
+   422	    levels = levels.sort_values(
+   423	        ["created_at", "level_timestamp", "level_type", "price"], kind="mergesort"
+   424	    ).reset_index(drop=True)
+   425	    return levels
+   426	
+   427	
+   428	def _level_row(
+   429	    *,
+   430	    created_at,
+   431	    level_timestamp,
+   432	    timeframe: str,
+   433	    level_type: str,
+   434	    side: str,
+   435	    price,
+   436	    source_start,
+   437	    source_end,
+   438	    touch_count: int,
+   439	    strength_score: int,
+   440	    data_quality: str,
+   441	    status: str = "ACTIVE",
+   442	    source_level_ids: str = "",
+   443	) -> dict[str, object]:
+   444	    is_htf_structural = timeframe in {"H1", "H4"}
+   445	    return {
+   446	        "level_id": "",
+   447	        "created_at": _format_ts(created_at),
+   448	        "level_timestamp": _format_ts(level_timestamp),
+   449	        "timeframe": timeframe,
+   450	        "level_type": level_type,
+   451	        "source_timeframe_primary": timeframe,
+   452	        "side": side,
+   453	        "price": float(price),
+   454	        "htf_level_type": level_type if is_htf_structural else "",
+   455	        "htf_origin_timestamp": _format_ts(level_timestamp) if is_htf_structural else "",
+   456	        "htf_origin_price": float(price) if is_htf_structural else "",
+   457	        "htf_confirmation_timestamp": _format_ts(created_at) if is_htf_structural else "",
+   458	        "source_start": _format_ts(source_start),
+   459	        "source_end": _format_ts(source_end),
+   460	        "touch_count": int(touch_count),
+   461	        "strength_score": int(strength_score),
+   462	        "status": status,
+   463	        "data_quality": data_quality,
+   464	        "source_level_ids": source_level_ids,
+   465	    }
+   466	
+   467	
+   468	def _touch_count(frame: pd.DataFrame, price: float, column: str) -> int:
+   469	    if price == 0:
+   470	        return int((frame[column] == price).sum())
+   471	    tolerance = abs(price) * 0.0001
+   472	    return int((frame[column].sub(price).abs() <= tolerance).sum())
+   473	
+   474	
+   475	def _timestamp_for_price(
+   476	    frame: pd.DataFrame, source_start, source_end, column: str, price: float
+   477	):
+   478	    mask = (
+   479	        (frame["Timestamp"] >= source_start)
+   480	        & (frame["Timestamp"] <= source_end)
+   481	        & (frame[column] == price)
+   482	    )
+   483	    return frame.loc[mask].sort_values("Timestamp", kind="mergesort").iloc[0]["Timestamp"]
+   484	
+   485	
+   486	def _quality(frame: pd.DataFrame) -> str:
+   487	    return _quality_values(frame["DataQuality"])
+   488	
+   489	
+   490	def _quality_values(values) -> str:
+   491	    unique = set(values)
+   492	    if unique == {"RAW"}:
+   493	        return "RAW"
+   494	    if "RECOVERED_DEGRADED" in unique:
+   495	        return "RECOVERED_DEGRADED"
+   496	    return sorted(unique)[0]
+   497	
+   498	
+   499	def _format_ts(value) -> str:
+   500	    return pd.Timestamp(value).tz_convert("UTC").isoformat().replace("+00:00", "Z")

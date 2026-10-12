@@ -1,0 +1,225 @@
+$ nl -ba research/peak_ai_delta_h1_all_signs/run.py
+     1	"""Offline preparation and native Scout Replay. Each output directory is immutable."""
+     2	from __future__ import annotations
+     3	
+     4	import argparse
+     5	from collections import Counter, defaultdict
+     6	from dataclasses import replace
+     7	from datetime import datetime, timedelta, timezone
+     8	import hashlib
+     9	import json
+    10	import pickle
+    11	from pathlib import Path
+    12	import subprocess
+    13	import time
+    14	
+    15	import numpy as np
+    16	import pandas as pd
+    17	
+    18	from research.peak_ai_delta_h1_all_signs.query_cache import CachedStructureMonitor as ClosedStructureMonitor
+    19	import market_monitor.closed_structure_adapter as adapter_module
+    20	from research.peak_ai_delta_h1.inputs import load_legacy, load_seeds
+    21	from research.peak_ai_delta_h1_all_signs.engine import DeltaH1Engine
+    22	from deltascout.research_bundle.scout_backtester.contracts import (
+    23	    Candidate, ReplayConfig, BacktestContractError, TradeResult,
+    24	    LIMIT_THEN_MARKET_90S_GUARDED_FILL_MODEL_ID,
+    25	)
+    26	from deltascout.research_bundle.scout_backtester.feed_loader import load_feed
+    27	from deltascout.research_bundle.scout_backtester.replay_engine import replay_candidate
+    28	from deltascout.research_bundle.scout_backtester.portfolio import replay_portfolio
+    29	
+    30	ROOT = Path(__file__).resolve().parents[2]
+    31	HERE = Path(__file__).resolve().parent
+    32	BASE = ROOT/'deltascout/research_material'
+    33	MONITOR = Path(adapter_module.__file__).resolve().parents[1]
+    34	CONFIG = ReplayConfig(experiment_id='peak_ai_delta_h1_all_signs_v2_20261011',
+    35	    description='Any raw DELTA_MIN/MAX of either sign -> frozen H1/H4 zone -> SHORT H1 reclaim within four hours',
+    36	    signal_feature_feed_symbol='BTCUSDT_SPOT_LEGACY', initial_stop_policy='candidate_sweep',
+    37	    fill_model_id=LIMIT_THEN_MARKET_90S_GUARDED_FILL_MODEL_ID)
+    38	RESOLVED = {'PLAIN_SL','TP1_SL','TP1_TP2_TRAILING_STOP'}
+    39	
+    40	def utc(s): return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    41	def digest(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    42	def dump(path,value): Path(path).write_text(json.dumps(value,indent=2,ensure_ascii=False,default=str,allow_nan=False)+'\n')
+    43	def rows(path,items):
+    44	    items=list(items)
+    45	    if items: pd.DataFrame(items).to_csv(path,index=False)
+    46	    else: Path(path).write_text('')
+    47	def head(path): return subprocess.check_output(['git','rev-parse','HEAD'],cwd=path,text=True).strip()
+    48	
+    49	def code_hashes():
+    50	    paths = list(HERE.glob('*.py')) + [HERE/'PROTOCOL.md', HERE.parent/'peak_ai_delta_h1/inputs.py']
+    51	    paths += list((ROOT/'deltascout/research_bundle/scout_backtester').glob('*.py'))
+    52	    paths += list((MONITOR/'market_monitor').glob('*.py'))
+    53	    return {(('monitor/' if p.is_relative_to(MONITOR) else 'replay/')+
+    54	             str(p.relative_to(MONITOR if p.is_relative_to(MONITOR) else ROOT))):digest(p) for p in sorted(paths)}
+    55	
+    56	def verify_inputs(out):
+    57	    recorded=pd.read_csv(out/'input_hashes.csv')
+    58	    for row in recorded.to_dict('records'):
+    59	        if digest(ROOT/row['path'])!=row['sha256']:
+    60	            raise RuntimeError('Input changed: '+row['path'])
+    61	
+    62	def checkpoint(out,engine,last_ts,seen,manifest):
+    63	    """Only our own locally written pickle is accepted; inputs/monitor rebuild on resume."""
+    64	    payload={'engine_state':{k:v for k,v in engine.__dict__.items() if k!='monitor'},
+    65	             'last_ts':last_ts,'seen':seen,'code_hashes':manifest['code_hashes']}
+    66	    temp=out/'checkpoint.tmp'
+    67	    temp.write_bytes(pickle.dumps(payload,protocol=pickle.HIGHEST_PROTOCOL))
+    68	    temp.replace(out/'checkpoint.pkl')
+    69	    dump(out/'progress.json',{'last_ts':last_ts,'raw_seeds_processed':len(seen),
+    70	        'confirmations':len(engine.candidates),'pending':len(engine.pending),
+    71	        'completed':False,'updated_at_utc':datetime.now(timezone.utc).isoformat()})
+    72	
+    73	def prepare(out,resume=False):
+    74	    if not resume:out.mkdir(parents=True,exist_ok=False)
+    75	    CONFIG.validate()
+    76	    manifest={'created_at_utc':datetime.now(timezone.utc).isoformat(),
+    77	              'monitor_base':head(MONITOR),'replay_base':head(ROOT),
+    78	              'config':CONFIG.to_dict(),'code_hashes':code_hashes(),
+    79	              'decision_start':'2026-03-20T00:00:00+00:00',
+    80	              'decision_end':'2026-08-17T23:59:00+00:00',
+    81	              'outcome_end':'2026-08-19T23:59:00+00:00',
+    82	              'history_reused_not_fresh_holdout':True,
+    83	              'liquidations':'UNAVAILABLE_NOT_A_FILTER',
+    84	              'adapter_scope':'IMMUTABLE_INDIVIDUAL_H1_H4_UPPER_REFERENCES_NATIVE_SCORE_LIFECYCLE',
+    85	              'not_full_v39a_snapshot':True,'without_delta_control_run':False,
+    86	              'trigger_events':['DELTA_MAX','DELTA_MIN'],'trigger_sign_filter':None,
+    87	              'trade_side':'SHORT','shared_pending_and_portfolio':True}
+    88	    if resume:
+    89	        manifest=json.loads((out/'protocol_freeze.json').read_text())
+    90	        if manifest['code_hashes']!=code_hashes():raise RuntimeError('Cannot resume changed code')
+    91	        verify_inputs(out)
+    92	    else:dump(out/'protocol_freeze.json',manifest)
+    93	    legacy_root=BASE/'execution_feed/btcusdt_legacy_spot_1m/daily'
+    94	    if not resume:
+    95	        sources=list(legacy_root.glob('*.csv'))+list((BASE/'raw_archive').glob('*.jsonl'))
+    96	        sources+=list((BASE/'execution_feed/btcusdc_spot_1m/daily').glob('*.csv'))
+    97	        rows(out/'input_hashes.csv',({'path':str(p.relative_to(ROOT)),'sha256':digest(p)} for p in sorted(sources)))
+    98	    bars=load_legacy(legacy_root)
+    99	    bars=[b for b in bars if b.ts<=utc(manifest['outcome_end'])]
+   100	    seeds=load_seeds(BASE/'raw_archive')
+   101	    print('Loaded',len(bars),'minute bars,',len(seeds),'raw seeds',flush=True)
+   102	    monitor=ClosedStructureMonitor(bars)
+   103	    rows(out/'structural_inventory.csv',monitor.inventory())
+   104	    print('Causal H1/H4 references:',len(monitor.references),flush=True)
+   105	    engine=DeltaH1Engine(monitor)
+   106	    seed_map=defaultdict(list)
+   107	    for seed in seeds:seed_map[seed.ts].append(seed)
+   108	    seen=set();last_print=time.monotonic();started=last_print;last_ts=None
+   109	    if resume:
+   110	        saved=pickle.loads((out/'checkpoint.pkl').read_bytes())
+   111	        if saved['code_hashes']!=manifest['code_hashes']:raise RuntimeError('Checkpoint code mismatch')
+   112	        engine.__dict__.update(saved['engine_state'])
+   113	        seen=saved['seen'];last_ts=saved['last_ts']
+   114	        print('Resuming after',last_ts,'processed seeds',len(seen),flush=True)
+   115	    for bar in bars:
+   116	        if last_ts is not None and bar.ts<=last_ts:continue
+   117	        batch=seed_map.get(bar.ts,())
+   118	        engine.step(bar,batch)
+   119	        seen.update(s.seed_id for s in batch)
+   120	        if time.monotonic()-last_print>20:
+   121	            print('Progress',bar.ts.isoformat(),'seeds',len(seen),'confirmations',len(engine.candidates),
+   122	                  'seconds',round(time.monotonic()-started),flush=True)
+   123	            checkpoint(out,engine,bar.ts,seen,manifest)
+   124	            last_print=time.monotonic()
+   125	    audit=engine.finish()
+   126	    audit += [dict(seed_id=s.seed_id,seed_ts=s.ts.isoformat(),event=s.event,
+   127	                   status='NO_SEED_BAR',source_path=s.source_path,source_line=s.source_line)
+   128	              for s in seeds if s.seed_id not in seen]
+   129	    audit.sort(key=lambda r:(r['seed_ts'],r['seed_id']))
+   130	    candidates=engine.candidates
+   131	    rows(out/'seed_audit.csv',audit)
+   132	    rows(out/'candidate_events.csv',engine.events)
+   133	    rows(out/'zone_selection_audit.csv',engine.zone_evidence)
+   134	    dump(out/'candidates.json',[c.to_dict() for c in candidates])
+   135	    rows(out/'candidates.csv',[c.to_dict() for c in candidates])
+   136	    verify_inputs(out)
+   137	    eligible=[c for c in candidates if replay_eligible(c,manifest)]
+   138	    preparation={'raw_seeds':len(seeds),'seed_types':dict(Counter(s.event for s in seeds)),
+   139	                 'seed_status':dict(Counter(r['status'] for r in audit)),
+   140	                 'armed':sum(e['event']=='ARMED' for e in engine.events),
+   141	                 'confirmed_unique':len(candidates),'replay_eligible':len(eligible),
+   142	                 'bars':len(bars),'first_bar':bars[0].ts.isoformat(),'last_bar':bars[-1].ts.isoformat(),
+   143	                 'feed_gaps':sum(b.ts-a.ts!=timedelta(minutes=1) for a,b in zip(bars,bars[1:])),
+   144	                 'structure_references':len(monitor.references),'elapsed_seconds':time.monotonic()-started,
+   145	                 'zone_rejections':dict(Counter(e['decision'] for e in engine.zone_evidence))}
+   146	    dump(out/'preparation_summary.json',preparation)
+   147	    dump(out/'progress.json',{'last_ts':bars[-1].ts,'completed':True,
+   148	                             'raw_seeds_processed':len(seen),'confirmations':len(candidates)})
+   149	    assert manifest['code_hashes']==code_hashes(),'Code changed while preparing'
+   150	    print(json.dumps(preparation,indent=2),flush=True)
+   151	
+   152	def replay_eligible(c,manifest):
+   153	    return (utc(manifest['decision_start'])<=datetime.fromisoformat(c.shadow_flags['seed_ts'])
+   154	            <=c.signal_ts_utc<=utc(manifest['decision_end']))
+   155	
+   156	def metrics(results, candidates):
+   157	    filled=[r for r in results if r.entry_status=='FILLED']
+   158	    closed=sorted([r for r in filled if r.lifecycle_class in RESOLVED],key=lambda r:r.exit_ts)
+   159	    pnl=np.array([r.net_pnl_usdc for r in closed],dtype=float)
+   160	    equity=np.r_[0,np.cumsum(pnl)]
+   161	    losses=-float(pnl[pnl<0].sum())
+   162	    monthly={}
+   163	    for month in sorted({r.signal_ts_utc.strftime('%Y-%m') for r in results}):
+   164	        rr=[r for r in closed if r.signal_ts_utc.strftime('%Y-%m')==month]
+   165	        monthly[month]={'closed':len(rr),'net_usdc':sum(r.net_pnl_usdc for r in rr)}
+   166	    return {'candidates':len(candidates),'filled':len(filled),'closed':len(closed),
+   167	            'unresolved':len(filled)-len(closed),'net_usdc':float(pnl.sum()),
+   168	            'gross_usdc':sum(r.gross_pnl_usdc for r in closed),
+   169	            'commission_usdc':sum(r.commission_usdc for r in closed),
+   170	            'slippage_usdc':sum(r.slippage_usdc for r in closed),
+   171	            'profit_factor':float(pnl[pnl>0].sum())/losses if losses>0 else None,
+   172	            'net_wins':int((pnl>0).sum()),'tp1_hits':sum(r.tp1_fill_ts is not None for r in closed),
+   173	            'max_closed_equity_drawdown_usdc':float((np.maximum.accumulate(equity)-equity).max()),
+   174	            'unresolved_realized_partial_net':sum(r.net_pnl_usdc or 0 for r in filled if r.lifecycle_class not in RESOLVED),
+   175	            'status_counts':dict(Counter(r.entry_status for r in results)),
+   176	            'lifecycle_counts':dict(Counter(r.lifecycle_class for r in results)),
+   177	            'blocked_reasons':dict(Counter(r.blocked_reason for r in results if r.blocked_reason)),
+   178	            'monthly_by_signal_month':monthly}
+   179	
+   180	def replay(out,label):
+   181	    manifest=json.loads((out/'protocol_freeze.json').read_text())
+   182	    if manifest['code_hashes']!=code_hashes():raise RuntimeError('Code changed since protocol freeze')
+   183	    verify_inputs(out)
+   184	    destination=out/label
+   185	    destination.mkdir(exist_ok=False)
+   186	    cfg=CONFIG if label=='base' else replace(CONFIG,exit_slippage_bps=2,stop_slippage_bps=4)
+   187	    raw=json.loads((out/'candidates.json').read_text())
+   188	    cs=[Candidate(**dict(r,signal_ts_utc=datetime.fromisoformat(r['signal_ts_utc']))) for r in raw]
+   189	    cs=[c for c in cs if replay_eligible(c,manifest)]
+   190	    signal=[b for b in load_legacy(BASE/'execution_feed/btcusdt_legacy_spot_1m/daily') if b.ts<=utc(manifest['outcome_end'])]
+   191	    execution=load_feed(BASE/'execution_feed/btcusdc_spot_1m/daily',date_from='2026-03-19',date_to='2026-08-19',feed_role='official_spot_execution')
+   192	    if any(b.ts-a.ts!=timedelta(minutes=1) for a,b in zip(execution,execution[1:])):
+   193	        raise ValueError('Execution gap')
+   194	    st=[b.ts for b in signal];et=[b.ts for b in execution]
+   195	    results=[];events=[];errors=[]
+   196	    for i,c in enumerate(cs):
+   197	        try:
+   198	            r,ev=replay_candidate(c,execution,cfg,reference_bars=signal,_timestamps=et,_reference_timestamps=st)
+   199	        except BacktestContractError as exc:
+   200	            r=TradeResult(trade_id='ERROR_'+c.candidate_id,candidate_id=c.candidate_id,experiment_id=cfg.experiment_id,
+   201	                replay_mode='independent_opportunity',candidate_group=c.candidate_group,side=c.side,
+   202	                signal_ts_utc=c.signal_ts_utc,entry_status='INVALID',lifecycle_class='INTEGRITY_ERROR',blocked_reason=str(exc))
+   203	            ev=[]
+   204	        if r.entry_status=='INVALID':errors.append({'candidate_id':c.candidate_id,'reason':r.blocked_reason})
+   205	        results.append(r);events.extend(e.to_dict() for e in ev)
+   206	        if (i+1)%20==0:print(label,'replayed',i+1,'/',len(cs),flush=True)
+   207	    portfolio,pevents,_=replay_portfolio(cs,results,cfg)
+   208	    rows(destination/'independent_trades.csv',(r.to_dict() for r in results))
+   209	    rows(destination/'portfolio_trades.csv',(r.to_dict() for r in portfolio))
+   210	    rows(destination/'execution_events.csv',events)
+   211	    rows(destination/'portfolio_events.csv',(e.to_dict() for e in pevents))
+   212	    report={'independent':metrics(results,cs),'portfolio':metrics(portfolio,cs),
+   213	            'integrity_errors':errors,'config':cfg.to_dict()}
+   214	    dump(destination/'metrics.json',report)
+   215	    print(json.dumps(report,indent=2),flush=True)
+   216	
+   217	if __name__=='__main__':
+   218	    parser=argparse.ArgumentParser()
+   219	    parser.add_argument('stage',choices=['prepare','base','double_slippage'])
+   220	    parser.add_argument('--output',type=Path,default=HERE/'results_v2')
+   221	    parser.add_argument('--resume',action='store_true',help='Resume only a locally generated preparation checkpoint')
+   222	    args=parser.parse_args()
+   223	    if args.stage=='prepare':prepare(args.output,args.resume)
+   224	    else:replay(args.output,args.stage)

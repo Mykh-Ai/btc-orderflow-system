@@ -1,0 +1,188 @@
+$ nl -ba ../aitrader-monitor/market_monitor/closed_structure_adapter.py
+     1	"""Research-only, as-of H1/H4 structural inventory over completed minute feed.
+     2	
+     3	Reuses canonical swing geometry, zone construction, lifecycle and significance.
+     4	This is NOT the complete v39A snapshot: it excludes M15/session/pattern/merged
+     5	zones and event/post-sweep score bonuses. References retain immutable identities.
+     6	Full available history is retained; no daily reset or visible-seven restriction.
+     7	"""
+     8	from __future__ import annotations
+     9	
+    10	from dataclasses import dataclass
+    11	import hashlib
+    12	import json
+    13	
+    14	import numpy as np
+    15	import pandas as pd
+    16	
+    17	from market_monitor.structure import _confirmed_swing_levels
+    18	from market_monitor.liquidity_zones import build_liquidity_map
+    19	from market_monitor.zone_registry import _current_zones_to_registry, _update_lifecycle, REGISTRY_COLUMNS
+    20	from market_monitor.significant_zone_selector import _score_zone, HIDDEN_STATUSES
+    21	
+    22	ADAPTER_VERSION = "CLOSED_H1_H4_IMMUTABLE_REFERENCES_V1"
+    23	
+    24	
+    25	@dataclass(frozen=True)
+    26	class Reference:
+    27	    zone_id: str
+    28	    available_at: pd.Timestamp
+    29	    timeframe: str
+    30	    price: float
+    31	    lower: float
+    32	    upper: float
+    33	    level: dict
+    34	
+    35	
+    36	def minute_frame(bars) -> pd.DataFrame:
+    37	    """Replay FeedBar.ts is availability/close time; native structure uses OPEN labels."""
+    38	    frame = pd.DataFrame({
+    39	        "Timestamp": [b.ts for b in bars],
+    40	        "OpenPrice": [b.open for b in bars], "HiPrice": [b.high for b in bars],
+    41	        "LowPrice": [b.low for b in bars], "ClosePrice": [b.close for b in bars],
+    42	        "TotalQty": [b.volume for b in bars], "Trades": 0,
+    43	        "BuyQty": [b.buy_qty for b in bars], "SellQty": [b.sell_qty for b in bars],
+    44	        # Unavailable derivatives context is not a fabricated zero observation.
+    45	        # These compatibility columns do not participate in this adapter's scores.
+    46	        "OpenInterest": 0., "FundingRate": 0.,
+    47	        "DataQuality": ["INVALID" if b.is_synthetic else "RAW" for b in bars],
+    48	    })
+    49	    frame["Timestamp"] = pd.to_datetime(frame["Timestamp"], utc=True) - pd.Timedelta(minutes=1)
+    50	    if frame.empty or frame.Timestamp.duplicated().any() or not frame.Timestamp.is_monotonic_increasing:
+    51	        raise ValueError("minute feed must be nonempty, unique and chronological")
+    52	    return frame
+    53	
+    54	
+    55	class ClosedStructureMonitor:
+    56	    """Lazy deterministic lifecycle reconstruction, always restricted to an as-of prefix.
+    57	
+    58	    Swing discovery can be precomputed because each reference is published only
+    59	    at its final confirmation bar CLOSE. Prefix-equivalence is a required test.
+    60	    Lifecycle state is reconstructed from its complete past, never a recent slice.
+    61	    """
+    62	    def __init__(self, bars):
+    63	        self.bars = bars
+    64	        self.frame = minute_frame(bars)
+    65	        self.times = pd.DatetimeIndex([b.ts for b in bars])
+    66	        self.closes = self.frame.ClosePrice.to_numpy()
+    67	        self.highs = self.frame.HiPrice.to_numpy()
+    68	        bad = np.array([b.is_synthetic or b.volume <= 0 for b in bars])
+    69	        gaps = np.r_[False, np.diff(self.times.asi8) != 60_000_000_000]
+    70	        self.bad_prefix = np.r_[0, np.cumsum(bad | gaps)]
+    71	        self.references = self._discover_references()
+    72	        self._base_registry = {}
+    73	        self.last_query = None
+    74	
+    75	    def _discover_references(self):
+    76	        references = []
+    77	        for tf, minutes, lr in (("H1", 60, 2), ("H4", 240, 1)):
+    78	            duration = pd.Timedelta(minutes=minutes)
+    79	            for row in _confirmed_swing_levels(self.frame, tf, lr):
+    80	                if row["side"] != "BUY_SIDE":
+    81	                    continue
+    82	                confirm_open = pd.Timestamp(row["created_at"])
+    83	                window_start = confirm_open - 2 * lr * duration
+    84	                available = confirm_open + duration
+    85	                first = self.times.searchsorted(window_start + pd.Timedelta(minutes=1))
+    86	                stop = self.times.searchsorted(available, side="right")
+    87	                expected = (2 * lr + 1) * minutes
+    88	                if stop - first != expected:
+    89	                    continue
+    90	                # Ignore a preceding gap, but never a gap inside the confirming window.
+    91	                window = self.bars[first:stop]
+    92	                if any(b.is_synthetic or b.volume <= 0 for b in window):
+    93	                    continue
+    94	                if np.any(np.diff(self.times.asi8[first:stop]) != 60_000_000_000):
+    95	                    continue
+    96	                if self.times[first] != window_start + pd.Timedelta(minutes=1) or self.times[stop-1] != available:
+    97	                    continue
+    98	                identity = f"{tf}|{row['level_timestamp']}|{row['price']}|{available.isoformat()}"
+    99	                zone_id = "HZONE_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+   100	                row = dict(row, level_id=zone_id, source_level_ids=zone_id,
+   101	                           created_at=available.isoformat(), htf_confirmation_timestamp=available.isoformat())
+   102	                # Exactly the canonical single-reference band (not a fitted parameter).
+   103	                band = max(abs(float(row["price"])) * .0005, 10.)
+   104	                references.append(Reference(zone_id, available, tf, float(row["price"]),
+   105	                                            float(row["price"])-band, float(row["price"])+band, row))
+   106	        return sorted(references, key=lambda r: (r.available_at, r.zone_id))
+   107	
+   108	    def _registry_for(self, ref):
+   109	        if ref.zone_id not in self._base_registry:
+   110	            zones = build_liquidity_map(pd.DataFrame([ref.level]), ref.price)
+   111	            if len(zones) != 1:
+   112	                raise ValueError(f"single structural reference did not produce one zone: {ref.zone_id}")
+   113	            registry = _current_zones_to_registry(zones, pd.DataFrame(columns=REGISTRY_COLUMNS))
+   114	            registry["zone_id"] = ref.zone_id
+   115	            self._base_registry[ref.zone_id] = registry
+   116	        return self._base_registry[ref.zone_id].copy(deep=True)
+   117	
+   118	    def query(self, ts, *, crossing_lookback_minutes=240):
+   119	        ts = pd.Timestamp(ts)
+   120	        if self.last_query is not None and ts < self.last_query:
+   121	            raise ValueError("monitor queries must be chronological")
+   122	        self.last_query = ts
+   123	        i = self.times.get_indexer([ts])[0]
+   124	        if i < 0:
+   125	            raise ValueError("missing exact monitor minute")
+   126	        price = self.closes[i]
+   127	        available = [r for r in self.references if r.available_at < ts]
+   128	        counts = {"known_references": len(available), "price_not_above": 0,
+   129	                  "no_recent_cross": 0, "gap_or_invalid_since_cross": 0,
+   130	                  "inactive_or_insignificant": 0, "incomplete_level_history": 0}
+   131	        eligible, evidence = [], []
+   132	        for ref in available:
+   133	            if price <= ref.upper:
+   134	                counts["price_not_above"] += 1
+   135	                continue
+   136	            first = int(self.times.searchsorted(max(ref.available_at, ts-pd.Timedelta(minutes=crossing_lookback_minutes+1))))
+   137	            before = np.flatnonzero(self.closes[first:i] <= ref.upper)
+   138	            if len(before) == 0:
+   139	                counts["no_recent_cross"] += 1
+   140	                continue
+   141	            k = first + int(before[-1]) + 1
+   142	            crossed_at = self.times[k]
+   143	            if crossed_at <= ref.available_at or ts-crossed_at > pd.Timedelta(minutes=crossing_lookback_minutes):
+   144	                counts["no_recent_cross"] += 1
+   145	                continue
+   146	            # Include the bar immediately before crossing to rule out a gap jump.
+   147	            if self.bad_prefix[i+1] - self.bad_prefix[max(0,k-1)] != 0:
+   148	                counts["gap_or_invalid_since_cross"] += 1
+   149	                continue
+   150	            # Native lifecycle only consumes observations since first_seen_at.
+   151	            # Retain that WHOLE interval, not a sliding recent-history window.
+   152	            history_start = int(self.times.searchsorted(ref.available_at + pd.Timedelta(minutes=1)))
+   153	            if self.bad_prefix[i+1] - self.bad_prefix[history_start] != 0:
+   154	                counts["incomplete_level_history"] += 1
+   155	                continue
+   156	            history = self.frame.iloc[history_start:i+1]
+   157	            registry = _update_lifecycle(self._registry_for(ref), history, closed_htf_only=True)
+   158	            row = registry.iloc[0].copy()
+   159	            row["distance_from_close_pct"] = (ref.price-price)/price*100
+   160	            score = _score_zone(row, pd.DataFrame(), pd.DataFrame())
+   161	            decision = "ELIGIBLE"
+   162	            if (score["bucket"] not in {"MAJOR", "PRIMARY"}
+   163	                or str(row["status"]) in HIDDEN_STATUSES
+   164	                or str(row["consumption_status"]) in HIDDEN_STATUSES):
+   165	                counts["inactive_or_insignificant"] += 1
+   166	                decision = "INACTIVE_OR_INSIGNIFICANT"
+   167	            sweep_hour_start = (crossed_at-pd.Timedelta(minutes=1)).floor("h") + pd.Timedelta(minutes=1)
+   168	            sweep_first = int(self.times.searchsorted(sweep_hour_start))
+   169	            if self.times[sweep_first] != sweep_hour_start or self.bad_prefix[i+1]-self.bad_prefix[sweep_first+1] != 0:
+   170	                decision = "INCOMPLETE_SWEEP_HOUR"
+   171	            item = {**score, "available_at": ref.available_at.isoformat(), "asof_ts": ts.isoformat(),
+   172	                    "crossed_at": crossed_at.isoformat(), "sweep_start_ts": sweep_hour_start.isoformat(),
+   173	                    "sweep_high": float(self.highs[sweep_first:i+1].max()),
+   174	                    "consumption_status": str(row["consumption_status"]), "decision": decision,
+   175	                    "adapter_version": ADAPTER_VERSION,
+   176	                    "market_state_reset": False, "structure_levels_reset": False,
+   177	                    "future_data_used": False}
+   178	            evidence.append(item)
+   179	            if decision == "ELIGIBLE":
+   180	                eligible.append(item)
+   181	        eligible.sort(key=lambda r: (price-float(r["price_upper"]), -r["significance_score"], r["zone_id"]))
+   182	        return eligible, counts, evidence
+   183	
+   184	    def inventory(self):
+   185	        return [{"zone_id": r.zone_id, "available_at": r.available_at.isoformat(),
+   186	                 "timeframe": r.timeframe, "price": r.price, "lower": r.lower, "upper": r.upper,
+   187	                 "level": json.dumps(r.level, sort_keys=True)} for r in self.references]
