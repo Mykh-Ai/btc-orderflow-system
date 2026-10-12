@@ -1,0 +1,34 @@
+$ rg -n H4|floor\("4h"\)|closed_h1|price_lower|CONFIRMED|DUPLICATE_PENDING_ZONE|candidate_sweep|sweep_high|HORIZON research/peak_ai_delta_h1_all_signs/engine.py research/peak_ai_delta_h1_all_signs/run.py deltascout/research_bundle/scout_backtester ../aitrader-monitor/market_monitor/closed_structure_adapter.py ../aitrader-monitor/market_monitor/structure.py
+../aitrader-monitor/market_monitor/closed_structure_adapter.py:1:"""Research-only, as-of H1/H4 structural inventory over completed minute feed.
+../aitrader-monitor/market_monitor/closed_structure_adapter.py:22:ADAPTER_VERSION = "CLOSED_H1_H4_IMMUTABLE_REFERENCES_V1"
+../aitrader-monitor/market_monitor/closed_structure_adapter.py:77:        for tf, minutes, lr in (("H1", 60, 2), ("H4", 240, 1)):
+../aitrader-monitor/market_monitor/closed_structure_adapter.py:173:                    "sweep_high": float(self.highs[sweep_first:i+1].max()),
+research/peak_ai_delta_h1_all_signs/engine.py:11:HORIZON = timedelta(hours=4)
+research/peak_ai_delta_h1_all_signs/engine.py:53:        closed_h1 = (valid and bar.ts.minute == 0 and bar.ts.second == 0
+research/peak_ai_delta_h1_all_signs/engine.py:59:            row["sweep_high"] = max(row["sweep_high"], bar.high)
+research/peak_ai_delta_h1_all_signs/engine.py:60:            if closed_h1 and bar.ts > row["_seed"].ts:
+research/peak_ai_delta_h1_all_signs/engine.py:93:            row.update(zone_id=zone_id, lower=float(zone["price_lower"]), upper=float(zone["price_upper"]),
+research/peak_ai_delta_h1_all_signs/engine.py:96:                       sweep_start_ts=zone["sweep_start_ts"], sweep_high=zone["sweep_high"])
+research/peak_ai_delta_h1_all_signs/engine.py:98:                row.update(status="DUPLICATE_PENDING_ZONE", parent_seed_id=self.pending[zone_id]["seed_id"])
+research/peak_ai_delta_h1_all_signs/engine.py:105:            deadline = seed.ts+HORIZON
+research/peak_ai_delta_h1_all_signs/engine.py:120:        self._finish(row, bar.ts, "CONFIRMED")
+research/peak_ai_delta_h1_all_signs/engine.py:122:                   stop_anchor=row["sweep_high"]*1.0001)
+research/peak_ai_delta_h1_all_signs/engine.py:124:        flags.update(sweep_stop_price=row["stop_anchor"], sweep_high=row["sweep_high"],
+../aitrader-monitor/market_monitor/structure.py:8:H4_SWING_LEFT_RIGHT = 1
+../aitrader-monitor/market_monitor/structure.py:50:    rows.extend(_confirmed_swing_levels(frame, "H4", H4_SWING_LEFT_RIGHT))
+../aitrader-monitor/market_monitor/structure.py:69:    rules = {"M15": "15min", "H1": "h", "H4": "4h"}
+../aitrader-monitor/market_monitor/structure.py:296:    if timeframe == "H4":
+../aitrader-monitor/market_monitor/structure.py:321:                "H4_SWING_HIGH",
+../aitrader-monitor/market_monitor/structure.py:322:                "H4_SWING_LOW",
+../aitrader-monitor/market_monitor/structure.py:444:    is_htf_structural = timeframe in {"H1", "H4"}
+research/peak_ai_delta_h1_all_signs/run.py:35:    description='Any raw DELTA_MIN/MAX of either sign -> frozen H1/H4 zone -> SHORT H1 reclaim within four hours',
+research/peak_ai_delta_h1_all_signs/run.py:36:    signal_feature_feed_symbol='BTCUSDT_SPOT_LEGACY', initial_stop_policy='candidate_sweep',
+research/peak_ai_delta_h1_all_signs/run.py:84:              'adapter_scope':'IMMUTABLE_INDIVIDUAL_H1_H4_UPPER_REFERENCES_NATIVE_SCORE_LIFECYCLE',
+research/peak_ai_delta_h1_all_signs/run.py:104:    print('Causal H1/H4 references:',len(monitor.references),flush=True)
+deltascout/research_bundle/scout_backtester/contracts.py:215:        if self.initial_stop_policy not in {"window_extreme", "volume_confirmed_swing", "candidate_sweep"}:
+deltascout/research_bundle/scout_backtester/execution_policy.py:158:        reason = "NO_SWING_WITHIN_INITIAL_STOP_CAP" if confirmed_count else "NO_CONFIRMED_VOLUME_SWING"
+deltascout/research_bundle/scout_backtester/execution_policy.py:188:def select_candidate_sweep_stop(candidate: Candidate, entry: float,
+deltascout/research_bundle/scout_backtester/execution_policy.py:198:        declared_high = float(candidate.shadow_flags["sweep_high"])
+deltascout/research_bundle/scout_backtester/execution_policy.py:243:    if config.initial_stop_policy != "candidate_sweep" and config.initial_swing_require_full_window and len(window_bars) < config.swing_lookback_minutes:
+deltascout/research_bundle/scout_backtester/execution_policy.py:269:    if config.initial_stop_policy == "candidate_sweep":
+deltascout/research_bundle/scout_backtester/execution_policy.py:270:        selected_swing = select_candidate_sweep_stop(candidate, entry_usdt, reference_bars[:cutoff], config)

@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "checks": [
+    "NEG-only H1 exact signal/stop/status parity with unchanged original H1 engine",
+    "NEG_H1_CONTROL: costs, SHORT/NEG, entry causality, horizon, bounds, frozen identity, portfolio concurrency",
+    "NEG_H4_CLOSE_V1: costs, SHORT/NEG, entry causality, horizon, bounds, frozen identity, portfolio concurrency"
+  ],
+  "input_hashes_reverified": true,
+  "code_hashes_unchanged_during_run": true,
+  "baseline_parity_passed": true
+}

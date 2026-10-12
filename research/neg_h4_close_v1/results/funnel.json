@@ -1,0 +1,42 @@
+{
+  "NEG_H1_CONTROL": {
+    "raw_NEG_seeds": 1429,
+    "armed": 607,
+    "no_eligible_zone": 662,
+    "duplicate_pending": 160,
+    "expired": 295,
+    "confirmed_all": 263,
+    "confirmed_decision_eligible": 262,
+    "independent_trades": 262,
+    "portfolio_opened": 150,
+    "portfolio_blocked": 112,
+    "statuses": {
+      "NO_ELIGIBLE_ZONE": 662,
+      "EXPIRED": 295,
+      "CONFIRMED": 263,
+      "DUPLICATE_CONFIRMATION": 46,
+      "DUPLICATE_PENDING_ZONE": 160,
+      "CANCELLED_FEED_GAP": 3
+    }
+  },
+  "NEG_H4_CLOSE_V1": {
+    "raw_NEG_seeds": 1429,
+    "armed": 601,
+    "no_eligible_zone": 662,
+    "duplicate_pending": 166,
+    "expired": 445,
+    "confirmed_all": 128,
+    "confirmed_decision_eligible": 128,
+    "independent_trades": 128,
+    "portfolio_opened": 80,
+    "portfolio_blocked": 48,
+    "statuses": {
+      "NO_ELIGIBLE_ZONE": 662,
+      "EXPIRED": 445,
+      "CONFIRMED": 128,
+      "DUPLICATE_CONFIRMATION": 25,
+      "DUPLICATE_PENDING_ZONE": 166,
+      "CANCELLED_FEED_GAP": 3
+    }
+  }
+}

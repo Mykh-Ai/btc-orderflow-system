@@ -1,0 +1,135 @@
+$ nl -ba research/peak_ai_delta_h1_all_signs/engine.py
+     1	"""Delta-first, frozen-zone, four-hour H1 research candidate lifecycle."""
+     2	from __future__ import annotations
+     3	
+     4	from datetime import timedelta
+     5	import hashlib
+     6	import math
+     7	
+     8	from deltascout.research_bundle.scout_backtester.contracts import Candidate
+     9	
+    10	FAMILY = "PEAK_AI_DELTA_H1_ALL_SIGNS_SHORT_V2"
+    11	HORIZON = timedelta(hours=4)
+    12	
+    13	
+    14	class DeltaH1Engine:
+    15	    def __init__(self, monitor):
+    16	        self.monitor = monitor
+    17	        self.pending = {}
+    18	        self.attempted = set()
+    19	        self.audit = []
+    20	        self.events = []
+    21	        self.zone_evidence = []
+    22	        self.candidates = []
+    23	        self.last_bar = None
+    24	        self.hour = []
+    25	        self.confirmed_keys = {}
+    26	
+    27	    def _event(self, row, ts, event, **fields):
+    28	        self.events.append({"seed_id": row["seed_id"], "ts": ts.isoformat(),
+    29	                            "event": event, "zone_id": row.get("zone_id", ""), **fields})
+    30	
+    31	    def _finish(self, row, ts, status):
+    32	        row["status"] = status
+    33	        row["finished_at"] = ts.isoformat()
+    34	        self._event(row, ts, status)
+    35	        self.pending.pop(row["zone_id"], None)
+    36	
+    37	    def step(self, bar, seeds=()):
+    38	        if self.last_bar is not None and bar.ts <= self.last_bar.ts:
+    39	            raise ValueError("feed must advance strictly")
+    40	        valid = (not bar.is_synthetic and bar.volume > 0
+    41	                 and all(math.isfinite(x) for x in (bar.open,bar.high,bar.low,bar.close,bar.volume))
+    42	                 and 0 < bar.low <= min(bar.open,bar.close) <= max(bar.open,bar.close) <= bar.high)
+    43	        gap = self.last_bar is not None and bar.ts-self.last_bar.ts != timedelta(minutes=1)
+    44	        if gap or not valid:
+    45	            for row in list(self.pending.values()):
+    46	                self._finish(row, bar.ts, "CANCELLED_FEED_GAP" if gap else "CANCELLED_INVALID_BAR")
+    47	            self.hour = []
+    48	        bucket = (bar.ts-timedelta(minutes=1)).replace(minute=0,second=0,microsecond=0)
+    49	        if self.hour and (self.hour[0].ts-timedelta(minutes=1)).replace(minute=0,second=0,microsecond=0) != bucket:
+    50	            self.hour = []
+    51	        if valid:
+    52	            self.hour.append(bar)
+    53	        closed_h1 = (valid and bar.ts.minute == 0 and bar.ts.second == 0
+    54	                     and len(self.hour) == 60 and self.hour[0].ts == bar.ts-timedelta(minutes=59))
+    55	        for row in list(self.pending.values()):
+    56	            if bar.ts > row["_deadline"]:
+    57	                self._finish(row, row["_deadline"], "EXPIRED")
+    58	                continue
+    59	            row["sweep_high"] = max(row["sweep_high"], bar.high)
+    60	            if closed_h1 and bar.ts > row["_seed"].ts:
+    61	                self._event(row, bar.ts, "H1_CLOSE", close=bar.close, lower=row["lower"],
+    62	                            deadline=row["deadline"], complete_minutes=60)
+    63	                if bar.close < row["lower"]:
+    64	                    self._confirm(row, bar)
+    65	                    continue
+    66	            if bar.ts == row["_deadline"]:
+    67	                self._finish(row, bar.ts, "EXPIRED")
+    68	        for seed in seeds:
+    69	            if seed.ts != bar.ts:
+    70	                raise ValueError("seed must be evaluated at its exact minute")
+    71	            row = {"seed_id": seed.seed_id, "seed_ts": seed.ts.isoformat(), "event": seed.event,
+    72	                   "delta": seed.delta, "volume": seed.volume, "price": bar.close,
+    73	                   "source_path": seed.source_path, "source_line": seed.source_line}
+    74	            self.audit.append(row)
+    75	            if abs(seed.delta-(bar.buy_qty-bar.sell_qty)) > .011 or abs(seed.volume-bar.volume) > .011:
+    76	                raise ValueError(f"journal/feed mismatch {seed.seed_id}")
+    77	            if seed.event not in {"DELTA_MAX", "DELTA_MIN"}:
+    78	                row["status"] = "OUT_OF_SCOPE_NON_DELTA_EVENT"
+    79	                continue
+    80	            if not valid or gap:
+    81	                row["status"] = "INVALID_TRIGGER_CONTEXT"
+    82	                continue
+    83	            zones, counts, evidence = self.monitor.query(seed.ts)
+    84	            row.update(counts)
+    85	            self.zone_evidence.extend(dict(seed_id=seed.seed_id, **e) for e in evidence)
+    86	            if not zones:
+    87	                row["status"] = "NO_ELIGIBLE_ZONE"
+    88	                self._event(row, bar.ts, row["status"])
+    89	                continue
+    90	            zone = zones[0]
+    91	            zone_id = zone["zone_id"]
+    92	            episode = (zone_id, zone["crossed_at"])
+    93	            row.update(zone_id=zone_id, lower=float(zone["price_lower"]), upper=float(zone["price_upper"]),
+    94	                       bucket=zone["bucket"], significance_score=zone["significance_score"],
+    95	                       level_available_at=zone["available_at"], crossed_at=zone["crossed_at"],
+    96	                       sweep_start_ts=zone["sweep_start_ts"], sweep_high=zone["sweep_high"])
+    97	            if zone_id in self.pending:
+    98	                row.update(status="DUPLICATE_PENDING_ZONE", parent_seed_id=self.pending[zone_id]["seed_id"])
+    99	                self._event(row, bar.ts, row["status"], parent_seed_id=row["parent_seed_id"])
+   100	                continue
+   101	            if episode in self.attempted:
+   102	                row["status"] = "EPISODE_ALREADY_ATTEMPTED"
+   103	                continue
+   104	            self.attempted.add(episode)
+   105	            deadline = seed.ts+HORIZON
+   106	            row.update(status="PENDING", deadline=deadline.isoformat(), _deadline=deadline, _seed=seed)
+   107	            self.pending[zone_id] = row
+   108	            self._event(row, bar.ts, "ARMED", lower=row["lower"], upper=row["upper"], deadline=row["deadline"])
+   109	        self.last_bar = bar
+   110	
+   111	    def _confirm(self, row, bar):
+   112	        seed = row["_seed"]
+   113	        key = (bar.ts, "SHORT")
+   114	        if key in self.confirmed_keys:
+   115	            row["parent_candidate_id"] = self.confirmed_keys[key]
+   116	            self._finish(row, bar.ts, "DUPLICATE_CONFIRMATION")
+   117	            return
+   118	        candidate_id = "PAH1_"+hashlib.sha256(f"{seed.seed_id}|{row['zone_id']}|{bar.ts.isoformat()}".encode()).hexdigest()[:20]
+   119	        self.confirmed_keys[key] = candidate_id
+   120	        self._finish(row, bar.ts, "CONFIRMED")
+   121	        row.update(candidate_id=candidate_id, confirmation_price=bar.close,
+   122	                   stop_anchor=row["sweep_high"]*1.0001)
+   123	        flags = {k:v for k,v in row.items() if not k.startswith("_")}
+   124	        flags.update(sweep_stop_price=row["stop_anchor"], sweep_high=row["sweep_high"],
+   125	                     sweep_end_ts=bar.ts.isoformat(), stop_buffer_fraction=.0001)
+   126	        self.candidates.append(Candidate(candidate_id, seed.local_ts, bar.ts, "SHORT", FAMILY,
+   127	            FAMILY, None, bar.close, seed.delta, seed.volume, abs(seed.delta)/seed.volume,
+   128	            None,None,None,None,flags,seed.source_path,seed.row_hash))
+   129	
+   130	    def finish(self):
+   131	        if self.last_bar:
+   132	            for row in list(self.pending.values()):
+   133	                self._finish(row, self.last_bar.ts, "RIGHT_CENSORED_END_OF_DATA")
+   134	        return [{k:v for k,v in r.items() if not k.startswith("_")} for r in self.audit]

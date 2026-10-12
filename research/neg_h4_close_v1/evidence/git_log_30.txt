@@ -1,0 +1,29 @@
+$ git log --oneline -n 30
+966dabc Merge complete Peak AI research into isolated consolidated branch
+56ecaa1 Consolidate complete Peak AI research: code, tests, studies and result archives
+84fcb9e docs: point Scout Replay handoff to Spot source archives
+49fb411 research: bundle Scout Replay inputs for GitHub Work
+1d0f508 research: preserve DeltaScout replay work and strategy journal
+326ccd1 Set side-specific DeltaScout imbalance minimums
+254f55c Ignore local deployment and research artifacts
+c59833b Add offline LLM entry snapshot contracts
+bfd706b Add causal trade development and early exit research
+0d5e245 Correct recovery clock and replay fill geometry
+aef7064 Expose DeltaScout entry admission provenance
+b720a42 Record LLM entry boundary and v39a deployment
+9825123 Add opt-in v39a market monitor snapshots
+dd02737 feat(deltascout): align live filters and V8 replay parity
+219bfea feat(executor): sync modular V8 runtime
+8c8d16d docs(deltascout): document replay workflow and validation
+911b24c feat(deltascout): add scout replay backtester
+b024a30 feat(deltascout): compile replay candidates and feed evidence
+cd4be94 Ignore local worktrees and workspace archive
+d4b3f99 Specify DeltaScout Scout Replay Backtester v0.1
+2b5a8bc Add DeltaScout loss avoidance research builders
+31802d7 Refresh local research workflow entrypoints
+1ff8034 Add recovered feed gap builder
+5730c3b Add offline setup discovery builders
+3d2d74a Fix lifecycle compatibility in research reviews
+103b3d2 Document fast money research state
+c320c29 Document feed recovery gap contract
+c373c71 Reset public history after removing private research materials
