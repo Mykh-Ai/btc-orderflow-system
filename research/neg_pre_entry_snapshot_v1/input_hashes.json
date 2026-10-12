@@ -1,0 +1,663 @@
+{
+  "files": [
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-16.csv",
+      "sha256": "2e45c1e0a5531526d46254647c2f51ac2b778c135bb8302945230588a4cf558d"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-17.csv",
+      "sha256": "fc51a64622a5728ae4a07ee798ff823455a82ffb90a77b29de470518d8feebf8"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-18.csv",
+      "sha256": "f864a2aced1e71dcab38f03952dc8f42ac02ea8623b8f9acb6a31a66bcf331ea"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-19.csv",
+      "sha256": "1a340b8e9449419cc9ca6dc41c2e0a8899e067b5f49bd4159caaedb2c8b13b57"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-20.csv",
+      "sha256": "a80c87488fbdbfca83e58f12eaf6c1f4df5801c72ae39fb9ae9237ee8564ecaa"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-21.csv",
+      "sha256": "aa3c37fe3497121b18717fa8ecbb0bc9f60d6613499f4e62f62ee2b24e18b22f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-22.csv",
+      "sha256": "e3db4647c527a56f16afbd532d9309344c8ec79ddc449f4c2d60382840e3cccc"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-23.csv",
+      "sha256": "932ed68b2cb43dd173282e3968818c191d6e86d5a5582ce30cb78430bee7037c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-24.csv",
+      "sha256": "f7c4dd8f5b64e321e14aa5561a15b6cd2d87b06825b77be35decf73cd95fc215"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-25.csv",
+      "sha256": "a1f003ff6ad554af073ef450a8cf9aba365b62a1af251b5baa950b1fb702e781"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-26.csv",
+      "sha256": "e130c38b121f02f8aaa8c21b8e37b8761ba2b10fa6fabaf965c6356161d04358"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-27.csv",
+      "sha256": "34988e2bfbf01a3fc6930782c137bf4de43da9aaad723b8c06ed6a43320b27a4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-28.csv",
+      "sha256": "6b7ba5c1076cfb34c7b6973238c896ba0968c8c723d422f2fc891f23bb94454e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-29.csv",
+      "sha256": "c49689f06cb428e4cfe297fd97951aaaf114469efa15ff2125721706759ce8f9"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-30.csv",
+      "sha256": "228dd7b637be83c4ed91e630679fecfcd35848adde8cec159cf613166396a319"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-03-31.csv",
+      "sha256": "c413f0e051f5b050db19408fb529e56ffb5028dc92bb6bcfea4bb4292b164142"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-01.csv",
+      "sha256": "408eafeb92583951db83b08d6791fcb965508558afed996d8d27b3b6bc5b4ba6"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-02.csv",
+      "sha256": "d6d0738d2b4fe24ec28d220096df3d0edbb9949edf5376e325ecd01ab11d79b9"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-03.csv",
+      "sha256": "298f759a34ffeafc85b6829572d3f2170d6f86d43e2eb7c2262ba2eb3304b203"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-04.csv",
+      "sha256": "c44128ceca6bd8dce42343975ca9fe6b30bc544e50e09bc9f180913f9e34082c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-05.csv",
+      "sha256": "de8285b893dc4d09089e20ba73a3a4a04cb868bde67d25f57ef8028fd690fc28"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-06.csv",
+      "sha256": "fde7ab1edf4a57fb487fd1aebb7b2e47d0779db6323253f9d0f361c752f53cbe"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-07.csv",
+      "sha256": "6717f43c985f14ee15c14556c00f0c5bbe2b4cebbd8b29a1162753ea14d000bd"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-08.csv",
+      "sha256": "c54aae313d2139091e2245ce1eab36f40c0c884517c0299a410840a1de2baf47"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-09.csv",
+      "sha256": "43f85dadcd012d2e8ec81c07ce6bb12f6a3c1421736595be7c275d8b0beb9034"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-10.csv",
+      "sha256": "5d238a34827174258eaabc2cef3deba8981ddc1eea1aaa455400be7c57509a7e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-11.csv",
+      "sha256": "c9f955ff40b1d221bf75fc2a1c95933e85d6341c6d73f58af4c5200c40a7cf1c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-12.csv",
+      "sha256": "362c0b7e21a6b433de38bb2760deac6b51a5a6df5212f86cebbfa54e59893910"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-13.csv",
+      "sha256": "1ad038b0defc4751323ac6faac347aba8c65ccfd8fc1f638af6ab0d7407d34d0"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-14.csv",
+      "sha256": "0268d7b5485be1d42152cf2625e6bd199a8ea648ba21419c073e3c5ec9348f7b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-15.csv",
+      "sha256": "fcd2c0d82069b15c875211d3d33c3e4d0df4ca7a6417034d1cbd0eb4fdfa3f9f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-16.csv",
+      "sha256": "6e100c22a920b3996df77c5ec951012c7548b34999ad78342baa3830d3ec4eed"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-17.csv",
+      "sha256": "96f72a1ddad127670bea6d8a412e646c9530f43ca6025ec28e4cc0d3794a46e9"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-18.csv",
+      "sha256": "9ade22541bb2b93ac59bbb66beb1bb349558b48457cd722aa6c1e1e56e44a35b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-19.csv",
+      "sha256": "f2d7ecfe4da4bae6db1c1f650a4e21ab69583c741af0c36d26e26ac9b162d51f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-20.csv",
+      "sha256": "b5ebdfbd0dd3c32cbf8045796747a5685deec74d1eb966f5a4009a9001df9ff2"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-21.csv",
+      "sha256": "05845be9878f4fbcb85e34ebde0a50a339065e4870901f8c569e829031d251c9"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-22.csv",
+      "sha256": "65625268a7e27bb9bd8487ee62eaa74bd75fe1bb18f083644453f21a4db9ff23"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-23.csv",
+      "sha256": "5f30b9665d66b6c8e379cb8cf6290e3f25ff907fd54e8402b7c775d5cc030442"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-24.csv",
+      "sha256": "717a033cb16f1a1b8fcec7b5dfbfe86b0093eefa961f32caa8d15505ec88fc98"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-25.csv",
+      "sha256": "ed257e826dcff1ed886d065703905e75ed218549c598863ed842cf439ecbe0ad"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-26.csv",
+      "sha256": "26a0e9f783a15041665fe396f70071d35555be4257165740bf3536ea4bc3710f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-27.csv",
+      "sha256": "c2e104e0a70c3cd29599cde3e82a50c79bd3960d96e7e0576291b80f956d928e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-28.csv",
+      "sha256": "b75fa5fdccc5ac451ace7d26ed23449ec161198bcbe8fad28a38124c8956ebf0"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-29.csv",
+      "sha256": "0456395c479f317678fdb61b89ef309e63c15a63d7498cb54687c874e99f9c0e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-04-30.csv",
+      "sha256": "f175656c0a89a8a217119250c807518cb592ee13ceb924dad523a629a4b190e0"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-01.csv",
+      "sha256": "dc10fde0795163f6b97a76e788b4f8c709588d092fba90ed2874d0da8b3077cf"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-02.csv",
+      "sha256": "d05d129f839c9df2126f5cad900a84f356926f98f5f21b511f0e52af198cba9b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-03.csv",
+      "sha256": "7758d8191b614e4b5863febf0e0f2ff8d8ed73fdb279ff6754bdbfcaf1ba85db"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-04.csv",
+      "sha256": "1c2f06b99a9031a975c0ee09b83f0836b7af3aa29af86a486192445d358890af"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-05.csv",
+      "sha256": "1f10681f4e233452ee3ef792cd25b25d7c04b59d7aa247239e635bd5fad02659"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-06.csv",
+      "sha256": "837e1da4efd637409c57699a152625b8aaacaaf50a16ac461728a0d9cbeca0e7"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-07.csv",
+      "sha256": "e80a40a46ca61ac4bce92abe02c08b7a147bebd7d314b98f927b3aaec8b4eb3b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-08.csv",
+      "sha256": "cac7bf8ddf991a69757e9e247ca0774ac026f0292fea3a662137febe61872eed"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-09.csv",
+      "sha256": "622b8d16607e8136a5db80c1813dc6af1a720247b96b989cd837e5cb7503804b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-10.csv",
+      "sha256": "0b5763258b93bc844ae79d4e0681333c3d9d422cc441d75ef0e052c707e059fd"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-11.csv",
+      "sha256": "b8831cadd65928948c76447b1062f50c0a1597a1223cc7e6cea5503af534fe60"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-12.csv",
+      "sha256": "ca053813448290b10c9b40808be7e4027fc30a0327536345c3e9c65f8493ecbf"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-13.csv",
+      "sha256": "44630c8ea52eb8925642436c9513a24634aca44d025ade4f161850ad780c6f33"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-14.csv",
+      "sha256": "21bc4fc4a122d1d2f552ad044dc4f0562586734630744e5d758877f3f92d7bff"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-15.csv",
+      "sha256": "cfff817ae57258a0c90665f670b0d54a0e4803708c3ba9952dde3f217ee7474f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-16.csv",
+      "sha256": "cbe412589b535d67b52eacf55bb189344178328431619259a8a69045038af84a"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-17.csv",
+      "sha256": "05d675b8f4c8a60a6968ab86791428d0de8fbb54c9f34c4825694b75dfe6b0f1"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-18.csv",
+      "sha256": "8087f67068236481614cec5bb14d0a1e5a7c2d3b381e204135ae2fbef9e1494f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-19.csv",
+      "sha256": "8c892104e9f3b5429e964cbfb7b7d083770f9002709550dea4fe86a8df4e3a30"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-20.csv",
+      "sha256": "d559541e2ae5eccfb1bba578bf8daeae7346e1cecccc88d99c8e2447b7a8dded"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-21.csv",
+      "sha256": "7225e71facff8ed080e3a82f43bcda1fea3d0fbbdd6ede0b44c746e51f5ad52d"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-22.csv",
+      "sha256": "e7d89b0bcbce30788a1d5ef3d6e52d5a4a382b362b165857cf40d7693087bf80"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-23.csv",
+      "sha256": "f15f69dca1e9df37982c4ae69a7c9a04c1b9d6e014796fd55aa2a1653c00ce36"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-24.csv",
+      "sha256": "324cb902ce20a489c95c443a1f4b9cfed118df9c8eff97ead256cb1edd4492ec"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-25.csv",
+      "sha256": "fab929a7c290723afb564a31f6e1b396fd6fe9183d1c399596c2356b185d97e2"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-26.csv",
+      "sha256": "8aedc98c841a139cf511f8fc9687fbd5d8edf828680ec05d56a61e563c80b159"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-27.csv",
+      "sha256": "308bff42b8c888a21075cd4c1dfcb1d6ee3a85978c7b281d0e9ab7d1139bc23d"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-28.csv",
+      "sha256": "485eb2cfe7437cd724bcc0068d9381293eb0ca59da37bda4c8d5d89af7a92a24"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-29.csv",
+      "sha256": "8d22a9b0e32ab113ef79a8de1a5a1383389291e75dd44a03f8a08ccc053db126"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-30.csv",
+      "sha256": "0a4581501856bc9aea3859a1ad818f539184858a88f8b71e96b1b41853eacfb7"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-05-31.csv",
+      "sha256": "89621b41f498ac6137bdca088c12ff8574a67d2b5798bf700db5fee22cc0d2ec"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-01.csv",
+      "sha256": "ad80135bf0177e40932123280b5af11e05af4a865b5dbbfc755fccf27192ac2f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-02.csv",
+      "sha256": "af8c76cfbceb8ebf2ca4aa10f532c0f273ab9f1f955d9e9662ff2d2b4a7a626b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-03.csv",
+      "sha256": "f6bf6d7818934a8c0283075782ba0eba4e19e6575a101f7278e642316c13fa3f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-04.csv",
+      "sha256": "94b0c496246af21eed4638efac4dc7fbb4e9b1fb16db619e54dc32d4498ba940"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-05.csv",
+      "sha256": "12c632563902beb225e0ade5e7b174a621bf8a01b5a13b48ecf9a2728fffa325"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-06.csv",
+      "sha256": "a4750ceef3fecbacdebe174bc894cd394ea9b298980a9d2b40ea2f44df61a86e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-07.csv",
+      "sha256": "697aba114aa6b1b86d3df54705a5ee113a8253bc27ddb94f3b7c07aaf33f1098"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-08.csv",
+      "sha256": "f2e795636296f90495f962e22bed017189c724fec9894141537820b720888ab4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-09.csv",
+      "sha256": "c4c6672ddf33d877b75acbdd1c4b59164de454a4ea161658219253c40cc1852f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-10.csv",
+      "sha256": "d8c5eaa7c615aa51a7ee79c9ad4570d6ff8e061867055418aa69a95329d082f1"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-11.csv",
+      "sha256": "318f3120766e924cc20fe519ca09cdfbc076c41b98bb7478b2ef2ebf107efe20"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-12.csv",
+      "sha256": "c201156d493e3b8536d0251ab9370de6a81300cb26eef894043d07a20a1b13bf"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-13.csv",
+      "sha256": "f67e85001e8c067edab7b974f9e51b6d482e0c06bc84f465f1a4e9ffeffc26c4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-14.csv",
+      "sha256": "0fb9436af3abece13df5e4d45ea2ba654a5a28b8cfa3c7275db4afb3a037cf31"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-15.csv",
+      "sha256": "5fe0df222d90fabfc3d94f1dd31f0ae46225ec656dc7d7e7a4965312d10f70d2"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-16.csv",
+      "sha256": "673e249c0c7a770170dd8de25e8e89640891400f3f6c64b9f055ee28b3954f43"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-17.csv",
+      "sha256": "6259b8ddb1c544fda77477e31092fe57f6e152c18145823a31c161f8cb1cb221"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-18.csv",
+      "sha256": "a8043632c71a5272f8d9abf261798539e609f4ccceca8b089f1761dc6898fbe9"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-19.csv",
+      "sha256": "d53e16f74c7a59f980868cb10bb99ea038815319a67c0a97afb7932b08709cb0"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-20.csv",
+      "sha256": "d6822221efd24088d06ebd660f45fca1dd579ac46e989e4e0a0873d121c2c60f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-21.csv",
+      "sha256": "d4a9450006cdd593055305c24bffc4c7a8793c112e109b1c30b3cef64395c01f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-22.csv",
+      "sha256": "c7d9b919ba9279ad09a53bf82ffd34996ba174a74026ed8f1d11667daeebaa13"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-23.csv",
+      "sha256": "b63ae623fc0e1885774251752207947493bcbdad1598d5910d99aa613cfe4f16"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-24.csv",
+      "sha256": "508b591fa54b4d874337359a5a13c85b2abd3831d22a335731ed5712937aed41"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-25.csv",
+      "sha256": "70d3ed5ca2bc1a182f0f51792fba316b093be719ea09d35af800c861b93de403"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-26.csv",
+      "sha256": "4c6187060250e137ca0693a1c58f9b4e1f645557d417c0dbe075bf329443aabe"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-27.csv",
+      "sha256": "ff95df50f80bcd6ddf4e2b04f86e0ed0f0fd180a77806a65e4c0991479edd9c4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-28.csv",
+      "sha256": "bee7cc1c3b153ec5b0922e119cd0f5f91afb6ed2ceec2d191934ce1003d20e0c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-29.csv",
+      "sha256": "109e5c98eb7316fe1a6ab992a512e3daf6ac664283277368fd68cd939facce42"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-06-30.csv",
+      "sha256": "023fa89ac350be9040728eb269b999cd28854a0c89a2d1ca1f63df4212c7794a"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-01.csv",
+      "sha256": "8f7b1663fca169c59cc5d2a500b3bdd7e0be106d19d0b474cc3ee01e59f583fa"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-02.csv",
+      "sha256": "d7fe4e3249199c5e5105c95aacd900b2e8fc274a2eed5d207c931811d8d10193"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-03.csv",
+      "sha256": "d0c7c7d0c7810711cdfc5faa8bb06a66a6b61792c56ec86af04b7437d661b987"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-04.csv",
+      "sha256": "f96ec4eef852fbb535f4ca35d4ddf40be1459a869c7ea25286939adce24f4bdb"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-05.csv",
+      "sha256": "106e2cc68ba1b191b016b87059ca85213fcefaecce520db01a87dfceaa873b63"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-06.csv",
+      "sha256": "82fe3954f1aafa58b04e0f04cac38e00178a2070cb3c31718212574fbe139b25"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-07.csv",
+      "sha256": "c92c871fdd04451b358ac600df27fa51fe39c83a865edf18bf53c2d17d31fba5"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-08.csv",
+      "sha256": "1b7e6e9a2e6a9bee307bfd483fdf4166d433d5d0f2f0f3871ea607812697ced8"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-09.csv",
+      "sha256": "4b43ad5f7ddb84c6f08a5c6d1d6a9fbd4565b6962a68177fe76feea74ae40a8a"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-10.csv",
+      "sha256": "a6873cc01c366160b4fc802cfb4f13a30a948347be09d367f801b0ecbda46885"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-11.csv",
+      "sha256": "cfb97ed8e59c49434efa7ba59bbdec05beb014890014c97394bc1cf59d88eee3"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-12.csv",
+      "sha256": "6b40f5b20b8d330849cef0cc229546e20eff0899d700b5872a16034b141970eb"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-13.csv",
+      "sha256": "6ea52dded894a795e2734f1fe75d94dde7a6df73090d8bc5b80b6801ea067a6c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-14.csv",
+      "sha256": "301034615d56764bb277c08806f7a9cc7a875c809726009f5b25c938bc7a1361"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-15.csv",
+      "sha256": "027b0a4386e2ee924b9dca81d1afe8a17939eb06263d437db309eb16493f3f29"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-16.csv",
+      "sha256": "0d30a227d0b58aafa90448b5c401e452a8d8fc075a274e44bdbebdbc4aa5a06d"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-17.csv",
+      "sha256": "db7eedb17f57644fb54efb2d1e5e4f0648fd2b6aa29e2c685a8c0e6e6b06adac"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-18.csv",
+      "sha256": "8e696e99686808d86b44b8aab6154fd211d3eab0c656b058168ddbf19d7c3fbc"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-19.csv",
+      "sha256": "74b75d94c582c8d246e288146c005b294fbac271d083f95f39012741093e0b51"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-20.csv",
+      "sha256": "4c1529160c029d33d9e748b6ed0b242d53f67197fcaf8e09f642a1e0d6b758f5"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-21.csv",
+      "sha256": "a7d3d1f00ac877000badd687afad5cc9269ad3c53d5b1cc5137ba70863479a0f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-22.csv",
+      "sha256": "624c7f107da650b9c1e0ea9cfdbfcba990a17f3f91c711fab13771b8857ced44"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-23.csv",
+      "sha256": "1ffd31a1a63cf14bfbaaf7e38a86ebb41548165bbbcb9e3a09c477f1ab917c2d"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-24.csv",
+      "sha256": "a13529d2e05d8c836a65d3f7bc5ed7fdf110366b6bec6515e8f6ea9d5bb90765"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-25.csv",
+      "sha256": "4e7857365d7aa89623dd1e0b313322d09c4a13b5284b74815726c0c0c3beb4fc"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-26.csv",
+      "sha256": "27d1d6c5b0f89137158e873d8b7664c7b53438be0bb35076160eae243971ad74"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-27.csv",
+      "sha256": "d652cf454d372cf94940395392296267ce003ffec49809efbc63a1c03c8e284e"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-28.csv",
+      "sha256": "76ae179ea6491ce29ed97e71d419376a64c050ddd09233e4a3580e9688318f78"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-29.csv",
+      "sha256": "55d02d2f90dda8d86677a2bcf44b192c526174ae3cd6563c1118d8e7f5b520b7"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-30.csv",
+      "sha256": "d963f6f95fb37bbe3833d31ffc347041b89f6711cda739b4429df5a1b1037cca"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-07-31.csv",
+      "sha256": "64830d088fdbb5c56fa8c3d8863461a39d02391898e1bdd9c2022e0dda1ed0e8"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-01.csv",
+      "sha256": "52688af8c30142538887d87a8c67cd62e9670437a6689c94c64a7ae8f5438524"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-02.csv",
+      "sha256": "5055c2f056da96585796c057c38ea990d10bf2939345e47b66da3fdbe0a5da22"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-03.csv",
+      "sha256": "2363001264d48de891203173e865063192cc185b457c3f1ace07c533ae0d82db"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-04.csv",
+      "sha256": "348fc32c9a2784b3a2dbe5d85697ac8b8eb900d22c85d6fc5027e4b51180028b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-05.csv",
+      "sha256": "92393ffe5f086e68b47faabc06e6c3009419c8de293fefa3887313652fc11ef4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-06.csv",
+      "sha256": "ef6d0fa033e7199eb12df736ef560c6c4108bfcdaaa0d6331f4006e725f27c44"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-07.csv",
+      "sha256": "45a2337c6b1b5289bb4e752a34d5d254fb0c152e8f464ec0c32674863f078399"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-08.csv",
+      "sha256": "1a4be012c1c9dd2fd80d4124408c7660ef511d77cfbfe4cd690d3232f38864c3"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-09.csv",
+      "sha256": "e0a617a0253e399ee6f814f1d5e8ccd041a32d1cf5c7fd7e2aaf467baca1ee8c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-10.csv",
+      "sha256": "637b81d5dd3f54cbe76a919e08b36c317901e0b0c134936b2347a19af9a2da10"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-11.csv",
+      "sha256": "66aca7434ab30c09798c3ca2fc0d096645502fe0bc5cabd4ab81e0868053e21c"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-12.csv",
+      "sha256": "6f7003a82e5964e33b3857e0012254ca602b3913ff98ed0c842a186fb32d5fb7"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-13.csv",
+      "sha256": "77b2805cf48ea2f959ff901d0e1f3adb9e6fc53440ccca2e8c30423fabb14b7f"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-14.csv",
+      "sha256": "1b91049a4e4b7377ce8546fc44020eeefadc4c3026f98bf0845b4d2bf5c33f98"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-15.csv",
+      "sha256": "71967f9b59d09ccb2473fcb598e329bd2b445ef90970fbbc25a23ba6ab3647e8"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-16.csv",
+      "sha256": "c5bea7041ffcf401657cb32ed435c32b48d197eba396c6dd715a534e24de96c7"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-17.csv",
+      "sha256": "a1f89546cdb5df7ea9914f76806a2e04795fe37e9470b3d9fb274247d94d7cc4"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-18.csv",
+      "sha256": "43e3b3ab7aabe21f326b5a06ec5a41cd017d499adb04bc7c5886f82394912e4b"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-19.csv",
+      "sha256": "fa2a73d649f5adb9c0526bb0ad7a7e8e4f8129f06586c43905004faf9f34b268"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-20.csv",
+      "sha256": "6a486d8c6801ebd283a0a2ddc4dbcc1137b5a414c128966b101e132d30b788fa"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-21.csv",
+      "sha256": "6b4c5dd88a24a6898c4160e44cbea736a407207406aac3eae8801dc0641e703a"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-22.csv",
+      "sha256": "746d31890cc773feccf73137dc86364fb38b4631d9cbfbb5412fff947a984453"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-23.csv",
+      "sha256": "0c450fe27eac86e07c1222b313f72f452da3970dcf7a7330172684db514d87d0"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-24.csv",
+      "sha256": "38d011ac9dd723017c160f0f00b2878ba2faa77b08d1de590878014db5efea30"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-25.csv",
+      "sha256": "831b6495a982951cb8348acd50717a777421461f62d7f678db9c3f6e38a9f3e3"
+    },
+    {
+      "path": "deltascout/research_material/execution_feed/btcusdt_legacy_spot_1m/daily/2026-08-26.csv",
+      "sha256": "8b198af56f29f55ec805a524175aa954bcd826ab276a4457c50875e90267a4fa"
+    }
+  ],
+  "independent_ledger_sha256": "cb565ce43472c6b3d603e84bdf54a5b40509b2ca52742a5ea0dbb1eac6aa1daf",
+  "candidates_sha256": "4d765e756212d8913dd6050dc338db5bf20d74a834a52e8f4c88247500997ec9",
+  "protocol_sha256": "2d9418a079f79671bbd0326a05fdfa4bcce4e16f82129cf6cb1a5ffa27c657f4"
+}

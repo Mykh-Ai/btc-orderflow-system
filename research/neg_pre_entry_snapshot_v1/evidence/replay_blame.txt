@@ -1,0 +1,186 @@
+$ git blame research/neg_h4_close_v1/run.py
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   1) """Fixed NEG H4 experiment and matched NEG H1 control; unchanged native replay."""
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   2) from collections import Counter, defaultdict
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   3) from dataclasses import replace
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   4) from datetime import datetime
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   5) from pathlib import Path
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   6) import json
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   7) import shutil
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   8) import pandas as pd
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200   9) from research.neg_h4_close_v1 import baseline
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  10) from research.neg_h4_close_v1.engine import NegCloseEngine
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  11) from research.peak_ai_delta_h1_all_signs import run as old
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  12) from research.peak_ai_delta_h1_all_signs.engine import DeltaH1Engine
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  13) from research.peak_ai_delta_h1_all_signs.query_cache import CachedStructureMonitor, CACHE
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  14) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  15) HERE=Path(__file__).resolve().parent
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  16) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  17) def stats(frame):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  18)     closed=frame[(frame.entry_status=='FILLED') & frame.lifecycle_class.isin(old.RESOLVED)]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  19)     net=closed.net_pnl_usdc.astype(float); n=len(closed)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  20)     losses=-net[net<0].sum()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  21)     return {'N':n,'wins':int((net>0).sum()),'losses':int((net<0).sum()),'breakeven':int((net==0).sum()),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  22)         'win_rate_pct':float(100*(net>0).sum()/n) if n else None,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  23)         'gross':float(closed.gross_pnl_usdc.sum()),'commission':float(closed.commission_usdc.sum()),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  24)         'slippage':float(closed.slippage_usdc.sum()),'net':float(net.sum()),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  25)         'gross_per_trade':float(closed.gross_pnl_usdc.sum()/n) if n else None,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  26)         'net_per_trade':float(net.sum()/n) if n else None,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  27)         'PF':float(net[net>0].sum()/losses) if losses else None,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  28)         'unresolved':int(((frame.entry_status=='FILLED') & ~frame.lifecycle_class.isin(old.RESOLVED)).sum()),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  29)         'blocked':int((frame.entry_status=='BLOCKED').sum()),'opportunities':len(frame)}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  30) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  31) def timing(minutes):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  32)     assert 0<minutes<=240
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  33)     return '<=60' if minutes<=60 else '61-120' if minutes<=120 else '121-180' if minutes<=180 else '181-240'
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  34) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  35) def signature(c):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  36)     f=c.shadow_flags
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  37)     return (f['seed_id'],f['zone_id'],c.signal_ts_utc,c.signal_price,c.delta,c.side,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  38)             f['lower'],f['upper'],f['sweep_start_ts'],f['sweep_high'],f['stop_anchor'])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  39) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  40) def mapping(cs,inventory):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  41)     refs={r['zone_id']:r for r in inventory}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  42)     output=[]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  43)     for c in cs:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  44)         f=c.shadow_flags;ref=refs[f['zone_id']];level=json.loads(ref['level'])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  45)         minutes=(c.signal_ts_utc-datetime.fromisoformat(f['seed_ts'])).total_seconds()/60
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  46)         output.append(dict(candidate_id=c.candidate_id,seed_id=f['seed_id'],delta=c.delta,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  47)             seed_ts=f['seed_ts'],confirmation_ts=c.signal_ts_utc.isoformat(),zone_id=f['zone_id'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  48)             price_lower=f['lower'],price_upper=f['upper'],available_at=f['level_available_at'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  49)             crossed_at=f['crossed_at'],sweep_start_ts=f['sweep_start_ts'],sweep_high=f['sweep_high'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  50)             stop_anchor=f['stop_anchor'],significance_score=f['significance_score'],bucket=f['bucket'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  51)             source_timeframe=ref['timeframe'],level_type=level['level_type'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  52)             delta_to_confirmation_minutes=minutes,timing_bucket=timing(minutes),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  53)             month=c.signal_ts_utc.strftime('%Y-%m')))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  54)     return pd.DataFrame(output)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  55) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  56) def enrich(frame,meta):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  57)     result=frame.merge(meta,on='candidate_id',how='left',validate='one_to_one')
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  58)     assert result.level_type.notna().all()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  59)     return result
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  60) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  61) def summaries(label,mode,frame):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  62)     total=dict(experiment=label,mode=mode,**stats(frame)); rows=[]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  63)     for column,values in [('level_type',['H1_SWING_HIGH','H4_SWING_HIGH']),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  64)                           ('month',sorted(frame.month.unique())),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  65)                           ('timing_bucket',['<=60','61-120','121-180','181-240'])]:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  66)         for value in values:rows.append(dict(experiment=label,mode=mode,dimension=column,cohort=value,**stats(frame[frame[column]==value])))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  67)     # Monthly concentration within each structural type is explicitly auditable.
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  68)     for level in ['H1_SWING_HIGH','H4_SWING_HIGH']:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  69)         for month in sorted(frame.month.unique()):
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  70)             rows.append(dict(experiment=label,mode=mode,dimension='level_month',cohort=level+'|'+month,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  71)                              **stats(frame[(frame.level_type==level)&(frame.month==month)])))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  72)     return total,rows
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  73) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  74) def run():
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  75)     gate=json.loads((HERE/'baseline_parity/result.json').read_text());assert gate['passed']
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  76)     out=HERE/'results';out.mkdir(exist_ok=False)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  77)     bars,seeds,execution=baseline.load_inputs();neg=[s for s in seeds if s.delta<0]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  78)     batches=defaultdict(list)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  79)     for s in neg:batches[s.ts].append(s)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  80)     manifest=json.loads((baseline.PRIOR/'protocol_freeze.json').read_text())
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  81)     cache=CachedStructureMonitor(bars);inventory=cache.inventory()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  82)     old.rows(out/'structural_inventory.csv',inventory)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  83)     shutil.copyfile(baseline.PRIOR/'input_hashes.csv',out/'input_hashes.csv')
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  84)     cache_files=sorted(CACHE.glob('*.json'))+sorted(CACHE.glob('part_*.jsonl'))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  85)     old.rows(out/'query_cache_hashes.csv',({'path':str(p.relative_to(old.ROOT)),'sha256':old.digest(p)} for p in cache_files))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  86)     code=old.code_hashes();code.update({str(p.relative_to(old.ROOT)):old.digest(p) for p in sorted(HERE.glob('*.py'))})
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  87)     configs={tf:replace(old.CONFIG,experiment_id='NEG_H4_CLOSE_V1' if tf=='H4' else 'NEG_H1_CONTROL',
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  88)                 description='Numeric NEG only; frozen upper zone; completed canonical '+tf+' close; horizon four hours') for tf in ['H4','H1']}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  89)     for cfg in configs.values():
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  90)         assert {k:v for k,v in cfg.to_dict().items() if k not in ['experiment_id','description']}=={
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  91)             k:v for k,v in old.CONFIG.to_dict().items() if k not in ['experiment_id','description']}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  92)     old.dump(out/'config.json',{tf:cfg.to_dict() for tf,cfg in configs.items()})
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  93)     old.dump(out/'protocol_freeze.json',dict(base_sha='966dabcc0bef0ac7289905fcdfaf93252e1d1198',
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  94)         protocol_sha256=old.digest(HERE/'PROTOCOL.md'),code_hashes=code,decision_start=manifest['decision_start'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  95)         decision_end=manifest['decision_end'],outcome_end=manifest['outcome_end'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  96)         seed_filter='numeric delta < 0',horizon_minutes=240,confirmation='canonical completed H4 CLOSE < frozen lower',
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  97)         baseline_parity_sha256=old.digest(HERE/'baseline_parity/result.json'),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  98)         input_manifest_sha256=old.digest(out/'input_hashes.csv'),cache_manifest_sha256=old.digest(out/'query_cache_hashes.csv'),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200  99)         monitor_head=old.head(old.MONITOR),no_fresh_holdout=True,no_production_change=True))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 100)     totals=[];breakdowns=[];funnels={};frames={};all_cs={};checks=[]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 101)     for tf in ['H1','H4']:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 102)         label=configs[tf].experiment_id;folder=out/label;folder.mkdir()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 103)         cache.last_query=None;e=NegCloseEngine(cache,tf)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 104)         old_control=DeltaH1Engine(cache) if tf=='H1' else None
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 105)         # Same cache shared for identical timestamps, no query recomputation.
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 106)         for b in bars:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 107)             triggers=batches.get(b.ts,())
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 108)             e.step(b,triggers)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 109)             if old_control is not None:old_control.step(b,triggers)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 110)         audit=e.finish()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 111)         if old_control is not None:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 112)             old_control.finish()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 113)             assert [signature(c) for c in e.candidates]==[signature(c) for c in old_control.candidates]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 114)             assert [(r['seed_id'],r['status']) for r in audit]==[(r['seed_id'],r['status']) for r in old_control.audit]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 115)             checks.append('NEG-only H1 exact signal/stop/status parity with unchanged original H1 engine')
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 116)         seen={r['seed_id'] for r in audit}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 117)         audit.extend(dict(seed_id=s.seed_id,seed_ts=s.ts.isoformat(),delta=s.delta,event=s.event,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 118)             status='NO_SEED_BAR',source_path=s.source_path,source_line=s.source_line) for s in neg if s.seed_id not in seen)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 119)         cs=[c for c in e.candidates if old.replay_eligible(c,manifest)];all_cs[label]=cs
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 120)         old.rows(folder/'seed_audit.csv',audit);old.rows(folder/'candidate_events.csv',e.events)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 121)         # Preserve complete selection evidence efficiently, without repeating query cache blobs.
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 122)         old.rows(folder/'zone_selection_audit.csv',e.zone_evidence)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 123)         old.dump(folder/'candidates.json',[c.to_dict() for c in e.candidates])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 124)         old.rows(folder/'candidates.csv',[c.to_dict() for c in e.candidates])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 125)         meta=mapping(cs,inventory);meta.to_csv(folder/'structural_level_mapping.csv',index=False)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 126)         print(label,'raw',len(neg),'confirmed',len(e.candidates),'eligible',len(cs),flush=True)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 127)         independent,portfolio,events,pevents,blocked=baseline.replay(cs,bars,execution,configs[tf])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 128)         old.rows(folder/'execution_events.csv',events)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 129)         old.rows(folder/'portfolio_events.csv',(r.to_dict() for r in pevents))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 130)         old.rows(folder/'blocked_opportunities.csv',blocked)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 131)         for mode,rr in [('independent',independent),('portfolio',portfolio)]:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 132)             frame=enrich(pd.DataFrame([r.to_dict() for r in rr]),meta)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 133)             frame.to_csv(folder/(mode+'_trades.csv'),index=False);frames[(label,mode)]=frame
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 134)             total,bb=summaries(label,mode,frame);totals.append(total);breakdowns.extend(bb)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 135)             closed=frame[frame.entry_status=='FILLED']
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 136)             assert ((closed.gross_pnl_usdc-closed.commission_usdc-closed.slippage_usdc-closed.net_pnl_usdc).abs()<1e-8).all()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 137)             assert (closed.side=='SHORT').all() and (closed.delta<0).all()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 138)             assert (pd.to_datetime(closed.entry_fill_ts,utc=True)>pd.to_datetime(closed.confirmation_ts,utc=True)).all()
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 139)             if mode=='portfolio':
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 140)                 trades=closed.sort_values('entry_fill_ts')
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 141)                 assert all(pd.Timestamp(b)>pd.Timestamp(a) for a,b in zip(trades.exit_ts.iloc[:-1],trades.entry_fill_ts.iloc[1:]))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 142)         counts=dict(Counter(r['status'] for r in audit));pc=stats(frames[(label,'portfolio')])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 143)         funnels[label]=dict(raw_NEG_seeds=len(neg),armed=sum(x['event']=='ARMED' for x in e.events),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 144)             no_eligible_zone=counts.get('NO_ELIGIBLE_ZONE',0),duplicate_pending=counts.get('DUPLICATE_PENDING_ZONE',0),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 145)             expired=counts.get('EXPIRED',0),confirmed_all=len(e.candidates),confirmed_decision_eligible=len(cs),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 146)             independent_trades=stats(frames[(label,'independent')])['N'],portfolio_opened=pc['N'],portfolio_blocked=pc['blocked'],
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 147)             statuses=counts)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 148)         assert sum(counts.values())==len(neg)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 149)         for c in cs:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 150)             f=c.shadow_flags;t=c.signal_ts_utc;seedts=datetime.fromisoformat(f['seed_ts'])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 151)             assert c.signal_price<f['price_lower'] and seedts<t<=seedts+old.timedelta(hours=4)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 152)             assert f['price']>f['price_upper'] and datetime.fromisoformat(f['available_at'])<seedts
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 153)             assert f['level_type'] in ['H1_SWING_HIGH','H4_SWING_HIGH']
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 154)             assert f['frozen_zone']['price_lower']==f['lower'] and f['frozen_zone']['price_upper']==f['upper']
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 155)             if tf=='H4':assert t.hour%4==0 and t.minute==0 and t.second==0
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 156)         checks.append(label+': costs, SHORT/NEG, entry causality, horizon, bounds, frozen identity, portfolio concurrency')
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 157)     # Historical NEG contribution, unchanged all-sign ownership/concurrency.
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 158)     raw=json.loads((baseline.PRIOR/'candidates.json').read_text())
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 159)     cs=[old.Candidate(**dict(c,signal_ts_utc=datetime.fromisoformat(c['signal_ts_utc']))) for c in raw]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 160)     cs=[c for c in cs if c.delta<0 and old.replay_eligible(c,manifest)]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 161)     meta=mapping(cs,inventory)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 162)     for mode in ['independent','portfolio']:
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 163)         frame=pd.read_csv(HERE/'baseline_parity'/(mode+'_trades.csv'))
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 164)         frame=frame[frame.candidate_id.isin(meta.candidate_id)]
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 165)         frame=enrich(frame,meta);label='NEG_H1_BASELINE'
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 166)         frame.to_csv(out/(label+'_'+mode+'.csv'),index=False);frames[(label,mode)]=frame
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 167)         total,bb=summaries(label,mode,frame);totals.append(total);breakdowns.extend(bb)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 168)     old.dump(out/'aggregate_metrics.json',totals);old.rows(out/'aggregate_metrics.csv',totals)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 169)     old.rows(out/'breakdown_metrics.csv',breakdowns)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 170)     old.rows(out/'monthly_metrics.csv',[r for r in breakdowns if r['dimension'] in ['month','level_month']])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 171)     old.rows(out/'structural_metrics.csv',[r for r in breakdowns if r['dimension']=='level_type'])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 172)     old.rows(out/'timing_metrics.csv',[r for r in breakdowns if r['dimension']=='timing_bucket'])
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 173)     old.dump(out/'funnel.json',funnels)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 174)     sets={label:{c.shadow_flags['seed_id'] for c in candidates} for label,candidates in all_cs.items()}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 175)     h1=sets['NEG_H1_CONTROL'];h4=sets['NEG_H4_CLOSE_V1']
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 176)     old.dump(out/'opportunity_comparison.json',{'unit':'owning NEG seed; not a time-delay filter',
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 177)         'H1_only':sorted(h1-h4),'H4_only':sorted(h4-h1),'common':sorted(h1&h4),
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 178)         'H1_total':len(h1),'H4_total':len(h4)})
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 179)     baseline.old.verify_inputs(baseline.PRIOR)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 180)     assert code=={**old.code_hashes(),**{str(p.relative_to(old.ROOT)):old.digest(p) for p in sorted(HERE.glob('*.py'))}}
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 181)     old.dump(out/'verification.json',{'passed':True,'checks':checks,'input_hashes_reverified':True,
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 182)         'code_hashes_unchanged_during_run':True,'baseline_parity_passed':True})
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 183)     print(json.dumps(totals,indent=2),flush=True)
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 184) 
+febd2b57 (Mykhailo 2026-10-12 05:16:09 +0200 185) if __name__=='__main__':run()

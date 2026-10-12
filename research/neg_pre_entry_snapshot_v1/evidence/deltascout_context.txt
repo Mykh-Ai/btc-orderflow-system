@@ -1,0 +1,15 @@
+    # ---- context: lazy VWAP + POC ----
+    def _context(self):
+        if not self.vbuf:
+            return None, None
+        sum_pq = 0.0; sum_q = 0.0
+        bins = defaultdict(float)
+        step = POC_STEP_USD
+        for p, q in self.vbuf:
+            sum_pq += p*q; sum_q += q
+            b = math.floor((p + step/2) / step) * step
+            bins[b] += q
+        vwap = int(round(sum_pq/sum_q)) if sum_q > 0 else None
+        poc  = int(round(max(bins.items(), key=lambda x: x[1])[0])) if bins else None
+        return vwap, poc
+

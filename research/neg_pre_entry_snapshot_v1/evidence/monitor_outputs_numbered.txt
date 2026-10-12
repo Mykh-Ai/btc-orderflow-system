@@ -1,0 +1,240 @@
+     1	from __future__ import annotations
+     2	
+     3	from pathlib import Path
+     4	
+     5	import pandas as pd
+     6	
+     7	from market_monitor.events import (
+     8	    EVENT_LOG_COLUMNS,
+     9	    MARKET_MOVE_GROUP_COLUMNS,
+    10	    build_event_log,
+    11	    build_market_move_groups,
+    12	    event_stats,
+    13	)
+    14	from market_monitor.label_taxonomy import (
+    15	    SWEEP_LABEL_SUMMARY_COLUMNS,
+    16	    SWEEP_LABEL_TAXONOMY_COLUMNS,
+    17	    build_sweep_label_frames,
+    18	    label_stats,
+    19	)
+    20	from market_monitor.liquidity_zones import LIQUIDITY_MAP_COLUMNS, build_liquidity_map
+    21	from market_monitor.pattern_structures import (
+    22	    PATTERN_STRUCTURES_COLUMNS,
+    23	    build_pattern_structures,
+    24	)
+    25	from market_monitor.post_sweep_observation import (
+    26	    POST_SWEEP_OBSERVATION_COLUMNS,
+    27	    build_post_sweep_observations,
+    28	    observation_stats,
+    29	)
+    30	from market_monitor.structure import STRUCTURE_LEVEL_COLUMNS, build_structure_levels
+    31	from market_monitor.summary import write_market_summary
+    32	from market_monitor.zone_registry import (
+    33	    REGISTRY_COLUMNS,
+    34	    build_zone_registry,
+    35	    forward_liquidity_from_registry,
+    36	    load_registry,
+    37	    write_registry,
+    38	)
+    39	
+    40	
+    41	MARKET_STATE_TIMELINE_COLUMNS = [
+    42	    "state_id",
+    43	    "start_timestamp",
+    44	    "end_timestamp",
+    45	    "state",
+    46	    "confidence_tier",
+    47	    "evidence_json",
+    48	    "invalidation_reason",
+    49	    "data_quality",
+    50	]
+    51	
+    52	VOLUME_DELTA_STATE_COLUMNS = [
+    53	    "timestamp",
+    54	    "total_qty",
+    55	    "buy_qty",
+    56	    "sell_qty",
+    57	    "delta",
+    58	    "delta_pct",
+    59	    "volume_zscore",
+    60	    "delta_zscore",
+    61	    "oi",
+    62	    "oi_change",
+    63	    "funding_rate",
+    64	    "data_quality",
+    65	]
+    66	
+    67	ACCUMULATION_ZONES_COLUMNS = [
+    68	    "zone_id",
+    69	    "created_at",
+    70	    "start_timestamp",
+    71	    "end_timestamp",
+    72	    "price_lower",
+    73	    "price_upper",
+    74	    "zone_type",
+    75	    "confidence_score",
+    76	    "confidence_tier",
+    77	    "evidence_json",
+    78	    "status",
+    79	    "data_quality",
+    80	]
+    81	
+    82	REQUIRED_CSV_SCHEMAS = {
+    83	    "market_state_timeline.csv": MARKET_STATE_TIMELINE_COLUMNS,
+    84	    "liquidity_map.csv": LIQUIDITY_MAP_COLUMNS,
+    85	    "structure_levels.csv": STRUCTURE_LEVEL_COLUMNS,
+    86	    "volume_delta_state.csv": VOLUME_DELTA_STATE_COLUMNS,
+    87	    "accumulation_zones.csv": ACCUMULATION_ZONES_COLUMNS,
+    88	    "event_log.csv": EVENT_LOG_COLUMNS,
+    89	    "pattern_structures.csv": PATTERN_STRUCTURES_COLUMNS,
+    90	    "market_move_groups.csv": MARKET_MOVE_GROUP_COLUMNS,
+    91	    "post_sweep_observation.csv": POST_SWEEP_OBSERVATION_COLUMNS,
+    92	    "sweep_label_taxonomy.csv": SWEEP_LABEL_TAXONOMY_COLUMNS,
+    93	    "sweep_label_summary.csv": SWEEP_LABEL_SUMMARY_COLUMNS,
+    94	    "liquidity_zone_registry.csv": REGISTRY_COLUMNS,
+    95	}
+    96	
+    97	
+    98	def write_outputs(
+    99	    feed: pd.DataFrame,
+   100	    output_dir: Path,
+   101	    *,
+   102	    run_timestamp: str,
+   103	    input_files: list[str],
+   104	    registry_in_path: Path | None = None,
+   105	    registry_out_path: Path | None = None,
+   106	) -> dict[str, pd.DataFrame]:
+   107	    output_dir.mkdir(parents=True, exist_ok=True)
+   108	    latest_close = None if feed.empty else float(feed.iloc[-1]["ClosePrice"])
+   109	    registry_out_path = registry_out_path or output_dir / "liquidity_zone_registry.csv"
+   110	
+   111	    structure_levels = build_structure_levels(feed)
+   112	    liquidity_map = build_liquidity_map(structure_levels, latest_close)
+   113	    registry_in = load_registry(registry_in_path)
+   114	    volume_delta_state = build_volume_delta_state(feed)
+   115	    liquidity_zone_registry, registry_stats = build_zone_registry(
+   116	        liquidity_map=liquidity_map,
+   117	        feed=feed,
+   118	        registry_in=registry_in,
+   119	    )
+   120	    pattern_structures = build_pattern_structures(
+   121	        structure_levels=structure_levels,
+   122	        liquidity_zone_registry=liquidity_zone_registry,
+   123	    )
+   124	    forward_liquidity_map = forward_liquidity_from_registry(liquidity_zone_registry, latest_close)
+   125	    event_log = build_event_log(
+   126	        registry=liquidity_zone_registry,
+   127	        feed=feed,
+   128	        volume_delta_state=volume_delta_state,
+   129	        previous_registry=registry_in,
+   130	    )
+   131	    market_move_groups = build_market_move_groups(event_log)
+   132	    post_sweep_observation = build_post_sweep_observations(
+   133	        event_log=event_log,
+   134	        feed=feed,
+   135	        volume_delta_state=volume_delta_state,
+   136	    )
+   137	    sweep_label_taxonomy, sweep_label_summary = build_sweep_label_frames(
+   138	        observations=post_sweep_observation,
+   139	        market_move_groups=market_move_groups,
+   140	    )
+   141	    market_state_timeline = build_market_state_timeline(feed)
+   142	    accumulation_zones = pd.DataFrame(columns=ACCUMULATION_ZONES_COLUMNS)
+   143	
+   144	    frames = {
+   145	        "market_state_timeline.csv": market_state_timeline,
+   146	        "liquidity_map.csv": forward_liquidity_map,
+   147	        "structure_levels.csv": structure_levels,
+   148	        "volume_delta_state.csv": volume_delta_state,
+   149	        "accumulation_zones.csv": accumulation_zones,
+   150	        "event_log.csv": event_log,
+   151	        "pattern_structures.csv": pattern_structures,
+   152	        "market_move_groups.csv": market_move_groups,
+   153	        "post_sweep_observation.csv": post_sweep_observation,
+   154	        "sweep_label_taxonomy.csv": sweep_label_taxonomy,
+   155	        "sweep_label_summary.csv": sweep_label_summary,
+   156	        "liquidity_zone_registry.csv": liquidity_zone_registry,
+   157	    }
+   158	    for filename, columns in REQUIRED_CSV_SCHEMAS.items():
+   159	        frame = frames[filename].reindex(columns=columns)
+   160	        output_path = registry_out_path if filename == "liquidity_zone_registry.csv" else output_dir / filename
+   161	        frame.to_csv(output_path, index=False)
+   162	        frames[filename] = frame
+   163	    if registry_out_path != output_dir / "liquidity_zone_registry.csv":
+   164	        write_registry(liquidity_zone_registry, output_dir / "liquidity_zone_registry.csv")
+   165	
+   166	    write_market_summary(
+   167	        output_dir / "market_summary.md",
+   168	        feed=feed,
+   169	        liquidity_map=forward_liquidity_map,
+   170	        structure_levels=structure_levels,
+   171	        event_log=event_log,
+   172	        run_timestamp=run_timestamp,
+   173	        input_files=input_files,
+   174	        output_dir=output_dir,
+   175	        registry_input=registry_in_path,
+   176	        registry_output=registry_out_path,
+   177	        registry_stats=registry_stats,
+   178	        event_stats=event_stats(event_log),
+   179	        observation_stats=observation_stats(post_sweep_observation),
+   180	        label_stats=label_stats(sweep_label_taxonomy),
+   181	    )
+   182	
+   183	    return frames
+   184	
+   185	
+   186	def build_volume_delta_state(feed: pd.DataFrame) -> pd.DataFrame:
+   187	    if feed.empty:
+   188	        return pd.DataFrame(columns=VOLUME_DELTA_STATE_COLUMNS)
+   189	
+   190	    frame = feed.sort_values("Timestamp", kind="mergesort").copy()
+   191	    delta = frame["BuyQty"] - frame["SellQty"]
+   192	    total_qty = frame["TotalQty"]
+   193	    volume_zscore = _rolling_zscore(total_qty)
+   194	    delta_zscore = _rolling_zscore(delta)
+   195	    result = pd.DataFrame(
+   196	        {
+   197	            "timestamp": frame["Timestamp"].map(_format_ts),
+   198	            "total_qty": total_qty.astype(float),
+   199	            "buy_qty": frame["BuyQty"].astype(float),
+   200	            "sell_qty": frame["SellQty"].astype(float),
+   201	            "delta": delta.astype(float),
+   202	            "delta_pct": delta.where(total_qty > 0, 0).div(total_qty.where(total_qty > 0, 1)),
+   203	            "volume_zscore": volume_zscore,
+   204	            "delta_zscore": delta_zscore,
+   205	            "oi": frame["OpenInterest"].astype(float),
+   206	            "oi_change": frame["OpenInterest"].diff().fillna(0).astype(float),
+   207	            "funding_rate": frame["FundingRate"].astype(float),
+   208	            "data_quality": frame["DataQuality"],
+   209	        }
+   210	    )
+   211	    return result[VOLUME_DELTA_STATE_COLUMNS]
+   212	
+   213	
+   214	def build_market_state_timeline(feed: pd.DataFrame) -> pd.DataFrame:
+   215	    if feed.empty:
+   216	        return pd.DataFrame(columns=MARKET_STATE_TIMELINE_COLUMNS)
+   217	
+   218	    quality = "RAW" if set(feed["DataQuality"]) == {"RAW"} else "RECOVERED_DEGRADED"
+   219	    row = {
+   220	        "state_id": "state_000001",
+   221	        "start_timestamp": _format_ts(feed["Timestamp"].min()),
+   222	        "end_timestamp": _format_ts(feed["Timestamp"].max()),
+   223	        "state": "NO_TRADE",
+   224	        "confidence_tier": "LOW",
+   225	        "evidence_json": '{"reason":"skeleton_no_classifier"}',
+   226	        "invalidation_reason": "",
+   227	        "data_quality": quality,
+   228	    }
+   229	    return pd.DataFrame([row], columns=MARKET_STATE_TIMELINE_COLUMNS)
+   230	
+   231	
+   232	def _rolling_zscore(series: pd.Series, window: int = 20) -> pd.Series:
+   233	    rolling_mean = series.rolling(window=window, min_periods=window).mean()
+   234	    rolling_std = series.rolling(window=window, min_periods=window).std(ddof=0)
+   235	    zscore = (series - rolling_mean) / rolling_std.mask(rolling_std == 0)
+   236	    return zscore.fillna(0).astype(float)
+   237	
+   238	
+   239	def _format_ts(value) -> str:
+   240	    return pd.Timestamp(value).tz_convert("UTC").isoformat().replace("+00:00", "Z")

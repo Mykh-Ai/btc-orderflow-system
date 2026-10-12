@@ -1,0 +1,26 @@
+[
+  {
+    "original_path": "evidence/replay_history_control.txt",
+    "stored_path": "evidence/replay_history_control.txt.gz",
+    "original_bytes": 2157025,
+    "stored_bytes": 276021,
+    "original_sha256": "4d65d14a4253b95099a5f982c2ab1f02733e68d7a174d9b19ba3df2d55310fed",
+    "stored_sha256": "3062c8cef3024edfaba7b85c35ca267ecec85431632e420587d025b3b5c23411"
+  },
+  {
+    "original_path": "evidence/replay_history_signal.txt",
+    "stored_path": "evidence/replay_history_signal.txt.gz",
+    "original_bytes": 8538820,
+    "stored_bytes": 1365384,
+    "original_sha256": "993c23b9e204c9d676db9e2f880d597f1df77e3ba350619abbf2fd76bb16179f",
+    "stored_sha256": "58c06e355242a5893100f8b243ca13020f91ad5cc6f73afa52a96341d78bd7b0"
+  },
+  {
+    "original_path": "evidence/replay_search.txt",
+    "stored_path": "evidence/replay_search.txt.gz",
+    "original_bytes": 3327657,
+    "stored_bytes": 505211,
+    "original_sha256": "7e6f2a16d22df0e3bbcb76ac22980c19443838f1726a258f9903c59d8d665810",
+    "stored_sha256": "47df8da521abad6376947cf4a2ce7558b9a596ade8139cb832eb54bb5463d75a"
+  }
+]

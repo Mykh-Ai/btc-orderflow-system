@@ -1,0 +1,71 @@
+{
+  "passed": true,
+  "candidates": 262,
+  "wins": 105,
+  "losses": 157,
+  "metrics": {
+    "candidates": 262,
+    "filled": 262,
+    "closed": 262,
+    "unresolved": 0,
+    "net_usdc": -1152.2953946533698,
+    "gross_usdc": 155.00423700000186,
+    "commission_usdc": 1169.319473211792,
+    "slippage_usdc": 137.98015844158,
+    "profit_factor": 0.7192291465266887,
+    "net_wins": 105,
+    "tp1_hits": 120,
+    "max_closed_equity_drawdown_usdc": 1507.5705407828134,
+    "unresolved_realized_partial_net": 0,
+    "status_counts": {
+      "FILLED": 262
+    },
+    "lifecycle_counts": {
+      "TP1_TP2_TRAILING_STOP": 74,
+      "PLAIN_SL": 142,
+      "TP1_SL": 46
+    },
+    "blocked_reasons": {},
+    "monthly_by_signal_month": {
+      "2026-03": {
+        "closed": 20,
+        "net_usdc": 233.99943107360676
+      },
+      "2026-04": {
+        "closed": 60,
+        "net_usdc": -1157.9823970185096
+      },
+      "2026-05": {
+        "closed": 49,
+        "net_usdc": 211.45995628907892
+      },
+      "2026-06": {
+        "closed": 31,
+        "net_usdc": 225.2159681072544
+      },
+      "2026-07": {
+        "closed": 75,
+        "net_usdc": -474.3112622330904
+      },
+      "2026-08": {
+        "closed": 27,
+        "net_usdc": -190.67709087171008
+      }
+    }
+  },
+  "candidate_ids_exact": true,
+  "signal_stop_geometry_exact": true,
+  "per_trade_financial_fields_exact": [
+    "gross_pnl_usdc",
+    "commission_usdc",
+    "slippage_usdc",
+    "net_pnl_usdc",
+    "position_r",
+    "planned_entry_price_usdt",
+    "initial_stop_price_usdt",
+    "tp1_price_usdt",
+    "tp2_price_usdt"
+  ],
+  "per_trade_tolerance": 1e-09,
+  "source_sha256": "cb565ce43472c6b3d603e84bdf54a5b40509b2ca52742a5ea0dbb1eac6aa1daf"
+}

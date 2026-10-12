@@ -1,0 +1,660 @@
+     1	from __future__ import annotations
+     2	
+     3	import hashlib
+     4	from bisect import bisect_right
+     5	from dataclasses import dataclass, replace
+     6	from datetime import datetime
+     7	
+     8	from .contracts import (
+     9	    BacktestContractError,
+    10	    Candidate,
+    11	    FeedBar,
+    12	    InitialStopSelectionError,
+    13	    ReplayConfig,
+    14	    ReplayEvent,
+    15	    TradeLeg,
+    16	    TradeResult,
+    17	)
+    18	from .cost_models import calculate_costs, gross_for_leg
+    19	from .execution_policy import (
+    20	    build_execution_plan,
+    21	    ceil_to_step,
+    22	    floor_to_step,
+    23	    notional_to_qty,
+    24	    split_quantity,
+    25	)
+    26	from .fill_models import find_entry_fill
+    27	from .same_bar_policies import level_touched, stop_wins
+    28	
+    29	
+    30	def _trade_id(candidate: Candidate, config: ReplayConfig, mode: str) -> str:
+    31	    payload = f"{config.experiment_id}|{candidate.candidate_id}|{mode}|{config.same_bar_policy_id}"
+    32	    return "TR_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+    33	
+    34	
+    35	def _session_label(ts: datetime) -> str:
+    36	    if ts.hour < 8:
+    37	        return "ASIA_UTC"
+    38	    if ts.hour < 16:
+    39	        return "EUROPE_UTC"
+    40	    return "US_UTC"
+    41	
+    42	
+    43	def _utility(lifecycle: str) -> str:
+    44	    return {
+    45	        "PLAIN_SL": "LOSS_TARGET",
+    46	        "TP1_SL": "SCRATCH_NEUTRAL",
+    47	        "TP1_TP2_TRAILING_STOP": "PROTECTED_WINNER",
+    48	        "TP1_TP2_OPEN_TRAIL": "UNRESOLVED",
+    49	        "UNRESOLVED_END_OF_DATA": "UNRESOLVED",
+    50	        "NO_FILL": "NO_TRADE",
+    51	        "INVALID_EXECUTION_PLAN": "NO_TRADE",
+    52	    }.get(lifecycle, "NO_TRADE")
+    53	
+    54	
+    55	@dataclass(frozen=True)
+    56	class _TrailingStopQuote:
+    57	    stop_usdt: float
+    58	    stop_execution: float
+    59	    conversion_ratio: float
+    60	    conversion_reference_ts: datetime
+    61	    reference_close_usdt: float
+    62	    execution_close: float
+    63	    swing_ts: datetime
+    64	    swing_price_usdt: float
+    65	
+    66	
+    67	def _last_fractal_bar(bars: list[FeedBar], lr: int, kind: str) -> FeedBar | None:
+    68	    if len(bars) < 2 * lr + 1:
+    69	        return None
+    70	    for index in range(len(bars) - lr - 1, lr - 1, -1):
+    71	        neighborhood = bars[index - lr:index + lr + 1]
+    72	        if any(bar.is_synthetic for bar in neighborhood):
+    73	            continue
+    74	        value = bars[index].low if kind == "low" else bars[index].high
+    75	        left = [bar.low if kind == "low" else bar.high for bar in bars[index - lr:index]]
+    76	        right = [bar.low if kind == "low" else bar.high for bar in bars[index + 1:index + 1 + lr]]
+    77	        if kind == "low" and all(value < item for item in left) and all(value < item for item in right):
+    78	            return bars[index]
+    79	        if kind == "high" and all(value > item for item in left) and all(value > item for item in right):
+    80	            return bars[index]
+    81	    return None
+    82	
+    83	
+    84	def _reference_context(
+    85	    execution_bar: FeedBar,
+    86	    reference_bars: list[FeedBar],
+    87	    reference_timestamps: list,
+    88	) -> tuple[int, FeedBar] | None:
+    89	    index = bisect_right(reference_timestamps, execution_bar.ts) - 1
+    90	    if index < 0 or reference_bars[index].ts != execution_bar.ts:
+    91	        return None
+    92	    reference_bar = reference_bars[index]
+    93	    if reference_bar.is_synthetic or reference_bar.close <= 0 or execution_bar.close <= 0:
+    94	        return None
+    95	    return index, reference_bar
+    96	
+    97	
+    98	def _desired_trail_quote(
+    99	    side: str,
+   100	    execution_bar: FeedBar,
+   101	    reference_bars: list[FeedBar],
+   102	    reference_timestamps: list,
+   103	    active_stop: float,
+   104	    config: ReplayConfig,
+   105	    *,
+   106	    require_step_improvement: bool,
+   107	) -> _TrailingStopQuote | None:
+   108	    context = _reference_context(execution_bar, reference_bars, reference_timestamps)
+   109	    if context is None:
+   110	        return None
+   111	    reference_index, reference_bar = context
+   112	    first = max(0, reference_index + 1 - config.trail_swing_lookback)
+   113	    swing_bar = _last_fractal_bar(
+   114	        reference_bars[first:reference_index + 1],
+   115	        config.trail_swing_lr,
+   116	        "low" if side == "LONG" else "high",
+   117	    )
+   118	    if swing_bar is None:
+   119	        return None
+   120	
+   121	    if side == "LONG":
+   122	        swing_price = swing_bar.low
+   123	        stop_usdt = swing_price - config.trail_swing_buffer_usd
+   124	    elif side == "SHORT":
+   125	        swing_price = swing_bar.high
+   126	        stop_usdt = swing_price + config.trail_swing_buffer_usd
+   127	    else:
+   128	        raise BacktestContractError(f"invalid side={side}")
+   129	
+   130	    conversion_ratio = (
+   131	        1.0
+   132	        if config.price_contour == "btcusdt_signal"
+   133	        else execution_bar.close / reference_bar.close
+   134	    )
+   135	    if not config.usdt_usdc_ratio_min <= conversion_ratio <= config.usdt_usdc_ratio_max:
+   136	        return None
+   137	
+   138	    raw_stop = stop_usdt * conversion_ratio
+   139	    if side == "LONG":
+   140	        stop_execution = floor_to_step(raw_stop, config.tick_size)
+   141	        if stop_execution > execution_bar.close - config.tick_size:
+   142	            return None
+   143	        if require_step_improvement and stop_execution < active_stop + config.trail_step_usd:
+   144	            return None
+   145	    else:
+   146	        stop_execution = ceil_to_step(raw_stop, config.tick_size)
+   147	        if stop_execution < execution_bar.close + config.tick_size:
+   148	            return None
+   149	        if require_step_improvement and stop_execution > active_stop - config.trail_step_usd:
+   150	            return None
+   151	
+   152	    return _TrailingStopQuote(
+   153	        stop_usdt=stop_usdt,
+   154	        stop_execution=stop_execution,
+   155	        conversion_ratio=conversion_ratio,
+   156	        conversion_reference_ts=execution_bar.ts,
+   157	        reference_close_usdt=reference_bar.close,
+   158	        execution_close=execution_bar.close,
+   159	        swing_ts=swing_bar.ts,
+   160	        swing_price_usdt=swing_price,
+   161	    )
+   162	
+   163	
+   164	def _trail_event_payload(quote: _TrailingStopQuote) -> dict[str, object]:
+   165	    return {
+   166	        "stop": quote.stop_execution,
+   167	        "stop_usdt": quote.stop_usdt,
+   168	        "conversion_ratio": quote.conversion_ratio,
+   169	        "conversion_reference_ts": quote.conversion_reference_ts.isoformat(),
+   170	        "reference_close_usdt": quote.reference_close_usdt,
+   171	        "execution_close": quote.execution_close,
+   172	        "swing_ts": quote.swing_ts.isoformat(),
+   173	        "swing_price_usdt": quote.swing_price_usdt,
+   174	    }
+   175	
+   176	
+   177	def _quality(bars: list[FeedBar]) -> tuple[str, bool]:
+   178	    if not bars:
+   179	        return "NO_FEED_COVERAGE", False
+   180	    classes = {bar.feed_quality_class for bar in bars}
+   181	    overlap = any(bar.recovery_overlap for bar in bars)
+   182	    if any(bar.is_synthetic for bar in bars):
+   183	        return "DEGRADED_SYNTHETIC", overlap
+   184	    if overlap:
+   185	        return "RECOVERED", True
+   186	    if len(classes) == 1:
+   187	        return next(iter(classes)), False
+   188	    return "MIXED", overlap
+   189	
+   190	
+   191	def _event(events: list[ReplayEvent], ts: datetime, kind: str, result: TradeResult, **payload) -> None:
+   192	    events.append(ReplayEvent(ts, kind, result.trade_id, result.candidate_id, result.replay_mode, payload))
+   193	
+   194	
+   195	def _add_leg(result: TradeResult, leg_type: str, qty: float, exit_price: float, ts: datetime) -> None:
+   196	    if qty <= 0 or result.entry_fill_price is None:
+   197	        return
+   198	    gross = gross_for_leg(result.side, qty, result.entry_fill_price, exit_price)
+   199	    result.legs.append(
+   200	        TradeLeg(
+   201	            trade_id=result.trade_id,
+   202	            leg_id=f"{result.trade_id}_L{len(result.legs) + 1}",
+   203	            leg_type=leg_type,
+   204	            qty=qty,
+   205	            entry_price=result.entry_fill_price,
+   206	            exit_price=exit_price,
+   207	            exit_ts=ts,
+   208	            gross_pnl_usdc=gross,
+   209	            turnover_usdc=qty * (result.entry_fill_price + exit_price),
+   210	        )
+   211	    )
+   212	
+   213	
+   214	def _finalize_economics(result: TradeResult, config: ReplayConfig) -> None:
+   215	    if result.entry_fill_price is None:
+   216	        result.gross_pnl_usdc = 0.0
+   217	        result.commission_usdc = 0.0
+   218	        result.slippage_usdc = 0.0
+   219	        result.net_pnl_usdc = 0.0
+   220	        return
+   221	    result.gross_pnl_usdc = sum(leg.gross_pnl_usdc for leg in result.legs)
+   222	    _, commission, slippage = calculate_costs(
+   223	        qty_total=result.qty_total,
+   224	        entry_price=result.entry_fill_price,
+   225	        legs=result.legs,
+   226	        commission_rate=config.commission_rate,
+   227	        entry_slippage_bps=config.entry_slippage_bps,
+   228	        exit_slippage_bps=config.exit_slippage_bps,
+   229	        stop_slippage_bps=config.stop_slippage_bps,
+   230	    )
+   231	    result.commission_usdc = commission
+   232	    result.slippage_usdc = slippage
+   233	    result.net_pnl_usdc = result.gross_pnl_usdc - commission - slippage
+   234	    risk_capital = result.qty_total * float(result.initial_risk_usd or 0.0)
+   235	    result.position_r = result.gross_pnl_usdc / risk_capital if risk_capital > 0 else None
+   236	
+   237	
+   238	def replay_candidate(
+   239	    candidate: Candidate,
+   240	    bars: list[FeedBar],
+   241	    config: ReplayConfig,
+   242	    *,
+   243	    reference_bars: list[FeedBar] | None = None,
+   244	    replay_mode: str = "independent_opportunity",
+   245	    _timestamps: list | None = None,
+   246	    _reference_timestamps: list | None = None,
+   247	) -> tuple[TradeResult, list[ReplayEvent]]:
+   248	    reference_bars = reference_bars or bars
+   249	    _timestamps = _timestamps or [bar.ts for bar in bars]
+   250	    _reference_timestamps = _reference_timestamps or [bar.ts for bar in reference_bars]
+   251	    result = TradeResult(
+   252	        trade_id=_trade_id(candidate, config, replay_mode),
+   253	        candidate_id=candidate.candidate_id,
+   254	        experiment_id=config.experiment_id,
+   255	        replay_mode=replay_mode,
+   256	        candidate_group=candidate.candidate_group,
+   257	        side=candidate.side,
+   258	        signal_ts_utc=candidate.signal_ts_utc,
+   259	        entry_status="PENDING",
+   260	        session_label=_session_label(candidate.signal_ts_utc),
+   261	        weak_peak_le_50=candidate.shadow_flags.get("weak_peak_le_50"),
+   262	        oi_down_60_and_directional_delta_pct_240_lt_0_06=candidate.shadow_flags.get("oi_down_60_and_directional_delta_pct_240_lt_0_06"),
+   263	        loss_avoidance_conservative_union=candidate.shadow_flags.get("loss_avoidance_conservative_union"),
+   264	        fixed_notional_usdc=config.fixed_notional_usdc,
+   265	        commission_rate=config.commission_rate,
+   266	        commission_calibration_source=config.commission_calibration_source,
+   267	        commission_calibration_count=config.commission_calibration_count,
+   268	        cost_model_id=config.cost_model_id,
+   269	        slippage_model_id=config.slippage_model_id,
+   270	        same_bar_policy_id=config.same_bar_policy_id,
+   271	        source_path=candidate.source_path,
+   272	    )
+   273	    events: list[ReplayEvent] = []
+   274	    _event(events, candidate.signal_ts_utc, "CANDIDATE_SEEN", result)
+   275	    try:
+   276	        plan = build_execution_plan(
+   277	            candidate,
+   278	            reference_bars,
+   279	            config,
+   280	            execution_bars=bars,
+   281	            reference_timestamps=_reference_timestamps,
+   282	            execution_timestamps=_timestamps,
+   283	        )
+   284	    except InitialStopSelectionError as exc:
+   285	        result.entry_status = "BLOCKED"
+   286	        result.lifecycle_class = "NO_TRADE"
+   287	        result.utility_bucket = _utility(result.lifecycle_class)
+   288	        result.blocked_reason = exc.reason
+   289	        _event(events, candidate.signal_ts_utc, "CANDIDATE_BLOCKED", result, reason=str(exc))
+   290	        _finalize_economics(result, config)
+   291	        return result, events
+   292	    except BacktestContractError as exc:
+   293	        result.entry_status = "INVALID"
+   294	        result.lifecycle_class = "INVALID_EXECUTION_PLAN"
+   295	        result.utility_bucket = _utility(result.lifecycle_class)
+   296	        result.blocked_reason = "INVALID_CANDIDATE"
+   297	        _event(events, candidate.signal_ts_utc, "CANDIDATE_BLOCKED", result, reason=str(exc))
+   298	        _finalize_economics(result, config)
+   299	        return result, events
+   300	
+   301	    result.planned_entry_price = plan.planned_entry_price
+   302	    result.signal_reference_price_usdt = plan.signal_reference_price_usdt
+   303	    result.reference_feed_close_usdt = plan.reference_feed_close_usdt
+   304	    result.execution_feed_close_usdc = plan.execution_feed_close_usdc
+   305	    result.conversion_ratio = plan.conversion_ratio
+   306	    result.conversion_reference_ts = plan.conversion_reference_ts
+   307	    result.planned_entry_price_usdt = plan.planned_entry_price_usdt
+   308	    result.initial_stop_price_usdt = plan.initial_stop_price_usdt
+   309	    result.tp1_price_usdt = plan.tp1_price_usdt
+   310	    result.tp2_price_usdt = plan.tp2_price_usdt
+   311	    result.initial_swing_ts = plan.initial_swing_ts
+   312	    result.initial_swing_price_usdt = plan.initial_swing_price_usdt
+   313	    result.initial_swing_volume = plan.initial_swing_volume
+   314	    result.initial_swing_eligible_count = plan.initial_swing_eligible_count
+   315	    result.initial_swing_confirmed_count = plan.initial_swing_confirmed_count
+   316	    result.initial_stop_price = plan.initial_stop_price
+   317	    result.initial_risk_usd = plan.initial_risk_usd
+   318	    result.tp1_price = plan.tp1_price
+   319	    result.tp2_price = plan.tp2_price
+   320	    _event(events, candidate.signal_ts_utc, "ENTRY_PENDING", result, planned_entry=plan.planned_entry_price)
+   321	    entry_decision = find_entry_fill(
+   322	        bars,
+   323	        signal_ts=candidate.signal_ts_utc,
+   324	        plan=plan,
+   325	        config=config,
+   326	        timestamps=_timestamps,
+   327	    )
+   328	    entry_index = entry_decision.entry_index
+   329	    entry_price = entry_decision.entry_price
+   330	    expiry_ts = entry_decision.expiry_ts
+   331	    result.entry_expiry_ts = expiry_ts
+   332	    result.entry_fill_method = entry_decision.fill_method
+   333	    result.planb_decision = entry_decision.decision
+   334	    result.planb_abort_reason = entry_decision.abort_reason
+   335	    result.planb_exec_price_proxy = entry_decision.planb_exec_price_proxy
+   336	    result.planb_deviation_usd = entry_decision.planb_deviation_usd
+   337	    result.planb_max_deviation_usd = entry_decision.planb_max_deviation_usd
+   338	    result.planb_risk_usd = entry_decision.planb_risk_usd
+   339	    if entry_decision.quality_interrupted:
+   340	        result.entry_status = "NO_FEED_COVERAGE"
+   341	        result.lifecycle_class = "NO_FILL"
+   342	        result.utility_bucket = _utility(result.lifecycle_class)
+   343	        result.blocked_reason = "NO_FEED_COVERAGE"
+   344	        result.feed_quality_class = "DEGRADED_SYNTHETIC"
+   345	        result.data_quality_interruption_ts = expiry_ts
+   346	        _event(events, expiry_ts or candidate.signal_ts_utc, "ENTRY_EXPIRED", result, reason="untrusted synthetic entry window")
+   347	        _finalize_economics(result, config)
+   348	        return result, events
+   349	    if entry_decision.abort_reason:
+   350	        result.entry_status = "ABORTED"
+   351	        result.lifecycle_class = "NO_FILL"
+   352	        result.utility_bucket = _utility(result.lifecycle_class)
+   353	        result.blocked_reason = entry_decision.abort_reason
+   354	        _event(
+   355	            events,
+   356	            expiry_ts or candidate.signal_ts_utc,
+   357	            "ENTRY_PLANB_ABORTED",
+   358	            result,
+   359	            reason=entry_decision.abort_reason,
+   360	            exec_price_proxy=entry_decision.planb_exec_price_proxy,
+   361	            deviation_usd=entry_decision.planb_deviation_usd,
+   362	            max_deviation_usd=entry_decision.planb_max_deviation_usd,
+   363	        )
+   364	        _finalize_economics(result, config)
+   365	        return result, events
+   366	    if entry_index is None or entry_price is None:
+   367	        result.entry_status = "NO_FILL" if expiry_ts is not None else "NO_FEED_COVERAGE"
+   368	        result.lifecycle_class = "NO_FILL"
+   369	        result.utility_bucket = _utility(result.lifecycle_class)
+   370	        result.blocked_reason = "NO_FEED_COVERAGE" if expiry_ts is None else ""
+   371	        _event(events, expiry_ts or candidate.signal_ts_utc, "ENTRY_EXPIRED", result)
+   372	        _finalize_economics(result, config)
+   373	        return result, events
+   374	
+   375	    protective_stop = (
+   376	        plan.initial_stop_price < entry_price if candidate.side == "LONG"
+   377	        else plan.initial_stop_price > entry_price
+   378	    )
+   379	    if not protective_stop:
+   380	        # A fill has occurred in the model. Treating this as NO_TRADE would hide
+   381	        # exposure and free a portfolio slot; filling the wrong-side SL would
+   382	        # manufacture profit. Fail the run until data/execution is reconciled.
+   383	        raise BacktestContractError(
+   384	            f"INITIAL_STOP_WRONG_SIDE_AFTER_FILL candidate={candidate.candidate_id} "
+   385	            f"side={candidate.side} fill_ts={bars[entry_index].ts.isoformat()} "
+   386	            f"fill={entry_price} stop={plan.initial_stop_price} "
+   387	            f"planned_entry={plan.planned_entry_price} ratio={plan.conversion_ratio}"
+   388	        )
+   389	
+   390	    result.entry_status = "FILLED"
+   391	    result.entry_fill_ts = bars[entry_index].ts
+   392	    result.entry_fill_price = entry_price
+   393	    result.qty_total = notional_to_qty(entry_price, config.fixed_notional_usdc, config)
+   394	    if result.qty_total < config.min_qty or result.qty_total * entry_price < config.min_notional:
+   395	        result.entry_status = "INVALID"
+   396	        result.lifecycle_class = "INVALID_EXECUTION_PLAN"
+   397	        result.utility_bucket = _utility(result.lifecycle_class)
+   398	        result.blocked_reason = "INVALID_CANDIDATE"
+   399	        _event(events, bars[entry_index].ts, "CANDIDATE_BLOCKED", result, reason="exchange minimum")
+   400	        _finalize_economics(result, config)
+   401	        return result, events
+   402	    try:
+   403	        result.qty1, result.qty2, result.qty3 = split_quantity(result.qty_total, config)
+   404	    except BacktestContractError as exc:
+   405	        result.entry_status = "INVALID"
+   406	        result.lifecycle_class = "INVALID_EXECUTION_PLAN"
+   407	        result.utility_bucket = _utility(result.lifecycle_class)
+   408	        result.blocked_reason = "INVALID_CANDIDATE"
+   409	        _event(events, bars[entry_index].ts, "CANDIDATE_BLOCKED", result, reason=str(exc))
+   410	        _finalize_economics(result, config)
+   411	        return result, events
+   412	    _event(
+   413	        events,
+   414	        bars[entry_index].ts,
+   415	        "ENTRY_FILLED",
+   416	        result,
+   417	        fill_price=entry_price,
+   418	        qty=result.qty_total,
+   419	        fill_method=result.entry_fill_method,
+   420	    )
+   421	    _event(events, bars[entry_index].ts, "INITIAL_SL_SET", result, stop=result.initial_stop_price)
+   422	
+   423	    active_stop = float(result.initial_stop_price)
+   424	    pending_trail: _TrailingStopQuote | None = None
+   425	    trail_ref_price_usdt: float | None = None
+   426	    trail_wait_confirm = False
+   427	    state = "OPEN"
+   428	    used_bars: list[FeedBar] = []
+   429	    remaining = result.qty_total
+   430	    data_quality_interrupted = False
+   431	
+   432	    for index in range(entry_index, len(bars)):
+   433	        bar = bars[index]
+   434	        used_bars.append(bar)
+   435	        if pending_trail is not None:
+   436	            active_stop = pending_trail.stop_execution
+   437	            result.final_stop_price = active_stop
+   438	            if state == "TRAILING":
+   439	                result.trail_update_count += 1
+   440	                _event(
+   441	                    events,
+   442	                    bar.ts,
+   443	                    "TRAIL_UPDATED",
+   444	                    result,
+   445	                    **_trail_event_payload(pending_trail),
+   446	                )
+   447	            pending_trail = None
+   448	        if bar.is_synthetic:
+   449	            data_quality_interrupted = True
+   450	            result.data_quality_interruption_ts = bar.ts
+   451	            break
+   452	        stop_hit = level_touched(result.side, bar, active_stop, "stop")
+   453	        target_level = result.tp1_price if state == "OPEN" else result.tp2_price if state == "TP1_DONE" else None
+   454	        target_hit = target_level is not None and level_touched(result.side, bar, float(target_level), "target")
+   455	        second_target_hit = state == "OPEN" and level_touched(result.side, bar, float(result.tp2_price), "target")
+   456	        collision = bool(stop_hit and target_hit)
+   457	        if collision:
+   458	            result.same_bar_ambiguous = True
+   459	            result.same_bar_collision_count += 1
+   460	
+   461	        if stop_hit and (not target_hit or stop_wins(config.same_bar_policy_id)):
+   462	            leg_type = "INITIAL_STOP" if state == "OPEN" else "BREAKEVEN_STOP" if state == "TP1_DONE" else "TRAILING_STOP"
+   463	            _add_leg(result, leg_type, remaining, active_stop, bar.ts)
+   464	            _event(events, bar.ts, "STOP_FILLED", result, stop=active_stop, state=state)
+   465	            result.exit_ts = bar.ts
+   466	            result.final_stop_price = active_stop
+   467	            result.lifecycle_class = "PLAIN_SL" if state == "OPEN" else "TP1_SL" if state == "TP1_DONE" else "TP1_TP2_TRAILING_STOP"
+   468	            remaining = 0.0
+   469	            break
+   470	
+   471	        if state == "OPEN" and target_hit:
+   472	            _add_leg(result, "TP1", result.qty1, float(result.tp1_price), bar.ts)
+   473	            remaining -= result.qty1
+   474	            result.tp1_fill_ts = bar.ts
+   475	            result.breakeven_stop_price = result.entry_fill_price
+   476	            active_stop = float(result.entry_fill_price)
+   477	            result.final_stop_price = active_stop
+   478	            state = "TP1_DONE"
+   479	            _event(events, bar.ts, "TP1_FILLED", result, price=result.tp1_price)
+   480	            _event(events, bar.ts, "SL_MOVED_TO_BE", result, stop=active_stop)
+   481	            breakeven_hit = level_touched(result.side, bar, active_stop, "stop")
+   482	            if breakeven_hit and stop_wins(config.same_bar_policy_id):
+   483	                result.same_bar_ambiguous = True
+   484	                result.same_bar_collision_count += 1
+   485	                _add_leg(result, "BREAKEVEN_STOP", remaining, active_stop, bar.ts)
+   486	                remaining = 0.0
+   487	                result.exit_ts = bar.ts
+   488	                result.lifecycle_class = "TP1_SL"
+   489	                _event(events, bar.ts, "STOP_FILLED", result, stop=active_stop, state=state)
+   490	                break
+   491	            if second_target_hit:
+   492	                _add_leg(result, "TP2", result.qty2, float(result.tp2_price), bar.ts)
+   493	                remaining -= result.qty2
+   494	                result.tp2_fill_ts = bar.ts
+   495	                result.trail_activation_ts = bar.ts
+   496	                state = "TRAILING"
+   497	                _event(events, bar.ts, "TP2_FILLED", result, price=result.tp2_price)
+   498	                pending_trail = _desired_trail_quote(
+   499	                    result.side,
+   500	                    bar,
+   501	                    reference_bars,
+   502	                    _reference_timestamps,
+   503	                    active_stop,
+   504	                    config,
+   505	                    require_step_improvement=False,
+   506	                )
+   507	                reference_context = _reference_context(bar, reference_bars, _reference_timestamps)
+   508	                if reference_context is not None:
+   509	                    trail_ref_price_usdt = reference_context[1].close
+   510	                    trail_wait_confirm = True
+   511	                _event(
+   512	                    events,
+   513	                    bar.ts,
+   514	                    "TRAIL_ACTIVATED",
+   515	                    result,
+   516	                    confirmation_ref_price_usdt=trail_ref_price_usdt,
+   517	                    initial_trail_quote=(
+   518	                        _trail_event_payload(pending_trail) if pending_trail is not None else None
+   519	                    ),
+   520	                )
+   521	                if stop_hit and not stop_wins(config.same_bar_policy_id):
+   522	                    _add_leg(result, "TRAILING_STOP", remaining, active_stop, bar.ts)
+   523	                    remaining = 0.0
+   524	                    result.exit_ts = bar.ts
+   525	                    result.lifecycle_class = "TP1_TP2_TRAILING_STOP"
+   526	                    _event(events, bar.ts, "STOP_FILLED", result, stop=active_stop, state=state)
+   527	                    break
+   528	            elif breakeven_hit:
+   529	                result.same_bar_ambiguous = True
+   530	                result.same_bar_collision_count += 1
+   531	                _add_leg(result, "BREAKEVEN_STOP", remaining, active_stop, bar.ts)
+   532	                remaining = 0.0
+   533	                result.exit_ts = bar.ts
+   534	                result.lifecycle_class = "TP1_SL"
+   535	                _event(events, bar.ts, "STOP_FILLED", result, stop=active_stop, state=state)
+   536	                break
+   537	            continue
+   538	
+   539	        if state == "TP1_DONE" and target_hit:
+   540	            _add_leg(result, "TP2", result.qty2, float(result.tp2_price), bar.ts)
+   541	            remaining -= result.qty2
+   542	            result.tp2_fill_ts = bar.ts
+   543	            result.trail_activation_ts = bar.ts
+   544	            state = "TRAILING"
+   545	            _event(events, bar.ts, "TP2_FILLED", result, price=result.tp2_price)
+   546	            pending_trail = _desired_trail_quote(
+   547	                result.side,
+   548	                bar,
+   549	                reference_bars,
+   550	                _reference_timestamps,
+   551	                active_stop,
+   552	                config,
+   553	                require_step_improvement=False,
+   554	            )
+   555	            reference_context = _reference_context(bar, reference_bars, _reference_timestamps)
+   556	            if reference_context is not None:
+   557	                trail_ref_price_usdt = reference_context[1].close
+   558	                trail_wait_confirm = True
+   559	            _event(
+   560	                events,
+   561	                bar.ts,
+   562	                "TRAIL_ACTIVATED",
+   563	                result,
+   564	                confirmation_ref_price_usdt=trail_ref_price_usdt,
+   565	                initial_trail_quote=(
+   566	                    _trail_event_payload(pending_trail) if pending_trail is not None else None
+   567	                ),
+   568	            )
+   569	            if stop_hit and not stop_wins(config.same_bar_policy_id):
+   570	                _add_leg(result, "TRAILING_STOP", remaining, active_stop, bar.ts)
+   571	                remaining = 0.0
+   572	                result.exit_ts = bar.ts
+   573	                result.lifecycle_class = "TP1_TP2_TRAILING_STOP"
+   574	                _event(events, bar.ts, "STOP_FILLED", result, stop=active_stop, state=state)
+   575	                break
+   576	            continue
+   577	
+   578	        if state == "TRAILING":
+   579	            reference_context = _reference_context(bar, reference_bars, _reference_timestamps)
+   580	            if trail_wait_confirm:
+   581	                if reference_context is None or trail_ref_price_usdt is None:
+   582	                    continue
+   583	                reference_close = reference_context[1].close
+   584	                confirmed = (
+   585	                    reference_close > trail_ref_price_usdt + config.trail_confirm_buffer_usd
+   586	                    if result.side == "LONG"
+   587	                    else reference_close < trail_ref_price_usdt - config.trail_confirm_buffer_usd
+   588	                )
+   589	                if not confirmed:
+   590	                    continue
+   591	                trail_wait_confirm = False
+   592	                _event(
+   593	                    events,
+   594	                    bar.ts,
+   595	                    "TRAIL_CONFIRM_BREAK",
+   596	                    result,
+   597	                    ref_price_usdt=trail_ref_price_usdt,
+   598	                    close_price_usdt=reference_close,
+   599	                    buffer_usd=config.trail_confirm_buffer_usd,
+   600	                )
+   601	            desired = _desired_trail_quote(
+   602	                result.side,
+   603	                bar,
+   604	                reference_bars,
+   605	                _reference_timestamps,
+   606	                active_stop,
+   607	                config,
+   608	                require_step_improvement=True,
+   609	            )
+   610	            if desired is not None:
+   611	                pending_trail = desired
+   612	
+   613	    if data_quality_interrupted:
+   614	        result.lifecycle_class = "TP1_TP2_OPEN_TRAIL" if state == "TRAILING" else "UNRESOLVED_END_OF_DATA"
+   615	        result.exit_ts = None
+   616	        result.blocked_reason = "NO_FEED_COVERAGE"
+   617	        _event(events, used_bars[-1].ts, "RUN_ENDED_UNRESOLVED", result, state=state, reason="untrusted synthetic feed row")
+   618	    elif not result.lifecycle_class:
+   619	        result.lifecycle_class = "TP1_TP2_OPEN_TRAIL" if state == "TRAILING" else "UNRESOLVED_END_OF_DATA"
+   620	        result.exit_ts = None
+   621	        _event(events, bars[-1].ts if bars else candidate.signal_ts_utc, "RUN_ENDED_UNRESOLVED", result, state=state)
+   622	    else:
+   623	        _event(events, result.exit_ts or candidate.signal_ts_utc, "POSITION_CLOSED", result, lifecycle=result.lifecycle_class)
+   624	    result.utility_bucket = _utility(result.lifecycle_class)
+   625	    result.feed_quality_class, result.recovery_overlap = _quality(used_bars)
+   626	    _finalize_economics(result, config)
+   627	    return result, events
+   628	
+   629	
+   630	def replay_independent(
+   631	    candidates: list[Candidate],
+   632	    bars: list[FeedBar],
+   633	    config: ReplayConfig,
+   634	    *,
+   635	    reference_bars: list[FeedBar] | None = None,
+   636	) -> tuple[list[TradeResult], list[ReplayEvent]]:
+   637	    results: list[TradeResult] = []
+   638	    events: list[ReplayEvent] = []
+   639	    timestamps = [bar.ts for bar in bars]
+   640	    reference_bars = reference_bars or bars
+   641	    reference_timestamps = [bar.ts for bar in reference_bars]
+   642	    for candidate in candidates:
+   643	        result, candidate_events = replay_candidate(
+   644	            candidate,
+   645	            bars,
+   646	            config,
+   647	            reference_bars=reference_bars,
+   648	            _timestamps=timestamps,
+   649	            _reference_timestamps=reference_timestamps,
+   650	        )
+   651	        results.append(result)
+   652	        events.extend(candidate_events)
+   653	    events.sort(key=lambda item: (item.event_ts, item.trade_id, item.event_type))
+   654	    return results, events
+   655	
+   656	
+   657	def clone_for_mode(result: TradeResult, mode: str, trade_id: str) -> TradeResult:
+   658	    cloned = replace(result, replay_mode=mode, trade_id=trade_id, independent_trade_id=result.trade_id)
+   659	    cloned.legs = [replace(leg, trade_id=trade_id, leg_id=f"{trade_id}_L{index + 1}") for index, leg in enumerate(result.legs)]
+   660	    return cloned

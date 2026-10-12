@@ -1,0 +1,2077 @@
+     1	from __future__ import annotations
+     2	
+     3	from pathlib import Path
+     4	
+     5	import pandas as pd
+     6	
+     7	from market_monitor.liquidity_zones import LIQUIDITY_MAP_COLUMNS
+     8	from market_monitor.score_instrumentation import (
+     9	    HARD_WIDE_ZONE_WIDTH_PCT,
+    10	    PRECISION_LOW,
+    11	    PRECISION_TOO_WIDE,
+    12	    SCORE_INSTRUMENTATION_COLUMNS,
+    13	    precision_status_for_width,
+    14	    score_instrumentation_fields,
+    15	)
+    16	from market_monitor.structure import aggregate_timeframe
+    17	
+    18	
+    19	REGISTRY_COLUMNS = [
+    20	    "zone_id",
+    21	    "first_seen_at",
+    22	    "last_seen_at",
+    23	    "last_updated_at",
+    24	    "side",
+    25	    "zone_type",
+    26	    "price_lower",
+    27	    "price_upper",
+    28	    "price_mid",
+    29	    "source_level_ids",
+    30	    "source_timeframes",
+    31	    "source_timeframe_primary",
+    32	    "htf_level_type",
+    33	    "htf_origin_timestamp",
+    34	    "htf_origin_price",
+    35	    "htf_confirmation_timestamp",
+    36	    "status",
+    37	    "consumption_status",
+    38	    "active_forward",
+    39	    "cross_through_count",
+    40	    "close_above_count",
+    41	    "close_below_count",
+    42	    "alternating_close_count",
+    43	    "bars_inside_zone_lifetime",
+    44	    "last_clean_reaction_at",
+    45	    "consumed_at",
+    46	    "consumption_reason",
+    47	    "zone_outer_lower",
+    48	    "zone_outer_upper",
+    49	    "zone_core_lower",
+    50	    "zone_core_upper",
+    51	    "zone_origin_start",
+    52	    "zone_origin_end",
+    53	    "first_sweep_at",
+    54	    "resweep_count",
+    55	    "failed_acceptance_count",
+    56	    "rejection_without_sweep_count",
+    57	    "drift_away_confirmed_at",
+    58	    "accepted_above_at",
+    59	    "accepted_below_at",
+    60	    "structural_zone_mode",
+    61	    "zone_behavior_state",
+    62	    "active_forward_role",
+    63	    "htf_lifecycle_status",
+    64	    "m1_interaction_count",
+    65	    "htf_sweep_count",
+    66	    "htf_close_through_count",
+    67	    "htf_acceptance_count",
+    68	    "history_context_start",
+    69	    "history_context_incomplete",
+    70	    "sweep_importance_class",
+    71	    "confidence_score",
+    72	    "confidence_tier",
+    73	    "age_bars",
+    74	    "age_days",
+    75	    "touch_count",
+    76	    "cross_count",
+    77	    "active_days",
+    78	    "last_touch_at",
+    79	    "last_cross_at",
+    80	    "merged_into_zone_id",
+    81	    "data_quality",
+    82	    "invalidation_reason",
+    83	    *SCORE_INSTRUMENTATION_COLUMNS,
+    84	]
+    85	
+    86	CARRY_FORWARD_STATUSES = {
+    87	    "ACTIVE",
+    88	    "APPROACHED",
+    89	    "TOUCHED",
+    90	    "REACTED",
+    91	    "FLIPPED_REACTION_ZONE",
+    92	    "CROSSED_UNCLASSIFIED",
+    93	}
+    94	INACTIVE_STATUSES = {"INVALIDATED", "EXPIRED", "MERGED"}
+    95	MAX_ZONE_AGE_DAYS = 7
+    96	MAX_ZONE_AGE_REASON = "MAX_ZONE_AGE_DAYS_EXCEEDED"
+    97	MAX_CROSS_THROUGH_COUNT = 3
+    98	MAX_ALTERNATING_CLOSE_COUNT = 3
+    99	MAX_BARS_INSIDE_ZONE_LIFETIME = 20
+   100	REACTION_LOOKAHEAD_BARS_FOR_LIFECYCLE = 30
+   101	ACCEPTANCE_CLOSE_BARS = 3
+   102	ACTIVE_FORWARD_STATUSES = {"ACTIVE", "TOUCHED", "REACTED", "FLIPPED_REACTION_ZONE"}
+   103	INACTIVE_CONSUMPTION_STATUSES = {"CONSUMED", "CHOPPED_THROUGH", "EXPIRED"}
+   104	BROAD_STRUCTURAL_MODES = {
+   105	    "BROAD_STRUCTURAL_ZONE",
+   106	    "PATTERN_DERIVED_ZONE",
+   107	    "REACTION_ZONE",
+   108	}
+   109	ACTIVE_AUDIT_ROLES = {
+   110	    "FRESH_LIQUIDITY",
+   111	    "REACTION_ZONE",
+   112	    "DISTRIBUTION_ZONE",
+   113	    "RETEST_ZONE",
+   114	}
+   115	NON_FRESH_ACTIVE_ROLES = {"REACTION_ZONE", "DISTRIBUTION_ZONE", "RETEST_ZONE"}
+   116	LOCAL_SESSION_HEAVY_M1_INTERACTION_COUNT = 240
+   117	LOCAL_CONTEXT_ACTIVE_FORWARD_ROLES = {
+   118	    "LOCAL_SESSION_CONTEXT",
+   119	    "LOCAL_REPEATED_INTERACTION",
+   120	    "LOCAL_NOISY_ZONE",
+   121	    "SESSION_CHOPPED",
+   122	}
+   123	M15_ACTIVE_FORWARD_ROLES = {
+   124	    "M15_MINIMUM_STRUCTURE",
+   125	    "M15_REACTION_ZONE",
+   126	    "M15_STRUCTURE_SWEEP",
+   127	    "M15_CONSUMED",
+   128	}
+   129	M15_LIFECYCLE_STATUSES = {
+   130	    "M15_ACTIVE",
+   131	    "M15_SWEPT",
+   132	    "M15_CLOSE_THROUGH",
+   133	    "M15_ACCEPTED",
+   134	}
+   135	
+   136	
+   137	def load_registry(path: str | Path | None) -> pd.DataFrame:
+   138	    if path is None:
+   139	        return pd.DataFrame(columns=REGISTRY_COLUMNS)
+   140	    registry_path = Path(path)
+   141	    if not registry_path.exists():
+   142	        raise FileNotFoundError(f"Registry input not found: {registry_path}")
+   143	    registry = pd.read_csv(registry_path, dtype=str)
+   144	    return _normalize_registry(registry)
+   145	
+   146	
+   147	def build_zone_registry(
+   148	    *,
+   149	    liquidity_map: pd.DataFrame,
+   150	    feed: pd.DataFrame,
+   151	    registry_in: pd.DataFrame | None = None,
+   152	) -> tuple[pd.DataFrame, dict[str, int]]:
+   153	    previous = _normalize_registry(registry_in)
+   154	    current_zones = _current_zones_to_registry(liquidity_map, previous)
+   155	
+   156	    historical = previous[~previous["status"].isin(CARRY_FORWARD_STATUSES)].copy()
+   157	    carry = previous[previous["status"].isin(CARRY_FORWARD_STATUSES)].copy()
+   158	    candidates = _concat_registry_frames([carry, current_zones])
+   159	
+   160	    active_rows, merged_rows = _merge_registry_candidates(candidates)
+   161	    active_rows = _update_lifecycle(active_rows, feed)
+   162	    active_rows = _apply_expiry(active_rows)
+   163	
+   164	    registry_out = _concat_registry_frames([historical, merged_rows, active_rows])
+   165	    registry_out = _normalize_registry(registry_out)
+   166	    registry_out = registry_out.sort_values(
+   167	        ["first_seen_at", "zone_id", "status"], kind="mergesort"
+   168	    ).reset_index(drop=True)
+   169	
+   170	    stats = {
+   171	        "carried_loaded": len(carry),
+   172	        "new_created": len(current_zones),
+   173	        "carried_forward": int(registry_out["status"].isin(CARRY_FORWARD_STATUSES).sum()),
+   174	        "merged": int((registry_out["status"] == "MERGED").sum()),
+   175	        "expired": int((registry_out["status"] == "EXPIRED").sum()),
+   176	        "crossed_unclassified": int(
+   177	            (registry_out["status"] == "CROSSED_UNCLASSIFIED").sum()
+   178	        ),
+   179	        "active_registry": int((registry_out["status"] == "ACTIVE").sum()),
+   180	        "active_forward": int(_active_forward_mask(registry_out).sum()),
+   181	        "consumed": int((registry_out["consumption_status"] == "CONSUMED").sum()),
+   182	        "chopped_through": int((registry_out["consumption_status"] == "CHOPPED_THROUGH").sum()),
+   183	    }
+   184	    return registry_out, stats
+   185	
+   186	
+   187	def write_registry(registry: pd.DataFrame, path: str | Path) -> None:
+   188	    registry_path = Path(path)
+   189	    registry_path.parent.mkdir(parents=True, exist_ok=True)
+   190	    _normalize_registry(registry).to_csv(registry_path, index=False)
+   191	
+   192	
+   193	def forward_liquidity_from_registry(
+   194	    registry: pd.DataFrame, latest_close: float | None
+   195	) -> pd.DataFrame:
+   196	    registry = _normalize_registry(registry)
+   197	    active = registry[_active_forward_mask(registry)].copy()
+   198	    if latest_close is not None:
+   199	        close = float(latest_close)
+   200	        active = active[
+   201	            ((active["side"] == "BUY_SIDE") & (active["price_lower"].astype(float) > close))
+   202	            | ((active["side"] == "SELL_SIDE") & (active["price_upper"].astype(float) < close))
+   203	        ]
+   204	    rows = []
+   205	    for _, row in active.iterrows():
+   206	        rows.append(
+   207	            {
+   208	                "zone_id": row["zone_id"],
+   209	                "created_at": row["first_seen_at"],
+   210	                "last_updated_at": row["last_updated_at"],
+   211	                "side": row["side"],
+   212	                "zone_type": row["zone_type"],
+   213	                "price_lower": float(row["price_lower"]),
+   214	                "price_upper": float(row["price_upper"]),
+   215	                "price_mid": float(row["price_mid"]),
+   216	                "source_level_ids": row["source_level_ids"],
+   217	                "source_timeframes": row["source_timeframes"],
+   218	                "source_timeframe_primary": row["source_timeframe_primary"],
+   219	                "htf_level_type": row["htf_level_type"],
+   220	                "htf_origin_timestamp": row["htf_origin_timestamp"],
+   221	                "htf_origin_price": float(row["htf_origin_price"]),
+   222	                "htf_confirmation_timestamp": row["htf_confirmation_timestamp"],
+   223	                "status": row["status"],
+   224	                "consumption_status": row["consumption_status"],
+   225	                "active_forward": _bool_text(row["active_forward"]),
+   226	                "cross_through_count": int(float(row["cross_through_count"])),
+   227	                "close_above_count": int(float(row["close_above_count"])),
+   228	                "close_below_count": int(float(row["close_below_count"])),
+   229	                "alternating_close_count": int(float(row["alternating_close_count"])),
+   230	                "bars_inside_zone_lifetime": int(float(row["bars_inside_zone_lifetime"])),
+   231	                "last_clean_reaction_at": row["last_clean_reaction_at"],
+   232	                "consumed_at": row["consumed_at"],
+   233	                "consumption_reason": row["consumption_reason"],
+   234	                "zone_outer_lower": float(row["zone_outer_lower"]),
+   235	                "zone_outer_upper": float(row["zone_outer_upper"]),
+   236	                "zone_core_lower": float(row["zone_core_lower"]),
+   237	                "zone_core_upper": float(row["zone_core_upper"]),
+   238	                "zone_origin_start": row["zone_origin_start"],
+   239	                "zone_origin_end": row["zone_origin_end"],
+   240	                "first_sweep_at": row["first_sweep_at"],
+   241	                "resweep_count": int(float(row["resweep_count"])),
+   242	                "failed_acceptance_count": int(float(row["failed_acceptance_count"])),
+   243	                "rejection_without_sweep_count": int(float(row["rejection_without_sweep_count"])),
+   244	                "drift_away_confirmed_at": row["drift_away_confirmed_at"],
+   245	                "accepted_above_at": row["accepted_above_at"],
+   246	                "accepted_below_at": row["accepted_below_at"],
+   247	                "structural_zone_mode": row["structural_zone_mode"],
+   248	                "zone_behavior_state": row["zone_behavior_state"],
+   249	                "active_forward_role": row["active_forward_role"],
+   250	                "htf_lifecycle_status": row["htf_lifecycle_status"],
+   251	                "m1_interaction_count": int(float(row["m1_interaction_count"])),
+   252	                "htf_sweep_count": int(float(row["htf_sweep_count"])),
+   253	                "htf_close_through_count": int(float(row["htf_close_through_count"])),
+   254	                "htf_acceptance_count": int(float(row["htf_acceptance_count"])),
+   255	                "history_context_start": row["history_context_start"],
+   256	                "history_context_incomplete": _bool_text(row["history_context_incomplete"]),
+   257	                "sweep_importance_class": row["sweep_importance_class"],
+   258	                "confidence_score": int(float(row["confidence_score"])),
+   259	                "confidence_tier": row["confidence_tier"],
+   260	                "touch_count": int(float(row["touch_count"])),
+   261	                "sweep_count": 0,
+   262	                "distance_from_close_pct": _distance_from_close(
+   263	                    float(row["price_mid"]), latest_close
+   264	                ),
+   265	                "data_quality": row["data_quality"],
+   266	                "invalidation_reason": row["invalidation_reason"],
+   267	                **_instrumentation_from_row(row),
+   268	            }
+   269	        )
+   270	    return pd.DataFrame(rows, columns=LIQUIDITY_MAP_COLUMNS)
+   271	
+   272	
+   273	def _current_zones_to_registry(
+   274	    liquidity_map: pd.DataFrame, previous: pd.DataFrame
+   275	) -> pd.DataFrame:
+   276	    rows = []
+   277	    next_id = _next_zone_index(previous)
+   278	    for _, zone in liquidity_map.iterrows():
+   279	        zone_id = f"zone_{next_id:06d}"
+   280	        next_id += 1
+   281	        created = str(zone["created_at"])
+   282	        rows.append(
+   283	            {
+   284	                "zone_id": zone_id,
+   285	                "first_seen_at": created,
+   286	                "last_seen_at": created,
+   287	                "last_updated_at": created,
+   288	                "side": zone["side"],
+   289	                "zone_type": zone["zone_type"],
+   290	                "price_lower": float(zone["price_lower"]),
+   291	                "price_upper": float(zone["price_upper"]),
+   292	                "price_mid": float(zone["price_mid"]),
+   293	                "source_level_ids": zone["source_level_ids"],
+   294	                "source_timeframes": zone["source_timeframes"],
+   295	                "source_timeframe_primary": str(
+   296	                    zone.get("source_timeframe_primary", "")
+   297	                    or _source_timeframe_primary_from_row(zone)
+   298	                ),
+   299	                "htf_level_type": str(zone.get("htf_level_type", "") or ""),
+   300	                "htf_origin_timestamp": str(zone.get("htf_origin_timestamp", "") or ""),
+   301	                "htf_origin_price": _float_value(zone.get("htf_origin_price", 0)),
+   302	                "htf_confirmation_timestamp": str(zone.get("htf_confirmation_timestamp", "") or ""),
+   303	                "status": "ACTIVE",
+   304	                "consumption_status": str(zone.get("consumption_status", "FRESH") or "FRESH"),
+   305	                "active_forward": _bool_text(zone.get("active_forward", True)),
+   306	                "cross_through_count": int(float(zone.get("cross_through_count", 0) or 0)),
+   307	                "close_above_count": int(float(zone.get("close_above_count", 0) or 0)),
+   308	                "close_below_count": int(float(zone.get("close_below_count", 0) or 0)),
+   309	                "alternating_close_count": int(float(zone.get("alternating_close_count", 0) or 0)),
+   310	                "bars_inside_zone_lifetime": int(float(zone.get("bars_inside_zone_lifetime", 0) or 0)),
+   311	                "last_clean_reaction_at": str(zone.get("last_clean_reaction_at", "") or ""),
+   312	                "consumed_at": str(zone.get("consumed_at", "") or ""),
+   313	                "consumption_reason": str(zone.get("consumption_reason", "") or ""),
+   314	                "zone_outer_lower": float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"]),
+   315	                "zone_outer_upper": float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"]),
+   316	                "zone_core_lower": float(zone.get("zone_core_lower", zone["price_lower"]) or zone["price_lower"]),
+   317	                "zone_core_upper": float(zone.get("zone_core_upper", zone["price_upper"]) or zone["price_upper"]),
+   318	                "zone_origin_start": str(zone.get("zone_origin_start", created) or created),
+   319	                "zone_origin_end": str(zone.get("zone_origin_end", created) or created),
+   320	                "first_sweep_at": str(zone.get("first_sweep_at", "") or ""),
+   321	                "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+   322	                "failed_acceptance_count": int(float(zone.get("failed_acceptance_count", 0) or 0)),
+   323	                "rejection_without_sweep_count": int(float(zone.get("rejection_without_sweep_count", 0) or 0)),
+   324	                "drift_away_confirmed_at": str(zone.get("drift_away_confirmed_at", "") or ""),
+   325	                "accepted_above_at": str(zone.get("accepted_above_at", "") or ""),
+   326	                "accepted_below_at": str(zone.get("accepted_below_at", "") or ""),
+   327	                "structural_zone_mode": str(
+   328	                    zone.get("structural_zone_mode", "")
+   329	                    or _structural_zone_mode_from_row(zone)
+   330	                ),
+   331	                "zone_behavior_state": str(zone.get("zone_behavior_state", "NONE") or "NONE"),
+   332	                "active_forward_role": str(
+   333	                    zone.get("active_forward_role", "FRESH_LIQUIDITY") or "FRESH_LIQUIDITY"
+   334	                ),
+   335	                "htf_lifecycle_status": str(
+   336	                    zone.get("htf_lifecycle_status", "")
+   337	                    or _htf_lifecycle_status(
+   338	                        has_htf=_has_htf_source(zone),
+   339	                        htf_sweep_count=int(float(zone.get("htf_sweep_count", 0) or 0)),
+   340	                        htf_close_through_count=int(float(zone.get("htf_close_through_count", 0) or 0)),
+   341	                        htf_acceptance_count=int(float(zone.get("htf_acceptance_count", 0) or 0)),
+   342	                        history_context_incomplete=_bool_value(
+   343	                            zone.get("history_context_incomplete", False)
+   344	                        ),
+   345	                    )
+   346	                ),
+   347	                "m1_interaction_count": int(float(zone.get("m1_interaction_count", 0) or 0)),
+   348	                "htf_sweep_count": int(float(zone.get("htf_sweep_count", 0) or 0)),
+   349	                "htf_close_through_count": int(float(zone.get("htf_close_through_count", 0) or 0)),
+   350	                "htf_acceptance_count": int(float(zone.get("htf_acceptance_count", 0) or 0)),
+   351	                "history_context_start": str(zone.get("history_context_start", created) or created),
+   352	                "history_context_incomplete": _bool_text(zone.get("history_context_incomplete", False)),
+   353	                "sweep_importance_class": str(
+   354	                    zone.get("sweep_importance_class", "")
+   355	                    or _sweep_importance_class_from_row(zone)
+   356	                ),
+   357	                "confidence_score": int(zone["confidence_score"]),
+   358	                "confidence_tier": zone["confidence_tier"],
+   359	                "age_bars": 0,
+   360	                "age_days": 0,
+   361	                "touch_count": 0,
+   362	                "cross_count": 0,
+   363	                "active_days": 1,
+   364	                "last_touch_at": "",
+   365	                "last_cross_at": "",
+   366	                "merged_into_zone_id": "",
+   367	                "data_quality": zone["data_quality"],
+   368	                "invalidation_reason": "",
+   369	                **_instrumentation_from_row(zone),
+   370	            }
+   371	        )
+   372	    return _normalize_registry(pd.DataFrame(rows, columns=REGISTRY_COLUMNS))
+   373	
+   374	
+   375	def _merge_registry_candidates(candidates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+   376	    candidates = _normalize_registry(candidates)
+   377	    if candidates.empty:
+   378	        return candidates, pd.DataFrame(columns=REGISTRY_COLUMNS)
+   379	    active_rows: list[dict[str, object]] = []
+   380	    merged_rows: list[dict[str, object]] = []
+   381	
+   382	    for side in ["BUY_SIDE", "SELL_SIDE"]:
+   383	        side_rows = candidates[candidates["side"] == side].copy()
+   384	        side_rows = side_rows.sort_values(
+   385	            ["price_lower", "first_seen_at", "zone_id"], kind="mergesort"
+   386	        )
+   387	        cluster: list[dict[str, object]] = []
+   388	        for row in side_rows.to_dict("records"):
+   389	            if not cluster:
+   390	                cluster = [row]
+   391	                continue
+   392	            tolerance = _merge_tolerance(cluster + [row])
+   393	            current_upper = max(float(item["price_upper"]) for item in cluster)
+   394	            if (
+   395	                float(row["price_lower"]) <= current_upper + tolerance
+   396	                and _registry_merge_sources_compatible(cluster, row)
+   397	                and _registry_cluster_width_pct(cluster + [row]) < HARD_WIDE_ZONE_WIDTH_PCT
+   398	            ):
+   399	                cluster.append(row)
+   400	            else:
+   401	                active, merged = _collapse_registry_cluster(cluster)
+   402	                active_rows.append(active)
+   403	                merged_rows.extend(merged)
+   404	                cluster = [row]
+   405	        if cluster:
+   406	            active, merged = _collapse_registry_cluster(cluster)
+   407	            active_rows.append(active)
+   408	            merged_rows.extend(merged)
+   409	    return (
+   410	        _normalize_registry(pd.DataFrame(active_rows, columns=REGISTRY_COLUMNS)),
+   411	        _normalize_registry(pd.DataFrame(merged_rows, columns=REGISTRY_COLUMNS)),
+   412	    )
+   413	
+   414	
+   415	def _collapse_registry_cluster(
+   416	    cluster: list[dict[str, object]]
+   417	) -> tuple[dict[str, object], list[dict[str, object]]]:
+   418	    if len(cluster) == 1:
+   419	        row = cluster[0].copy()
+   420	        row["merged_into_zone_id"] = ""
+   421	        return row, []
+   422	
+   423	    target = _merge_target(cluster)
+   424	    lower = min(float(row["price_lower"]) for row in cluster)
+   425	    upper = max(float(row["price_upper"]) for row in cluster)
+   426	    source_level_ids = _pipe_union(row["source_level_ids"] for row in cluster)
+   427	    source_timeframes = _pipe_union(row["source_timeframes"] for row in cluster)
+   428	    source_zone_types = sorted({str(row["zone_type"]) for row in cluster})
+   429	    confidence_components = _merged_confidence_components(
+   430	        cluster, source_timeframes, source_zone_types
+   431	    )
+   432	    confidence_score = int(confidence_components["final_confidence_score"])
+   433	    confidence_tier = _confidence_tier(confidence_score)
+   434	    instrumentation = score_instrumentation_fields(
+   435	        source_level_ids=source_level_ids,
+   436	        source_timeframes=source_timeframes,
+   437	        zone_type=_registry_merged_zone_type(str(target["side"]), source_zone_types),
+   438	        price_lower=lower,
+   439	        price_upper=upper,
+   440	        price_mid=(lower + upper) / 2,
+   441	        confidence_score=confidence_score,
+   442	        confidence_tier=confidence_tier,
+   443	        score_components=confidence_components,
+   444	    )
+   445	
+   446	    active = target.copy()
+   447	    active.update(
+   448	        {
+   449	            "first_seen_at": min(str(row["first_seen_at"]) for row in cluster),
+   450	            "last_seen_at": max(str(row["last_seen_at"]) for row in cluster),
+   451	            "last_updated_at": max(str(row["last_updated_at"]) for row in cluster),
+   452	            "price_lower": lower,
+   453	            "price_upper": upper,
+   454	            "price_mid": (lower + upper) / 2,
+   455	            "source_level_ids": source_level_ids,
+   456	            "source_timeframes": source_timeframes,
+   457	            "source_timeframe_primary": _merged_source_timeframe_primary(cluster, source_timeframes),
+   458	            "htf_level_type": _merged_htf_text(cluster, "htf_level_type"),
+   459	            "htf_origin_timestamp": _merged_htf_text(cluster, "htf_origin_timestamp"),
+   460	            "htf_origin_price": _merged_htf_price(cluster, (lower + upper) / 2),
+   461	            "htf_confirmation_timestamp": _merged_htf_text(cluster, "htf_confirmation_timestamp"),
+   462	            "zone_type": _registry_merged_zone_type(str(target["side"]), source_zone_types),
+   463	            "consumption_status": _merged_consumption_status(cluster),
+   464	            "active_forward": _bool_text(any(_bool_value(row.get("active_forward", True)) for row in cluster)),
+   465	            "cross_through_count": max(int(float(row.get("cross_through_count", 0) or 0)) for row in cluster),
+   466	            "close_above_count": max(int(float(row.get("close_above_count", 0) or 0)) for row in cluster),
+   467	            "close_below_count": max(int(float(row.get("close_below_count", 0) or 0)) for row in cluster),
+   468	            "alternating_close_count": max(int(float(row.get("alternating_close_count", 0) or 0)) for row in cluster),
+   469	            "bars_inside_zone_lifetime": max(int(float(row.get("bars_inside_zone_lifetime", 0) or 0)) for row in cluster),
+   470	            "last_clean_reaction_at": max((str(row.get("last_clean_reaction_at", "") or "") for row in cluster), default=""),
+   471	            "consumed_at": max((str(row.get("consumed_at", "") or "") for row in cluster), default=""),
+   472	            "consumption_reason": _pipe_union(row.get("consumption_reason", "") for row in cluster),
+   473	            "zone_outer_lower": min(float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"]) for row in cluster),
+   474	            "zone_outer_upper": max(float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"]) for row in cluster),
+   475	            "zone_core_lower": min(float(row.get("zone_core_lower", row["price_lower"]) or row["price_lower"]) for row in cluster),
+   476	            "zone_core_upper": max(float(row.get("zone_core_upper", row["price_upper"]) or row["price_upper"]) for row in cluster),
+   477	            "zone_origin_start": min((str(row.get("zone_origin_start", "") or row["first_seen_at"]) for row in cluster), default=""),
+   478	            "zone_origin_end": max((str(row.get("zone_origin_end", "") or row["last_seen_at"]) for row in cluster), default=""),
+   479	            "first_sweep_at": _min_timestamp_text(row.get("first_sweep_at", "") for row in cluster),
+   480	            "resweep_count": max(int(float(row.get("resweep_count", 0) or 0)) for row in cluster),
+   481	            "failed_acceptance_count": max(int(float(row.get("failed_acceptance_count", 0) or 0)) for row in cluster),
+   482	            "rejection_without_sweep_count": max(int(float(row.get("rejection_without_sweep_count", 0) or 0)) for row in cluster),
+   483	            "drift_away_confirmed_at": _min_timestamp_text(row.get("drift_away_confirmed_at", "") for row in cluster),
+   484	            "accepted_above_at": _min_timestamp_text(row.get("accepted_above_at", "") for row in cluster),
+   485	            "accepted_below_at": _min_timestamp_text(row.get("accepted_below_at", "") for row in cluster),
+   486	            "structural_zone_mode": _merged_structural_zone_mode(cluster, source_zone_types),
+   487	            "zone_behavior_state": _merged_zone_behavior_state(cluster),
+   488	            "active_forward_role": _merged_active_forward_role(cluster),
+   489	            "htf_lifecycle_status": _merged_htf_lifecycle_status(cluster),
+   490	            "m1_interaction_count": max(int(float(row.get("m1_interaction_count", 0) or 0)) for row in cluster),
+   491	            "htf_sweep_count": max(int(float(row.get("htf_sweep_count", 0) or 0)) for row in cluster),
+   492	            "htf_close_through_count": max(int(float(row.get("htf_close_through_count", 0) or 0)) for row in cluster),
+   493	            "htf_acceptance_count": max(int(float(row.get("htf_acceptance_count", 0) or 0)) for row in cluster),
+   494	            "history_context_start": _min_timestamp_text(
+   495	                row.get("history_context_start", "") for row in cluster
+   496	            ),
+   497	            "history_context_incomplete": _bool_text(
+   498	                any(_bool_value(row.get("history_context_incomplete", False)) for row in cluster)
+   499	            ),
+   500	            "sweep_importance_class": _merged_sweep_importance_class(cluster),
+   501	            "confidence_score": confidence_score,
+   502	            "confidence_tier": confidence_tier,
+   503	            "touch_count": sum(int(float(row["touch_count"])) for row in cluster),
+   504	            "cross_count": sum(int(float(row["cross_count"])) for row in cluster),
+   505	            "active_days": max(int(float(row["active_days"])) for row in cluster),
+   506	            "data_quality": _quality_values(row["data_quality"] for row in cluster),
+   507	            "merged_into_zone_id": "",
+   508	            "invalidation_reason": "",
+   509	            **instrumentation,
+   510	        }
+   511	    )
+   512	
+   513	    merged: list[dict[str, object]] = []
+   514	    for row in cluster:
+   515	        if row["zone_id"] == target["zone_id"]:
+   516	            continue
+   517	        merged_row = row.copy()
+   518	        merged_row["status"] = "MERGED"
+   519	        merged_row["active_forward"] = "false"
+   520	        merged_row["active_forward_role"] = "INACTIVE"
+   521	        merged_row["merged_into_zone_id"] = target["zone_id"]
+   522	        merged_row["invalidation_reason"] = ""
+   523	        merged.append(merged_row)
+   524	    return active, merged
+   525	
+   526	
+   527	def _registry_cluster_width_pct(rows: list[dict[str, object]]) -> float:
+   528	    lower = min(float(row["price_lower"]) for row in rows)
+   529	    upper = max(float(row["price_upper"]) for row in rows)
+   530	    return _zone_width_pct(lower, upper, (lower + upper) / 2)
+   531	
+   532	
+   533	def _merge_target(cluster: list[dict[str, object]]) -> dict[str, object]:
+   534	    return sorted(cluster, key=lambda row: (str(row["first_seen_at"]), str(row["zone_id"])))[0]
+   535	
+   536	
+   537	def _registry_merge_sources_compatible(
+   538	    cluster: list[dict[str, object]], row: dict[str, object]
+   539	) -> bool:
+   540	    row_is_m15 = _has_m15_source(row)
+   541	    cluster_has_m15 = any(_has_m15_source(item) for item in cluster)
+   542	    if row_is_m15 or cluster_has_m15:
+   543	        return row_is_m15 and all(_has_m15_source(item) for item in cluster)
+   544	    return True
+   545	
+   546	
+   547	def _update_lifecycle(registry: pd.DataFrame, feed: pd.DataFrame, *, closed_htf_only: bool = False) -> pd.DataFrame:
+   548	    registry = _normalize_registry(registry)
+   549	    if registry.empty or feed.empty:
+   550	        return registry
+   551	    frame = feed.sort_values("Timestamp", kind="mergesort")
+   552	    run_end = _format_ts(frame["Timestamp"].max())
+   553	    updated = []
+   554	    for row in registry.to_dict("records"):
+   555	        row = row.copy()
+   556	        row_first_seen = _format_ts(row["first_seen_at"])
+   557	        effective_seen = max(run_end, row_first_seen)
+   558	        status, touch_at, cross_at = _path_status(row, frame)
+   559	        if touch_at and not row.get("last_touch_at"):
+   560	            row["last_touch_at"] = touch_at
+   561	        if cross_at:
+   562	            if not row.get("last_cross_at") or row["last_cross_at"] != cross_at:
+   563	                row["cross_count"] = int(float(row["cross_count"])) + 1
+   564	            row["last_cross_at"] = cross_at
+   565	        elif touch_at:
+   566	            row["touch_count"] = int(float(row["touch_count"])) + 1
+   567	            row["last_touch_at"] = touch_at
+   568	        row["status"] = status
+   569	        row["last_seen_at"] = effective_seen
+   570	        row["last_updated_at"] = effective_seen
+   571	        row["age_bars"] = _age_bars(row["first_seen_at"], frame)
+   572	        row["age_days"] = _age_days(row["first_seen_at"], effective_seen)
+   573	        row.update(_consumption_fields(row, frame, closed_htf_only=closed_htf_only))
+   574	        if row["consumption_status"] == "REACTED":
+   575	            row["status"] = "REACTED"
+   576	        if status in CARRY_FORWARD_STATUSES:
+   577	            row["active_days"] = max(int(float(row["active_days"])), int(row["age_days"]) + 1)
+   578	        row["active_forward_role"] = _active_forward_role(row)
+   579	        row["active_forward"] = _bool_text(_is_active_forward(row))
+   580	        updated.append(row)
+   581	    return _normalize_registry(pd.DataFrame(updated, columns=REGISTRY_COLUMNS))
+   582	
+   583	
+   584	def _path_status(row: dict[str, object], feed: pd.DataFrame) -> tuple[str, str, str]:
+   585	    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+   586	    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+   587	    after_first_seen = feed[feed["Timestamp"] >= pd.Timestamp(row["first_seen_at"])]
+   588	    if after_first_seen.empty:
+   589	        return str(row.get("status", "ACTIVE") or "ACTIVE"), "", ""
+   590	    if row["side"] == "BUY_SIDE":
+   591	        cross = after_first_seen[after_first_seen["HiPrice"] > upper]
+   592	        touch = after_first_seen[
+   593	            (after_first_seen["HiPrice"] >= lower) & (after_first_seen["LowPrice"] <= upper)
+   594	        ]
+   595	    else:
+   596	        cross = after_first_seen[after_first_seen["LowPrice"] < lower]
+   597	        touch = after_first_seen[
+   598	            (after_first_seen["LowPrice"] <= upper) & (after_first_seen["HiPrice"] >= lower)
+   599	        ]
+   600	    touch_at = "" if touch.empty else _format_ts(touch.iloc[0]["Timestamp"])
+   601	    cross_at = "" if cross.empty else _format_ts(cross.iloc[0]["Timestamp"])
+   602	    if cross_at:
+   603	        return "CROSSED_UNCLASSIFIED", touch_at or cross_at, cross_at
+   604	    if touch_at:
+   605	        return "TOUCHED", touch_at, ""
+   606	    return "ACTIVE", "", ""
+   607	
+   608	
+   609	def _consumption_fields(row: dict[str, object], feed: pd.DataFrame, *, closed_htf_only: bool = False) -> dict[str, object]:
+   610	    after_first_seen = feed[feed["Timestamp"] >= pd.Timestamp(row["first_seen_at"])].sort_values(
+   611	        "Timestamp", kind="mergesort"
+   612	    )
+   613	    if after_first_seen.empty:
+   614	        return {
+   615	            "consumption_status": row.get("consumption_status", "FRESH") or "FRESH",
+   616	            "cross_through_count": int(float(row.get("cross_through_count", 0) or 0)),
+   617	            "close_above_count": int(float(row.get("close_above_count", 0) or 0)),
+   618	            "close_below_count": int(float(row.get("close_below_count", 0) or 0)),
+   619	            "alternating_close_count": int(float(row.get("alternating_close_count", 0) or 0)),
+   620	            "bars_inside_zone_lifetime": int(float(row.get("bars_inside_zone_lifetime", 0) or 0)),
+   621	            "last_clean_reaction_at": row.get("last_clean_reaction_at", "") or "",
+   622	            "consumed_at": row.get("consumed_at", "") or "",
+   623	            "consumption_reason": row.get("consumption_reason", "") or "",
+   624	            "zone_outer_lower": float(row.get("zone_outer_lower", row.get("price_lower", 0)) or 0),
+   625	            "zone_outer_upper": float(row.get("zone_outer_upper", row.get("price_upper", 0)) or 0),
+   626	            "zone_core_lower": float(row.get("zone_core_lower", row.get("price_lower", 0)) or 0),
+   627	            "zone_core_upper": float(row.get("zone_core_upper", row.get("price_upper", 0)) or 0),
+   628	            "zone_origin_start": row.get("zone_origin_start", "") or row.get("first_seen_at", ""),
+   629	            "zone_origin_end": row.get("zone_origin_end", "") or row.get("last_seen_at", ""),
+   630	            "first_sweep_at": row.get("first_sweep_at", "") or "",
+   631	            "resweep_count": int(float(row.get("resweep_count", 0) or 0)),
+   632	            "failed_acceptance_count": int(float(row.get("failed_acceptance_count", 0) or 0)),
+   633	            "rejection_without_sweep_count": int(float(row.get("rejection_without_sweep_count", 0) or 0)),
+   634	            "drift_away_confirmed_at": row.get("drift_away_confirmed_at", "") or "",
+   635	            "accepted_above_at": row.get("accepted_above_at", "") or "",
+   636	            "accepted_below_at": row.get("accepted_below_at", "") or "",
+   637	            "structural_zone_mode": row.get("structural_zone_mode", "") or _structural_zone_mode_from_row(row),
+   638	            "zone_behavior_state": row.get("zone_behavior_state", "NONE") or "NONE",
+   639	            "htf_lifecycle_status": row.get("htf_lifecycle_status", "") or _lifecycle_status_from_row(row),
+   640	            "m1_interaction_count": int(float(row.get("m1_interaction_count", 0) or 0)),
+   641	            "htf_sweep_count": int(float(row.get("htf_sweep_count", 0) or 0)),
+   642	            "htf_close_through_count": int(float(row.get("htf_close_through_count", 0) or 0)),
+   643	            "htf_acceptance_count": int(float(row.get("htf_acceptance_count", 0) or 0)),
+   644	            "history_context_start": row.get("history_context_start", "") or row.get("first_seen_at", ""),
+   645	            "history_context_incomplete": _bool_text(row.get("history_context_incomplete", False)),
+   646	            "sweep_importance_class": row.get("sweep_importance_class", "") or _sweep_importance_class_from_row(row),
+   647	        }
+   648	
+   649	    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+   650	    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+   651	    core_lower = float(row.get("zone_core_lower", row["price_lower"]) or row["price_lower"])
+   652	    core_upper = float(row.get("zone_core_upper", row["price_upper"]) or row["price_upper"])
+   653	    closes = pd.to_numeric(after_first_seen["ClosePrice"], errors="coerce")
+   654	    highs = pd.to_numeric(after_first_seen["HiPrice"], errors="coerce")
+   655	    lows = pd.to_numeric(after_first_seen["LowPrice"], errors="coerce")
+   656	    close_above = closes > upper
+   657	    close_below = closes < lower
+   658	    inside = closes.between(lower, upper, inclusive="both")
+   659	    cross_through = (highs > upper) & (lows < lower)
+   660	    positions = [
+   661	        "ABOVE" if above else "BELOW" if below else "INSIDE"
+   662	        for above, below in zip(close_above.tolist(), close_below.tolist())
+   663	    ]
+   664	    alternating_count = _alternating_close_count(positions)
+   665	    clean_reaction_at = _clean_reaction_at(row, after_first_seen)
+   666	    cross_through_count = int(cross_through.sum())
+   667	    close_above_count = int(close_above.sum())
+   668	    close_below_count = int(close_below.sum())
+   669	    bars_inside = int(inside.sum())
+   670	    sweep_timestamps = _sweep_transition_timestamps(row, after_first_seen, lower, upper)
+   671	    previous_first_sweep = str(row.get("first_sweep_at", "") or "")
+   672	    first_sweep_at = previous_first_sweep or (sweep_timestamps[0] if sweep_timestamps else "")
+   673	    resweep_count = max(0, len(sweep_timestamps) - 1)
+   674	    accepted_above_at = _consecutive_threshold_at(after_first_seen, close_above.tolist())
+   675	    accepted_below_at = _consecutive_threshold_at(after_first_seen, close_below.tolist())
+   676	    failed_acceptance_count = _failed_acceptance_count(
+   677	        row,
+   678	        after_first_seen,
+   679	        close_above.tolist(),
+   680	        close_below.tolist(),
+   681	        lower,
+   682	        upper,
+   683	    )
+   684	    rejection_without_sweep_count = _rejection_without_sweep_count(
+   685	        row,
+   686	        after_first_seen,
+   687	        lower,
+   688	        upper,
+   689	        core_lower,
+   690	        core_upper,
+   691	    )
+   692	    drift_away_confirmed_at = _drift_away_confirmed_at(
+   693	        row,
+   694	        after_first_seen,
+   695	        first_sweep_at,
+   696	        failed_acceptance_count,
+   697	        lower,
+   698	        upper,
+   699	        core_lower,
+   700	        core_upper,
+   701	    )
+   702	    structural_zone_mode = str(row.get("structural_zone_mode", "") or _structural_zone_mode_from_row(row))
+   703	    is_broad = structural_zone_mode in BROAD_STRUCTURAL_MODES
+   704	    has_htf = _has_htf_source(row)
+   705	    m1_interaction_count = _m1_interaction_count(row, after_first_seen, lower, upper)
+   706	    htf_metrics = _htf_lifecycle_metrics(row, feed, lower, upper, closed_htf_only=closed_htf_only)
+   707	    htf_sweep_count = htf_metrics["htf_sweep_count"]
+   708	    htf_close_through_count = htf_metrics["htf_close_through_count"]
+   709	    htf_acceptance_count = htf_metrics["htf_acceptance_count"]
+   710	    history_context_start = (
+   711	        str(row.get("history_context_start", "") or "")
+   712	        or htf_metrics["history_context_start"]
+   713	        or _format_ts(after_first_seen["Timestamp"].min())
+   714	    )
+   715	    history_context_incomplete = _bool_value(row.get("history_context_incomplete", False)) or _bool_value(
+   716	        htf_metrics["history_context_incomplete"]
+   717	    )
+   718	
+   719	    current_status = str(row.get("status", ""))
+   720	    consumption_status = "FRESH"
+   721	    consumed_at = ""
+   722	    consumption_reason = ""
+   723	    has_two_sided_full_close = close_above_count > 0 and close_below_count > 0
+   724	    true_broad_chop = (
+   725	        is_broad
+   726	        and has_two_sided_full_close
+   727	        and (
+   728	            alternating_count >= MAX_ALTERNATING_CLOSE_COUNT
+   729	            or cross_through_count >= MAX_CROSS_THROUGH_COUNT
+   730	        )
+   731	        and not clean_reaction_at
+   732	    )
+   733	    if current_status == "EXPIRED":
+   734	        consumption_status = "EXPIRED"
+   735	        consumed_at = row.get("last_updated_at", "") or row.get("last_seen_at", "")
+   736	        consumption_reason = row.get("invalidation_reason", "") or MAX_ZONE_AGE_REASON
+   737	    elif has_htf and htf_acceptance_count > 0:
+   738	        consumption_status = "SWEPT_ONCE"
+   739	    elif has_htf and htf_sweep_count > 0:
+   740	        consumption_status = "SWEPT_ONCE"
+   741	    elif is_broad and true_broad_chop:
+   742	        consumption_status = "CHOPPED_THROUGH"
+   743	        consumed_at = _threshold_reached_at(
+   744	            after_first_seen,
+   745	            positions,
+   746	            cross_through.tolist(),
+   747	            threshold_kind="alternating_close"
+   748	            if alternating_count >= MAX_ALTERNATING_CLOSE_COUNT
+   749	            else "cross_through",
+   750	        )
+   751	        consumption_reason = "broad_full_zone_two_sided_chop"
+   752	    elif clean_reaction_at:
+   753	        consumption_status = "REACTED"
+   754	    elif not is_broad and cross_through_count >= MAX_CROSS_THROUGH_COUNT:
+   755	        consumption_status = "CONSUMED"
+   756	        consumed_at = _threshold_reached_at(
+   757	            after_first_seen,
+   758	            positions,
+   759	            cross_through.tolist(),
+   760	            threshold_kind="cross_through",
+   761	        )
+   762	        consumption_reason = f"cross_through_count>={MAX_CROSS_THROUGH_COUNT}"
+   763	    elif not is_broad and alternating_count >= MAX_ALTERNATING_CLOSE_COUNT:
+   764	        consumption_status = "CHOPPED_THROUGH"
+   765	        consumed_at = _threshold_reached_at(
+   766	            after_first_seen,
+   767	            positions,
+   768	            cross_through.tolist(),
+   769	            threshold_kind="alternating_close",
+   770	        )
+   771	        consumption_reason = f"alternating_close_count>={MAX_ALTERNATING_CLOSE_COUNT}"
+   772	    elif not is_broad and bars_inside >= MAX_BARS_INSIDE_ZONE_LIFETIME:
+   773	        consumption_status = "CHOPPED_THROUGH"
+   774	        consumed_at = _threshold_reached_at(
+   775	            after_first_seen,
+   776	            positions,
+   777	            cross_through.tolist(),
+   778	            threshold_kind="inside_bars",
+   779	        )
+   780	        consumption_reason = f"bars_inside_zone_lifetime>={MAX_BARS_INSIDE_ZONE_LIFETIME}"
+   781	    elif current_status == "CROSSED_UNCLASSIFIED" or int(float(row.get("cross_count", 0) or 0)) > 0:
+   782	        consumption_status = "SWEPT_ONCE"
+   783	    elif current_status == "TOUCHED" or int(float(row.get("touch_count", 0) or 0)) > 0 or bars_inside > 0:
+   784	        consumption_status = "TESTED"
+   785	
+   786	    zone_behavior_state = _zone_behavior_state(
+   787	        row=row,
+   788	        is_broad=is_broad,
+   789	        clean_reaction_at=clean_reaction_at,
+   790	        accepted_above_at=accepted_above_at,
+   791	        accepted_below_at=accepted_below_at,
+   792	        failed_acceptance_count=failed_acceptance_count,
+   793	        rejection_without_sweep_count=rejection_without_sweep_count,
+   794	        drift_away_confirmed_at=drift_away_confirmed_at,
+   795	        resweep_count=resweep_count,
+   796	        true_broad_chop=true_broad_chop,
+   797	    )
+   798	
+   799	    return {
+   800	        "consumption_status": consumption_status,
+   801	        "cross_through_count": cross_through_count,
+   802	        "close_above_count": close_above_count,
+   803	        "close_below_count": close_below_count,
+   804	        "alternating_close_count": alternating_count,
+   805	        "bars_inside_zone_lifetime": bars_inside,
+   806	        "last_clean_reaction_at": clean_reaction_at,
+   807	        "consumed_at": consumed_at,
+   808	        "consumption_reason": consumption_reason,
+   809	        "zone_outer_lower": lower,
+   810	        "zone_outer_upper": upper,
+   811	        "zone_core_lower": core_lower,
+   812	        "zone_core_upper": core_upper,
+   813	        "zone_origin_start": row.get("zone_origin_start", "") or row.get("first_seen_at", ""),
+   814	        "zone_origin_end": row.get("zone_origin_end", "") or row.get("last_seen_at", ""),
+   815	        "first_sweep_at": first_sweep_at,
+   816	        "resweep_count": resweep_count,
+   817	        "failed_acceptance_count": failed_acceptance_count,
+   818	        "rejection_without_sweep_count": rejection_without_sweep_count,
+   819	        "drift_away_confirmed_at": drift_away_confirmed_at,
+   820	        "accepted_above_at": accepted_above_at,
+   821	        "accepted_below_at": accepted_below_at,
+   822	        "structural_zone_mode": structural_zone_mode,
+   823	        "zone_behavior_state": zone_behavior_state,
+   824	        "htf_lifecycle_status": _lifecycle_status_from_values(
+   825	            row=row,
+   826	            has_htf=has_htf,
+   827	            htf_sweep_count=htf_sweep_count,
+   828	            htf_close_through_count=htf_close_through_count,
+   829	            htf_acceptance_count=htf_acceptance_count,
+   830	            history_context_incomplete=history_context_incomplete,
+   831	            first_sweep_at=first_sweep_at,
+   832	            close_above_count=close_above_count,
+   833	            close_below_count=close_below_count,
+   834	            accepted_above_at=accepted_above_at,
+   835	            accepted_below_at=accepted_below_at,
+   836	        ),
+   837	        "m1_interaction_count": m1_interaction_count,
+   838	        "htf_sweep_count": htf_sweep_count,
+   839	        "htf_close_through_count": htf_close_through_count,
+   840	        "htf_acceptance_count": htf_acceptance_count,
+   841	        "history_context_start": history_context_start,
+   842	        "history_context_incomplete": _bool_text(history_context_incomplete),
+   843	        "sweep_importance_class": _sweep_importance_class_from_values(
+   844	            row=row,
+   845	            has_htf=has_htf,
+   846	            htf_sweep_count=htf_sweep_count,
+   847	            first_sweep_at=first_sweep_at,
+   848	            structural_zone_mode=structural_zone_mode,
+   849	        ),
+   850	    }
+   851	
+   852	
+   853	def _alternating_close_count(positions: list[str]) -> int:
+   854	    previous = ""
+   855	    transitions = 0
+   856	    for position in positions:
+   857	        if position == "INSIDE":
+   858	            continue
+   859	        if previous and position != previous:
+   860	            transitions += 1
+   861	        previous = position
+   862	    return transitions
+   863	
+   864	
+   865	def _threshold_reached_at(
+   866	    frame: pd.DataFrame,
+   867	    positions: list[str],
+   868	    cross_through: list[bool],
+   869	    *,
+   870	    threshold_kind: str,
+   871	) -> str:
+   872	    cross_count = 0
+   873	    alternating = 0
+   874	    inside_count = 0
+   875	    previous = ""
+   876	    for idx, timestamp in enumerate(frame["Timestamp"]):
+   877	        position = positions[idx]
+   878	        if cross_through[idx]:
+   879	            cross_count += 1
+   880	        if position == "INSIDE":
+   881	            inside_count += 1
+   882	        elif previous and position != previous:
+   883	            alternating += 1
+   884	        if position != "INSIDE":
+   885	            previous = position
+   886	        if threshold_kind == "cross_through" and cross_count >= MAX_CROSS_THROUGH_COUNT:
+   887	            return _format_ts(timestamp)
+   888	        if threshold_kind == "alternating_close" and alternating >= MAX_ALTERNATING_CLOSE_COUNT:
+   889	            return _format_ts(timestamp)
+   890	        if threshold_kind == "inside_bars" and inside_count >= MAX_BARS_INSIDE_ZONE_LIFETIME:
+   891	            return _format_ts(timestamp)
+   892	    return _format_ts(frame.iloc[-1]["Timestamp"])
+   893	
+   894	
+   895	def _sweep_transition_timestamps(
+   896	    row: dict[str, object], frame: pd.DataFrame, lower: float, upper: float
+   897	) -> list[str]:
+   898	    if str(row.get("side", "")) == "BUY_SIDE":
+   899	        swept = pd.to_numeric(frame["HiPrice"], errors="coerce") > upper
+   900	    else:
+   901	        swept = pd.to_numeric(frame["LowPrice"], errors="coerce") < lower
+   902	    timestamps: list[str] = []
+   903	    previous = False
+   904	    for is_swept, timestamp in zip(swept.tolist(), frame["Timestamp"]):
+   905	        if is_swept and not previous:
+   906	            timestamps.append(_format_ts(timestamp))
+   907	        previous = bool(is_swept)
+   908	    return timestamps
+   909	
+   910	
+   911	def _m1_interaction_count(
+   912	    row: dict[str, object], frame: pd.DataFrame, lower: float, upper: float
+   913	) -> int:
+   914	    highs = pd.to_numeric(frame["HiPrice"], errors="coerce")
+   915	    lows = pd.to_numeric(frame["LowPrice"], errors="coerce")
+   916	    if str(row.get("side", "")) == "BUY_SIDE":
+   917	        interacted = highs >= lower
+   918	    else:
+   919	        interacted = lows <= upper
+   920	    current_count = int(interacted.sum())
+   921	    previous_count = int(float(row.get("m1_interaction_count", 0) or 0))
+   922	    return max(previous_count, current_count)
+   923	
+   924	
+   925	def _htf_lifecycle_metrics(
+   926	    row: dict[str, object], feed: pd.DataFrame, lower: float, upper: float,
+   927	    *, closed_htf_only: bool = False,
+   928	) -> dict[str, object]:
+   929	    previous_sweeps = int(float(row.get("htf_sweep_count", 0) or 0))
+   930	    previous_close_through = int(float(row.get("htf_close_through_count", 0) or 0))
+   931	    previous_acceptance = int(float(row.get("htf_acceptance_count", 0) or 0))
+   932	    history_context_start = str(row.get("history_context_start", "") or row.get("first_seen_at", "") or "")
+   933	    if not _has_htf_source(row):
+   934	        return {
+   935	            "htf_sweep_count": previous_sweeps,
+   936	            "htf_close_through_count": previous_close_through,
+   937	            "htf_acceptance_count": previous_acceptance,
+   938	            "history_context_start": history_context_start,
+   939	            "history_context_incomplete": _bool_text(row.get("history_context_incomplete", False)),
+   940	        }
+   941	
+   942	    metric_timeframe = _htf_metric_timeframe(row)
+   943	    try:
+   944	        htf_frame = aggregate_timeframe(feed, metric_timeframe)
+   945	        if closed_htf_only and not htf_frame.empty:
+   946	            # Opt-in research adapter: inputs here have minute-OPEN labels.
+   947	            # A partial hour, missing minute or duplicate cannot confirm HTF state.
+   948	            minutes = {"M15": 15, "H1": 60, "H4": 240}[metric_timeframe]
+   949	            rule = {"M15": "15min", "H1": "h", "H4": "4h"}[metric_timeframe]
+   950	            grouped = feed.groupby(feed["Timestamp"].dt.floor(rule))["Timestamp"]
+   951	            counts, unique = grouped.size(), grouped.nunique()
+   952	            complete = (
+   953	                htf_frame["Timestamp"].map(counts).eq(minutes)
+   954	                & htf_frame["Timestamp"].map(unique).eq(minutes)
+   955	                & htf_frame["source_start"].eq(htf_frame["Timestamp"])
+   956	                & htf_frame["source_end"].eq(htf_frame["Timestamp"] + pd.Timedelta(minutes=minutes - 1))
+   957	            )
+   958	            htf_frame = htf_frame.loc[complete].copy()
+   959	    except Exception:
+   960	        htf_frame = pd.DataFrame()
+   961	    if htf_frame.empty:
+   962	        return {
+   963	            "htf_sweep_count": previous_sweeps,
+   964	            "htf_close_through_count": previous_close_through,
+   965	            "htf_acceptance_count": previous_acceptance,
+   966	            "history_context_start": history_context_start,
+   967	            "history_context_incomplete": "true",
+   968	        }
+   969	
+   970	    start_text = str(row.get("htf_confirmation_timestamp", "") or row.get("first_seen_at", ""))
+   971	    if start_text:
+   972	        htf_frame = htf_frame[htf_frame["Timestamp"] >= pd.Timestamp(start_text)]
+   973	    if htf_frame.empty:
+   974	        return {
+   975	            "htf_sweep_count": previous_sweeps,
+   976	            "htf_close_through_count": previous_close_through,
+   977	            "htf_acceptance_count": previous_acceptance,
+   978	            "history_context_start": history_context_start or _format_ts(feed["Timestamp"].min()),
+   979	            "history_context_incomplete": _bool_text(row.get("history_context_incomplete", False)),
+   980	        }
+   981	
+   982	    if str(row.get("side", "")) == "BUY_SIDE":
+   983	        swept = pd.to_numeric(htf_frame["HiPrice"], errors="coerce") > upper
+   984	        closed_through = pd.to_numeric(htf_frame["ClosePrice"], errors="coerce") > upper
+   985	    else:
+   986	        swept = pd.to_numeric(htf_frame["LowPrice"], errors="coerce") < lower
+   987	        closed_through = pd.to_numeric(htf_frame["ClosePrice"], errors="coerce") < lower
+   988	    htf_sweeps = _transition_count(swept.tolist())
+   989	    htf_close_through = int(closed_through.sum())
+   990	    htf_acceptance = _accepted_run_count(closed_through.tolist())
+   991	    return {
+   992	        "htf_sweep_count": max(previous_sweeps, htf_sweeps),
+   993	        "htf_close_through_count": max(previous_close_through, htf_close_through),
+   994	        "htf_acceptance_count": max(previous_acceptance, htf_acceptance),
+   995	        "history_context_start": history_context_start or _format_ts(htf_frame["source_start"].min()),
+   996	        "history_context_incomplete": _bool_text(row.get("history_context_incomplete", False)),
+   997	    }
+   998	
+   999	
+  1000	def _transition_count(flags: list[bool]) -> int:
+  1001	    count = 0
+  1002	    previous = False
+  1003	    for flag in flags:
+  1004	        if flag and not previous:
+  1005	            count += 1
+  1006	        previous = bool(flag)
+  1007	    return count
+  1008	
+  1009	
+  1010	def _accepted_run_count(flags: list[bool]) -> int:
+  1011	    accepted = 0
+  1012	    run = 0
+  1013	    counted_run = False
+  1014	    for flag in flags:
+  1015	        if flag:
+  1016	            run += 1
+  1017	            if run >= ACCEPTANCE_CLOSE_BARS and not counted_run:
+  1018	                accepted += 1
+  1019	                counted_run = True
+  1020	        else:
+  1021	            run = 0
+  1022	            counted_run = False
+  1023	    return accepted
+  1024	
+  1025	
+  1026	def _consecutive_threshold_at(frame: pd.DataFrame, flags: list[bool]) -> str:
+  1027	    count = 0
+  1028	    for is_flagged, timestamp in zip(flags, frame["Timestamp"]):
+  1029	        count = count + 1 if is_flagged else 0
+  1030	        if count >= ACCEPTANCE_CLOSE_BARS:
+  1031	            return _format_ts(timestamp)
+  1032	    return ""
+  1033	
+  1034	
+  1035	def _failed_acceptance_count(
+  1036	    row: dict[str, object],
+  1037	    frame: pd.DataFrame,
+  1038	    close_above: list[bool],
+  1039	    close_below: list[bool],
+  1040	    lower: float,
+  1041	    upper: float,
+  1042	) -> int:
+  1043	    closes = pd.to_numeric(frame["ClosePrice"], errors="coerce").tolist()
+  1044	    if str(row.get("side", "")) == "BUY_SIDE":
+  1045	        attempt_flags = close_above
+  1046	        failed_return = lambda close: float(close) <= upper
+  1047	    else:
+  1048	        attempt_flags = close_below
+  1049	        failed_return = lambda close: float(close) >= lower
+  1050	
+  1051	    failures = 0
+  1052	    idx = 0
+  1053	    while idx < len(attempt_flags):
+  1054	        if not attempt_flags[idx]:
+  1055	            idx += 1
+  1056	            continue
+  1057	        run_start = idx
+  1058	        while idx < len(attempt_flags) and attempt_flags[idx]:
+  1059	            idx += 1
+  1060	        run_length = idx - run_start
+  1061	        if run_length >= ACCEPTANCE_CLOSE_BARS:
+  1062	            continue
+  1063	        lookahead = closes[idx : idx + ACCEPTANCE_CLOSE_BARS]
+  1064	        if any(failed_return(close) for close in lookahead):
+  1065	            failures += 1
+  1066	    return failures
+  1067	
+  1068	
+  1069	def _rejection_without_sweep_count(
+  1070	    row: dict[str, object],
+  1071	    frame: pd.DataFrame,
+  1072	    lower: float,
+  1073	    upper: float,
+  1074	    core_lower: float,
+  1075	    core_upper: float,
+  1076	) -> int:
+  1077	    closes = pd.to_numeric(frame["ClosePrice"], errors="coerce")
+  1078	    highs = pd.to_numeric(frame["HiPrice"], errors="coerce")
+  1079	    lows = pd.to_numeric(frame["LowPrice"], errors="coerce")
+  1080	    if str(row.get("side", "")) == "BUY_SIDE":
+  1081	        approached_without_sweep = (highs >= core_lower) & (highs <= upper)
+  1082	        away = closes < core_lower
+  1083	    else:
+  1084	        approached_without_sweep = (lows <= core_upper) & (lows >= lower)
+  1085	        away = closes > core_upper
+  1086	    count = 0
+  1087	    pending = False
+  1088	    for approached, moved_away in zip(approached_without_sweep.tolist(), away.tolist()):
+  1089	        if approached:
+  1090	            pending = True
+  1091	        elif pending and moved_away:
+  1092	            count += 1
+  1093	            pending = False
+  1094	    return count
+  1095	
+  1096	
+  1097	def _drift_away_confirmed_at(
+  1098	    row: dict[str, object],
+  1099	    frame: pd.DataFrame,
+  1100	    first_sweep_at: str,
+  1101	    failed_acceptance_count: int,
+  1102	    lower: float,
+  1103	    upper: float,
+  1104	    core_lower: float,
+  1105	    core_upper: float,
+  1106	) -> str:
+  1107	    if not first_sweep_at and failed_acceptance_count <= 0:
+  1108	        return ""
+  1109	    start = pd.Timestamp(first_sweep_at) if first_sweep_at else pd.Timestamp(frame.iloc[0]["Timestamp"])
+  1110	    post = frame[frame["Timestamp"] >= start]
+  1111	    closes = pd.to_numeric(post["ClosePrice"], errors="coerce")
+  1112	    if str(row.get("side", "")) == "BUY_SIDE":
+  1113	        drift = closes < min(core_lower, lower)
+  1114	    else:
+  1115	        drift = closes > max(core_upper, upper)
+  1116	    found = post[drift]
+  1117	    return "" if found.empty else _format_ts(found.iloc[0]["Timestamp"])
+  1118	
+  1119	
+  1120	def _zone_behavior_state(
+  1121	    *,
+  1122	    row: dict[str, object],
+  1123	    is_broad: bool,
+  1124	    clean_reaction_at: str,
+  1125	    accepted_above_at: str,
+  1126	    accepted_below_at: str,
+  1127	    failed_acceptance_count: int,
+  1128	    rejection_without_sweep_count: int,
+  1129	    drift_away_confirmed_at: str,
+  1130	    resweep_count: int,
+  1131	    true_broad_chop: bool,
+  1132	) -> str:
+  1133	    if not is_broad or true_broad_chop:
+  1134	        return "NONE"
+  1135	    if accepted_above_at and not accepted_below_at:
+  1136	        return "ACCEPTED_ABOVE_ZONE"
+  1137	    if accepted_below_at and not accepted_above_at:
+  1138	        return "ACCEPTED_BELOW_ZONE"
+  1139	    if drift_away_confirmed_at:
+  1140	        return "DRIFT_AWAY_FROM_ZONE"
+  1141	    if failed_acceptance_count >= 2:
+  1142	        return "DISTRIBUTION_CANDIDATE"
+  1143	    if failed_acceptance_count >= 1:
+  1144	        return "FAILED_ACCEPTANCE"
+  1145	    if rejection_without_sweep_count >= 1 or clean_reaction_at:
+  1146	        return "REJECTION_FROM_ZONE"
+  1147	    if resweep_count >= 1:
+  1148	        return "REPEATED_SWEEP_ZONE"
+  1149	    if str(row.get("consumption_status", "")) == "SWEPT_ONCE":
+  1150	        return "RETEST_OF_SWEPT_ZONE"
+  1151	    return "NONE"
+  1152	
+  1153	
+  1154	def _clean_reaction_at(row: dict[str, object], feed: pd.DataFrame) -> str:
+  1155	    if str(row.get("status", "")) in {"REACTED", "FLIPPED_REACTION_ZONE"}:
+  1156	        return str(row.get("last_touch_at", "") or row.get("last_cross_at", ""))
+  1157	
+  1158	    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+  1159	    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+  1160	    if str(row["side"]) == "BUY_SIDE":
+  1161	        crossed = feed[feed["HiPrice"].astype(float) > upper]
+  1162	        away_predicate = lambda close: float(close) < lower
+  1163	    else:
+  1164	        crossed = feed[feed["LowPrice"].astype(float) < lower]
+  1165	        away_predicate = lambda close: float(close) > upper
+  1166	    if crossed.empty:
+  1167	        return ""
+  1168	
+  1169	    cross_ts = pd.Timestamp(crossed.iloc[0]["Timestamp"])
+  1170	    post = feed[feed["Timestamp"] >= cross_ts].head(REACTION_LOOKAHEAD_BARS_FOR_LIFECYCLE + 1)
+  1171	    inside_seen = False
+  1172	    for _, candle in post.iterrows():
+  1173	        close = float(candle["ClosePrice"])
+  1174	        if lower <= close <= upper:
+  1175	            inside_seen = True
+  1176	        if inside_seen and away_predicate(close):
+  1177	            return _format_ts(candle["Timestamp"])
+  1178	    return ""
+  1179	
+  1180	
+  1181	def _is_active_forward(row: dict[str, object] | pd.Series) -> bool:
+  1182	    role = str(row.get("active_forward_role", "") or "FRESH_LIQUIDITY")
+  1183	    if role in {"AUDIT_ONLY", "INACTIVE"} | LOCAL_CONTEXT_ACTIVE_FORWARD_ROLES:
+  1184	        return False
+  1185	    if role == "FRESH_LIQUIDITY" and _has_m15_source(row):
+  1186	        return False
+  1187	    if role == "FRESH_LIQUIDITY" and local_session_context_role(row):
+  1188	        return False
+  1189	    status = str(row.get("status", ""))
+  1190	    mode = str(row.get("structural_zone_mode", ""))
+  1191	    status_ok = status in ACTIVE_FORWARD_STATUSES or (
+  1192	        status == "CROSSED_UNCLASSIFIED"
+  1193	        and mode in BROAD_STRUCTURAL_MODES
+  1194	        and role in NON_FRESH_ACTIVE_ROLES
+  1195	    )
+  1196	    if not status_ok:
+  1197	        return False
+  1198	    if str(row.get("precision_status", "")) == PRECISION_TOO_WIDE:
+  1199	        return False
+  1200	    if str(row.get("consumption_status", "")) in INACTIVE_CONSUMPTION_STATUSES:
+  1201	        return False
+  1202	    flag = row.get("active_forward", True)
+  1203	    if str(flag).strip() == "":
+  1204	        return True
+  1205	    return _bool_value(flag)
+  1206	
+  1207	
+  1208	def _active_forward_mask(registry: pd.DataFrame) -> pd.Series:
+  1209	    if registry.empty:
+  1210	        return pd.Series(dtype=bool)
+  1211	    return registry.apply(_is_active_forward, axis=1)
+  1212	
+  1213	
+  1214	def _apply_expiry(registry: pd.DataFrame) -> pd.DataFrame:
+  1215	    registry = _normalize_registry(registry)
+  1216	    rows = []
+  1217	    for row in registry.to_dict("records"):
+  1218	        if (
+  1219	            row["status"] in CARRY_FORWARD_STATUSES
+  1220	            and int(float(row["age_days"])) > MAX_ZONE_AGE_DAYS
+  1221	            and not _expiry_exempt(row)
+  1222	        ):
+  1223	            row = row.copy()
+  1224	            row["status"] = "EXPIRED"
+  1225	            row["consumption_status"] = "EXPIRED"
+  1226	            row["active_forward"] = "false"
+  1227	            row["active_forward_role"] = "INACTIVE"
+  1228	            row["consumed_at"] = row.get("last_updated_at", "") or row.get("last_seen_at", "")
+  1229	            row["invalidation_reason"] = MAX_ZONE_AGE_REASON
+  1230	            row["consumption_reason"] = MAX_ZONE_AGE_REASON
+  1231	        row["active_forward_role"] = _active_forward_role(row)
+  1232	        row["active_forward"] = _bool_text(_is_active_forward(row))
+  1233	        rows.append(row)
+  1234	    return _normalize_registry(pd.DataFrame(rows, columns=REGISTRY_COLUMNS))
+  1235	
+  1236	
+  1237	def _expiry_exempt(row: dict[str, object]) -> bool:
+  1238	    zone_type = str(row["zone_type"])
+  1239	    source_timeframes = set(str(row["source_timeframes"]).split("|"))
+  1240	    confidence_score = int(float(row["confidence_score"]))
+  1241	    precision_status = _row_precision_status(row)
+  1242	    if precision_status in {PRECISION_LOW, PRECISION_TOO_WIDE}:
+  1243	        return False
+  1244	    if _has_explicit_htf_lineage(row):
+  1245	        return True
+  1246	    if row["confidence_tier"] == "HIGH" and "H4" in source_timeframes:
+  1247	        return True
+  1248	    if "PDH" in zone_type or "PDL" in zone_type:
+  1249	        return True
+  1250	    if "CLUSTERED" in zone_type and confidence_score >= 70:
+  1251	        return True
+  1252	    return False
+  1253	
+  1254	
+  1255	def _normalize_registry(registry: pd.DataFrame | None) -> pd.DataFrame:
+  1256	    if registry is None or registry.empty:
+  1257	        return pd.DataFrame(columns=REGISTRY_COLUMNS)
+  1258	    frame = registry.copy()
+  1259	    for column in REGISTRY_COLUMNS:
+  1260	        if column not in frame.columns:
+  1261	            frame[column] = ""
+  1262	    frame = frame[REGISTRY_COLUMNS]
+  1263	    for column in [
+  1264	        "price_lower",
+  1265	        "price_upper",
+  1266	        "price_mid",
+  1267	        "htf_origin_price",
+  1268	        "confidence_score",
+  1269	        "age_bars",
+  1270	        "age_days",
+  1271	        "touch_count",
+  1272	        "cross_count",
+  1273	        "cross_through_count",
+  1274	        "close_above_count",
+  1275	        "close_below_count",
+  1276	        "alternating_close_count",
+  1277	        "bars_inside_zone_lifetime",
+  1278	        "zone_outer_lower",
+  1279	        "zone_outer_upper",
+  1280	        "zone_core_lower",
+  1281	        "zone_core_upper",
+  1282	        "resweep_count",
+  1283	        "failed_acceptance_count",
+  1284	        "rejection_without_sweep_count",
+  1285	        "m1_interaction_count",
+  1286	        "htf_sweep_count",
+  1287	        "htf_close_through_count",
+  1288	        "htf_acceptance_count",
+  1289	        "active_days",
+  1290	        "source_level_count",
+  1291	        "source_ref_count",
+  1292	        "cluster_member_count",
+  1293	        "zone_width",
+  1294	        "zone_width_pct",
+  1295	    ]:
+  1296	        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
+  1297	    text_columns = [column for column in REGISTRY_COLUMNS if column not in frame.select_dtypes("number").columns]
+  1298	    for column in text_columns:
+  1299	        frame[column] = frame[column].fillna("").astype(str)
+  1300	    blank_consumption = frame["consumption_status"].astype(str).str.len().eq(0)
+  1301	    frame.loc[blank_consumption, "consumption_status"] = "FRESH"
+  1302	    for target, fallback in [
+  1303	        ("zone_outer_lower", "price_lower"),
+  1304	        ("zone_outer_upper", "price_upper"),
+  1305	        ("zone_core_lower", "price_lower"),
+  1306	        ("zone_core_upper", "price_upper"),
+  1307	    ]:
+  1308	        blank = pd.to_numeric(frame[target], errors="coerce").fillna(0).eq(0)
+  1309	        frame.loc[blank, target] = frame.loc[blank, fallback]
+  1310	    blank_origin_start = frame["zone_origin_start"].astype(str).str.len().eq(0)
+  1311	    frame.loc[blank_origin_start, "zone_origin_start"] = frame.loc[blank_origin_start, "first_seen_at"]
+  1312	    blank_origin_end = frame["zone_origin_end"].astype(str).str.len().eq(0)
+  1313	    frame.loc[blank_origin_end, "zone_origin_end"] = frame.loc[blank_origin_end, "last_seen_at"]
+  1314	    blank_mode = frame["structural_zone_mode"].astype(str).str.len().eq(0)
+  1315	    frame.loc[blank_mode, "structural_zone_mode"] = frame.loc[blank_mode].apply(
+  1316	        _structural_zone_mode_from_row,
+  1317	        axis=1,
+  1318	    )
+  1319	    blank_primary = frame["source_timeframe_primary"].astype(str).str.len().eq(0)
+  1320	    frame.loc[blank_primary, "source_timeframe_primary"] = frame.loc[blank_primary].apply(
+  1321	        _source_timeframe_primary_from_row,
+  1322	        axis=1,
+  1323	    )
+  1324	    blank_htf_status = frame["htf_lifecycle_status"].astype(str).str.len().eq(0)
+  1325	    frame.loc[blank_htf_status, "htf_lifecycle_status"] = frame.loc[blank_htf_status].apply(
+  1326	        _lifecycle_status_from_row,
+  1327	        axis=1,
+  1328	    )
+  1329	    blank_history_start = frame["history_context_start"].astype(str).str.len().eq(0)
+  1330	    frame.loc[blank_history_start, "history_context_start"] = frame.loc[
+  1331	        blank_history_start, "first_seen_at"
+  1332	    ]
+  1333	    frame["history_context_incomplete"] = frame["history_context_incomplete"].map(_bool_text)
+  1334	    blank_importance = frame["sweep_importance_class"].astype(str).str.len().eq(0)
+  1335	    frame.loc[blank_importance, "sweep_importance_class"] = frame.loc[blank_importance].apply(
+  1336	        _sweep_importance_class_from_row,
+  1337	        axis=1,
+  1338	    )
+  1339	    blank_behavior = frame["zone_behavior_state"].astype(str).str.len().eq(0)
+  1340	    frame.loc[blank_behavior, "zone_behavior_state"] = "NONE"
+  1341	    blank_role = frame["active_forward_role"].astype(str).str.len().eq(0)
+  1342	    frame.loc[blank_role, "active_forward_role"] = frame.loc[blank_role].apply(
+  1343	        _active_forward_role,
+  1344	        axis=1,
+  1345	    )
+  1346	    blank_active_forward = frame["active_forward"].astype(str).str.len().eq(0)
+  1347	    frame.loc[blank_active_forward, "active_forward"] = frame.loc[blank_active_forward].apply(
+  1348	        lambda row: _bool_text(_is_active_forward(row)),
+  1349	        axis=1,
+  1350	    )
+  1351	    frame["active_forward"] = frame["active_forward"].map(_bool_text)
+  1352	    if "precision_status" in frame.columns:
+  1353	        blank_precision = frame["precision_status"].astype(str).str.len().eq(0)
+  1354	        frame.loc[blank_precision, "precision_status"] = frame.loc[blank_precision].apply(
+  1355	            lambda row: precision_status_for_width(
+  1356	                _zone_width_pct(
+  1357	                    float(row["price_lower"]),
+  1358	                    float(row["price_upper"]),
+  1359	                    float(row["price_mid"]),
+  1360	                )
+  1361	            ),
+  1362	            axis=1,
+  1363	        )
+  1364	    if "source_ref_count" in frame.columns and "source_level_count" in frame.columns:
+  1365	        missing_ref_count = pd.to_numeric(frame["source_ref_count"], errors="coerce").fillna(0).eq(0)
+  1366	        frame.loc[missing_ref_count, "source_ref_count"] = frame.loc[
+  1367	            missing_ref_count, "source_level_count"
+  1368	        ]
+  1369	    return frame[REGISTRY_COLUMNS]
+  1370	
+  1371	
+  1372	def _concat_registry_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+  1373	    populated = [frame for frame in frames if frame is not None and not frame.empty]
+  1374	    if not populated:
+  1375	        return pd.DataFrame(columns=REGISTRY_COLUMNS)
+  1376	    return pd.concat(populated, ignore_index=True)
+  1377	
+  1378	
+  1379	def _next_zone_index(registry: pd.DataFrame) -> int:
+  1380	    max_index = 0
+  1381	    for zone_id in registry.get("zone_id", []):
+  1382	        try:
+  1383	            max_index = max(max_index, int(str(zone_id).split("_")[-1]))
+  1384	        except ValueError:
+  1385	            continue
+  1386	    return max_index + 1
+  1387	
+  1388	
+  1389	def _merge_tolerance(rows: list[dict[str, object]]) -> float:
+  1390	    mids = [float(row["price_mid"]) for row in rows]
+  1391	    reference = sum(mids) / len(mids) if mids else 0
+  1392	    return max(10.0, reference * 0.0005)
+  1393	
+  1394	
+  1395	def _registry_merged_zone_type(side: str, source_zone_types: list[str]) -> str:
+  1396	    if len(source_zone_types) == 1:
+  1397	        return source_zone_types[0]
+  1398	    for pattern_zone_type in [
+  1399	        "DOUBLE_TOP_LIQUIDITY_ZONE",
+  1400	        "DOUBLE_BOTTOM_LIQUIDITY_ZONE",
+  1401	        "HNS_HEAD_LIQUIDITY_ZONE",
+  1402	        "HNS_SHOULDER_LIQUIDITY_ZONE",
+  1403	        "HNS_NECKLINE_ZONE",
+  1404	        "INVERSE_HNS_HEAD_LIQUIDITY_ZONE",
+  1405	        "INVERSE_HNS_SHOULDER_LIQUIDITY_ZONE",
+  1406	        "INVERSE_HNS_NECKLINE_ZONE",
+  1407	    ]:
+  1408	        if pattern_zone_type in source_zone_types:
+  1409	            return pattern_zone_type
+  1410	    if side == "BUY_SIDE":
+  1411	        return "CLUSTERED_BUY_SIDE_ZONE"
+  1412	    return "CLUSTERED_SELL_SIDE_ZONE"
+  1413	
+  1414	
+  1415	def _merged_confidence_score(
+  1416	    rows: list[dict[str, object]], source_timeframes: str, source_zone_types: list[str]
+  1417	) -> int:
+  1418	    return int(
+  1419	        _merged_confidence_components(rows, source_timeframes, source_zone_types)[
+  1420	            "final_confidence_score"
+  1421	        ]
+  1422	    )
+  1423	
+  1424	
+  1425	def _merged_confidence_components(
+  1426	    rows: list[dict[str, object]], source_timeframes: str, source_zone_types: list[str]
+  1427	) -> dict[str, object]:
+  1428	    prior_score = max(int(float(row["confidence_score"])) for row in rows)
+  1429	    bounded_prior_score = min(prior_score, 88)
+  1430	    source_count = len(_pipe_union(row["source_level_ids"] for row in rows).split("|"))
+  1431	    max_known_source_count = max(
+  1432	        len([part for part in str(row["source_level_ids"]).split("|") if part])
+  1433	        for row in rows
+  1434	    )
+  1435	    fresh_source_count = max(source_count - max_known_source_count, 0)
+  1436	    source_families = _registry_source_families(source_timeframes, source_zone_types)
+  1437	    source_diversity_bonus = min(max(len(source_families) - 1, 0) * 2, 6)
+  1438	    fresh_source_bonus = min(fresh_source_count * 3, 6)
+  1439	    raw_source_count_bonus = fresh_source_bonus
+  1440	    source_count_bonus = fresh_source_bonus
+  1441	    h4_component = 2 if "H4" in source_timeframes and fresh_source_count > 0 else 0
+  1442	    pdh_pdl_component = (
+  1443	        4
+  1444	        if any("PDH" in zone_type or "PDL" in zone_type for zone_type in source_zone_types)
+  1445	        else 0
+  1446	    )
+  1447	    width_penalty = _width_penalty(
+  1448	        zone_width_pct := _zone_width_pct(
+  1449	            min(float(row["price_lower"]) for row in rows),
+  1450	            max(float(row["price_upper"]) for row in rows),
+  1451	            (
+  1452	                min(float(row["price_lower"]) for row in rows)
+  1453	                + max(float(row["price_upper"]) for row in rows)
+  1454	            )
+  1455	            / 2,
+  1456	        )
+  1457	    )
+  1458	    carry_forward_decay_or_penalty = _carry_forward_decay_or_penalty(
+  1459	        rows=rows,
+  1460	        fresh_source_count=fresh_source_count,
+  1461	        source_families=source_families,
+  1462	    )
+  1463	    data_quality_penalty = (
+  1464	        -5 if _quality_values(row["data_quality"] for row in rows) != "RAW" else 0
+  1465	    )
+  1466	    pre_clamp_score = (
+  1467	        bounded_prior_score
+  1468	        + source_diversity_bonus
+  1469	        + fresh_source_bonus
+  1470	        + h4_component
+  1471	        + pdh_pdl_component
+  1472	        + width_penalty
+  1473	        + carry_forward_decay_or_penalty
+  1474	        + data_quality_penalty
+  1475	    )
+  1476	    final_score = max(0, min(100, pre_clamp_score))
+  1477	    precision_status = precision_status_for_width(zone_width_pct)
+  1478	    return {
+  1479	        "base_score": 0,
+  1480	        "timeframe_score": h4_component,
+  1481	        "timeframe_component_total": h4_component,
+  1482	        "h1_component": None,
+  1483	        "h4_component": h4_component,
+  1484	        "session_component": None,
+  1485	        "pdh_pdl_component": pdh_pdl_component,
+  1486	        "equal_level_component": None,
+  1487	        "source_diversity_bonus": source_diversity_bonus,
+  1488	        "raw_source_count_bonus": raw_source_count_bonus,
+  1489	        "source_count_bonus": source_count_bonus,
+  1490	        "cluster_bonus": 0,
+  1491	        "touch_bonus": None,
+  1492	        "width_penalty": width_penalty,
+  1493	        "precision_status": precision_status,
+  1494	        "hard_wide_zone_width_pct": HARD_WIDE_ZONE_WIDTH_PCT,
+  1495	        "data_quality_penalty": data_quality_penalty,
+  1496	        "carry_forward_decay_or_penalty": carry_forward_decay_or_penalty,
+  1497	        "carry_forward_prior_score": prior_score,
+  1498	        "bounded_prior_score": bounded_prior_score,
+  1499	        "fresh_source_count": fresh_source_count,
+  1500	        "pre_clamp_score": pre_clamp_score,
+  1501	        "final_confidence_score": final_score,
+  1502	        "confidence_tier": _confidence_tier(final_score),
+  1503	        "source_level_count": source_count,
+  1504	        "cluster_member_count": len(rows),
+  1505	        "source_timeframes": source_timeframes,
+  1506	        "source_families": "|".join(sorted(source_families)),
+  1507	        "source_zone_types": "|".join(source_zone_types),
+  1508	        "merged_from_zone_ids": sorted(str(row["zone_id"]) for row in rows),
+  1509	        "registry_status_before": "|".join(sorted({str(row["status"]) for row in rows})),
+  1510	        "registry_status_after": "post_merge_pre_lifecycle",
+  1511	        "instrumentation_limitations": (
+  1512	            "registry merge uses bounded prior confidence and fresh-source bonuses only; "
+  1513	            "post-event observation metrics are not used"
+  1514	        ),
+  1515	    }
+  1516	
+  1517	
+  1518	def _registry_source_families(source_timeframes: str, source_zone_types: list[str]) -> set[str]:
+  1519	    timeframes = {part for part in str(source_timeframes).split("|") if part}
+  1520	    zone_type_text = "|".join(source_zone_types)
+  1521	    families: set[str] = set()
+  1522	    for timeframe in ["H4", "H1", "M15", "SESSION"]:
+  1523	        if timeframe in timeframes:
+  1524	            families.add(timeframe)
+  1525	    if "PDH" in zone_type_text or "PDL" in zone_type_text:
+  1526	        families.add("PDH_PDL")
+  1527	    if "EQUAL_HIGHS" in zone_type_text or "EQUAL_LOWS" in zone_type_text:
+  1528	        families.add("EQUAL_LEVEL")
+  1529	    return families
+  1530	
+  1531	
+  1532	def _carry_forward_decay_or_penalty(
+  1533	    *, rows: list[dict[str, object]], fresh_source_count: int, source_families: set[str]
+  1534	) -> int:
+  1535	    max_active_days = max(int(float(row.get("active_days", 1) or 1)) for row in rows)
+  1536	    if fresh_source_count > 0:
+  1537	        return 0
+  1538	    decay = max(max_active_days - 3, 0) * 2
+  1539	    cap = 6 if source_families & {"H4", "PDH_PDL"} else 10
+  1540	    return -min(decay, cap)
+  1541	
+  1542	
+  1543	def _width_penalty(zone_width_pct: float) -> int:
+  1544	    if zone_width_pct >= 0.50:
+  1545	        return -12
+  1546	    if zone_width_pct >= 0.25:
+  1547	        return -6
+  1548	    return 0
+  1549	
+  1550	
+  1551	def _row_precision_status(row: dict[str, object]) -> str:
+  1552	    precision_status = str(row.get("precision_status", "") or "")
+  1553	    if precision_status:
+  1554	        return precision_status
+  1555	    return precision_status_for_width(
+  1556	        _zone_width_pct(
+  1557	            float(row.get("price_lower", 0) or 0),
+  1558	            float(row.get("price_upper", 0) or 0),
+  1559	            float(row.get("price_mid", 0) or 0),
+  1560	        )
+  1561	    )
+  1562	
+  1563	
+  1564	def _zone_width_pct(price_lower: float, price_upper: float, price_mid: float) -> float:
+  1565	    if price_mid <= 0:
+  1566	        return 0.0
+  1567	    return (price_upper - price_lower) / price_mid * 100.0
+  1568	
+  1569	
+  1570	def _instrumentation_from_row(row) -> dict[str, object]:
+  1571	    return {column: row[column] if column in row else "" for column in SCORE_INSTRUMENTATION_COLUMNS}
+  1572	
+  1573	
+  1574	def _pipe_union(values) -> str:
+  1575	    parts: set[str] = set()
+  1576	    for value in values:
+  1577	        parts.update(part for part in str(value).split("|") if part)
+  1578	    return "|".join(sorted(parts))
+  1579	
+  1580	
+  1581	def _merged_consumption_status(rows: list[dict[str, object]]) -> str:
+  1582	    if any(_has_htf_source(row) for row in rows):
+  1583	        statuses = [
+  1584	            str(row.get("consumption_status", "") or "FRESH")
+  1585	            for row in rows
+  1586	            if _has_htf_source(row)
+  1587	        ]
+  1588	        for status in ["SWEPT_ONCE", "REACTED", "TESTED"]:
+  1589	            if status in statuses:
+  1590	                return status
+  1591	        return "FRESH"
+  1592	    statuses = [str(row.get("consumption_status", "") or "FRESH") for row in rows]
+  1593	    for status in ["CONSUMED", "CHOPPED_THROUGH", "EXPIRED", "REACTED", "SWEPT_ONCE", "TESTED"]:
+  1594	        if status in statuses:
+  1595	            return status
+  1596	    return "FRESH"
+  1597	
+  1598	
+  1599	def _structural_zone_mode_from_row(row: dict[str, object] | pd.Series) -> str:
+  1600	    existing = str(row.get("structural_zone_mode", "") or "")
+  1601	    if existing:
+  1602	        return existing
+  1603	    if _has_htf_source(row):
+  1604	        return "HTF_STRUCTURAL_LEVEL"
+  1605	    zone_type = str(row.get("zone_type", ""))
+  1606	    if any(marker in zone_type for marker in ["DOUBLE_", "HNS_", "NECKLINE"]):
+  1607	        return "PATTERN_DERIVED_ZONE"
+  1608	    source_ids = [part for part in str(row.get("source_level_ids", "")).split("|") if part]
+  1609	    source_timeframes = set(str(row.get("source_timeframes", "")).split("|"))
+  1610	    if (
+  1611	        len(source_ids) > 1
+  1612	        or "CLUSTER" in source_timeframes
+  1613	        or zone_type.startswith("CLUSTERED_")
+  1614	        or zone_type in {"EQUAL_HIGHS_ZONE", "EQUAL_LOWS_ZONE"}
+  1615	        or float(row.get("zone_width_pct", 0) or 0) >= 0.25
+  1616	    ):
+  1617	        return "BROAD_STRUCTURAL_ZONE"
+  1618	    return "THIN_LEVEL"
+  1619	
+  1620	
+  1621	def _merged_structural_zone_mode(rows: list[dict[str, object]], source_zone_types: list[str]) -> str:
+  1622	    modes = {_structural_zone_mode_from_row(row) for row in rows}
+  1623	    if any("DOUBLE_" in zone_type or "HNS_" in zone_type or "NECKLINE" in zone_type for zone_type in source_zone_types):
+  1624	        return "PATTERN_DERIVED_ZONE"
+  1625	    if "PATTERN_DERIVED_ZONE" in modes:
+  1626	        return "PATTERN_DERIVED_ZONE"
+  1627	    if len(rows) > 1 or "BROAD_STRUCTURAL_ZONE" in modes:
+  1628	        return "BROAD_STRUCTURAL_ZONE"
+  1629	    if "HTF_STRUCTURAL_LEVEL" in modes:
+  1630	        return "HTF_STRUCTURAL_LEVEL"
+  1631	    if "REACTION_ZONE" in modes:
+  1632	        return "REACTION_ZONE"
+  1633	    if "THIN_LEVEL" in modes:
+  1634	        return "THIN_LEVEL"
+  1635	    return "UNKNOWN"
+  1636	
+  1637	
+  1638	def _merged_zone_behavior_state(rows: list[dict[str, object]]) -> str:
+  1639	    states = [str(row.get("zone_behavior_state", "") or "NONE") for row in rows]
+  1640	    for state in [
+  1641	        "ACCEPTED_ABOVE_ZONE",
+  1642	        "ACCEPTED_BELOW_ZONE",
+  1643	        "DRIFT_AWAY_FROM_ZONE",
+  1644	        "DISTRIBUTION_CANDIDATE",
+  1645	        "FAILED_ACCEPTANCE",
+  1646	        "REJECTION_FROM_ZONE",
+  1647	        "REPEATED_SWEEP_ZONE",
+  1648	        "RETEST_OF_SWEPT_ZONE",
+  1649	    ]:
+  1650	        if state in states:
+  1651	            return state
+  1652	    return "NONE"
+  1653	
+  1654	
+  1655	def _merged_active_forward_role(rows: list[dict[str, object]]) -> str:
+  1656	    roles = [str(row.get("active_forward_role", "") or "FRESH_LIQUIDITY") for row in rows]
+  1657	    if any(_has_htf_source(row) for row in rows):
+  1658	        for role in ["REACTION_ZONE", "RETEST_ZONE", "DISTRIBUTION_ZONE", "AUDIT_ONLY"]:
+  1659	            if role in roles:
+  1660	                return role
+  1661	        return "FRESH_LIQUIDITY"
+  1662	    if any(_has_m15_source(row) for row in rows):
+  1663	        for role in ["M15_CONSUMED", "M15_REACTION_ZONE", "M15_STRUCTURE_SWEEP", "M15_MINIMUM_STRUCTURE"]:
+  1664	            if role in roles:
+  1665	                return role
+  1666	        return "M15_MINIMUM_STRUCTURE"
+  1667	    for role in [
+  1668	        "INACTIVE",
+  1669	        "AUDIT_ONLY",
+  1670	        "DISTRIBUTION_ZONE",
+  1671	        "REACTION_ZONE",
+  1672	        "RETEST_ZONE",
+  1673	        "SESSION_CHOPPED",
+  1674	        "LOCAL_REPEATED_INTERACTION",
+  1675	        "LOCAL_NOISY_ZONE",
+  1676	        "LOCAL_SESSION_CONTEXT",
+  1677	    ]:
+  1678	        if role in roles:
+  1679	            return role
+  1680	    return "FRESH_LIQUIDITY"
+  1681	
+  1682	
+  1683	def _active_forward_role(row: dict[str, object] | pd.Series) -> str:
+  1684	    if str(row.get("status", "")) in INACTIVE_STATUSES:
+  1685	        return "INACTIVE"
+  1686	    if str(row.get("precision_status", "")) == PRECISION_TOO_WIDE:
+  1687	        return "INACTIVE"
+  1688	    if str(row.get("consumption_status", "")) in INACTIVE_CONSUMPTION_STATUSES:
+  1689	        return "INACTIVE"
+  1690	    local_context_role = local_session_context_role(row)
+  1691	    if local_context_role:
+  1692	        return local_context_role
+  1693	    if _has_m15_source(row):
+  1694	        return _m15_active_forward_role(row)
+  1695	    state = str(row.get("zone_behavior_state", "") or "NONE")
+  1696	    if state in {"DISTRIBUTION_CANDIDATE", "FAILED_ACCEPTANCE"}:
+  1697	        return "DISTRIBUTION_ZONE"
+  1698	    if state in {"REJECTION_FROM_ZONE", "DRIFT_AWAY_FROM_ZONE"}:
+  1699	        return "REACTION_ZONE"
+  1700	    if state in {"RETEST_OF_SWEPT_ZONE", "REPEATED_SWEEP_ZONE", "ACCEPTED_ABOVE_ZONE", "ACCEPTED_BELOW_ZONE"}:
+  1701	        return "RETEST_ZONE"
+  1702	    if str(row.get("status", "")) == "CROSSED_UNCLASSIFIED" and str(row.get("first_sweep_at", "") or ""):
+  1703	        return "AUDIT_ONLY"
+  1704	    return "FRESH_LIQUIDITY"
+  1705	
+  1706	
+  1707	def _has_htf_source(row: dict[str, object] | pd.Series) -> bool:
+  1708	    if str(row.get("htf_level_type", "") or ""):
+  1709	        return True
+  1710	    if str(row.get("source_timeframe_primary", "") or "") in {"H1", "H4"}:
+  1711	        return True
+  1712	    return bool({"H1", "H4"} & {part for part in str(row.get("source_timeframes", "") or "").split("|") if part})
+  1713	
+  1714	
+  1715	def _has_m15_source(row: dict[str, object] | pd.Series) -> bool:
+  1716	    if _has_htf_source(row):
+  1717	        return False
+  1718	    primary = str(row.get("source_timeframe_primary", "") or "")
+  1719	    source_timeframes = {
+  1720	        part for part in str(row.get("source_timeframes", "") or "").split("|") if part
+  1721	    }
+  1722	    zone_type = str(row.get("zone_type", "") or "")
+  1723	    return primary == "M15" or "M15" in source_timeframes or zone_type.startswith("M15_")
+  1724	
+  1725	
+  1726	def _m15_active_forward_role(row: dict[str, object] | pd.Series) -> str:
+  1727	    if str(row.get("consumption_status", "")) in INACTIVE_CONSUMPTION_STATUSES:
+  1728	        return "M15_CONSUMED"
+  1729	    state = str(row.get("zone_behavior_state", "") or "NONE")
+  1730	    if state in {"REJECTION_FROM_ZONE", "DRIFT_AWAY_FROM_ZONE", "DISTRIBUTION_CANDIDATE", "FAILED_ACCEPTANCE"}:
+  1731	        return "M15_REACTION_ZONE"
+  1732	    if str(row.get("first_sweep_at", "") or "") or str(row.get("consumption_status", "")) == "SWEPT_ONCE":
+  1733	        return "M15_STRUCTURE_SWEEP"
+  1734	    return "M15_MINIMUM_STRUCTURE"
+  1735	
+  1736	
+  1737	def local_session_context_role(row: dict[str, object] | pd.Series) -> str:
+  1738	    if not _is_local_session_context_source(row):
+  1739	        return ""
+  1740	    if _has_explicit_broad_behavior(row):
+  1741	        return ""
+  1742	    if str(row.get("consumption_status", "")) == "CHOPPED_THROUGH":
+  1743	        return "SESSION_CHOPPED"
+  1744	
+  1745	    resweep_count = int(float(row.get("resweep_count", 0) or 0))
+  1746	    failed_acceptance_count = int(float(row.get("failed_acceptance_count", 0) or 0))
+  1747	    m1_interaction_count = int(float(row.get("m1_interaction_count", 0) or 0))
+  1748	    if resweep_count > 0 or failed_acceptance_count > 0:
+  1749	        return "LOCAL_REPEATED_INTERACTION"
+  1750	    if m1_interaction_count >= LOCAL_SESSION_HEAVY_M1_INTERACTION_COUNT:
+  1751	        return "LOCAL_NOISY_ZONE"
+  1752	
+  1753	    status = str(row.get("status", ""))
+  1754	    sweep_class = str(row.get("sweep_importance_class", "") or "")
+  1755	    if (
+  1756	        str(row.get("first_sweep_at", "") or "")
+  1757	        or status in {"REACTED", "CROSSED_UNCLASSIFIED"}
+  1758	        or sweep_class == "LOCAL_SESSION_SWEEP"
+  1759	    ):
+  1760	        return "LOCAL_SESSION_CONTEXT"
+  1761	    return ""
+  1762	
+  1763	
+  1764	def _is_local_session_context_source(row: dict[str, object] | pd.Series) -> bool:
+  1765	    if _has_htf_source(row):
+  1766	        return False
+  1767	    if _has_m15_source(row):
+  1768	        return False
+  1769	    primary = _source_timeframe_primary_from_row(row)
+  1770	    source_timeframes = {
+  1771	        part for part in str(row.get("source_timeframes", "") or "").split("|") if part
+  1772	    }
+  1773	    sweep_class = str(row.get("sweep_importance_class", "") or "")
+  1774	    structural_mode = _structural_zone_mode_from_row(row)
+  1775	    return (
+  1776	        str(row.get("htf_lifecycle_status", "") or "") == "LOCAL_ONLY"
+  1777	        or primary in {"SESSION", "PATTERN"}
+  1778	        or "SESSION" in source_timeframes
+  1779	        or sweep_class.startswith("LOCAL_SESSION")
+  1780	        or structural_mode == "PATTERN_DERIVED_ZONE"
+  1781	    )
+  1782	
+  1783	
+  1784	def _has_explicit_broad_behavior(row: dict[str, object] | pd.Series) -> bool:
+  1785	    mode = _structural_zone_mode_from_row(row)
+  1786	    state = str(row.get("zone_behavior_state", "") or "NONE")
+  1787	    return mode in BROAD_STRUCTURAL_MODES and state != "NONE"
+  1788	
+  1789	
+  1790	def _has_explicit_htf_lineage(row: dict[str, object] | pd.Series) -> bool:
+  1791	    if str(row.get("htf_level_type", "") or ""):
+  1792	        return True
+  1793	    if str(row.get("htf_origin_timestamp", "") or ""):
+  1794	        return True
+  1795	    return _float_value(row.get("htf_origin_price", 0)) != 0
+  1796	
+  1797	
+  1798	def _htf_metric_timeframe(row: dict[str, object] | pd.Series) -> str:
+  1799	    primary = str(row.get("source_timeframe_primary", "") or "")
+  1800	    source_timeframes = {part for part in str(row.get("source_timeframes", "") or "").split("|") if part}
+  1801	    htf_level_type = str(row.get("htf_level_type", "") or "")
+  1802	    if primary == "H4" or "H4" in source_timeframes or htf_level_type.startswith("H4_"):
+  1803	        return "H4"
+  1804	    return "H1"
+  1805	
+  1806	
+  1807	def _float_value(value) -> float:
+  1808	    try:
+  1809	        parsed = float(value)
+  1810	    except (TypeError, ValueError):
+  1811	        return 0.0
+  1812	    if pd.isna(parsed):
+  1813	        return 0.0
+  1814	    return parsed
+  1815	
+  1816	
+  1817	def _source_timeframe_primary_from_row(row: dict[str, object] | pd.Series) -> str:
+  1818	    existing = str(row.get("source_timeframe_primary", "") or "")
+  1819	    if existing:
+  1820	        return existing
+  1821	    timeframes = {part for part in str(row.get("source_timeframes", "") or "").split("|") if part}
+  1822	    for timeframe in ["H4", "H1", "M15", "SESSION", "PATTERN", "D1", "CLUSTER"]:
+  1823	        if timeframe in timeframes:
+  1824	            return timeframe
+  1825	    return sorted(timeframes)[0] if timeframes else ""
+  1826	
+  1827	
+  1828	def _merged_source_timeframe_primary(rows: list[dict[str, object]], source_timeframes: str) -> str:
+  1829	    for timeframe in ["H4", "H1", "M15", "SESSION", "PATTERN", "D1", "CLUSTER"]:
+  1830	        if any(_source_timeframe_primary_from_row(row) == timeframe for row in rows):
+  1831	            return timeframe
+  1832	        if timeframe in {part for part in source_timeframes.split("|") if part}:
+  1833	            return timeframe
+  1834	    values = [_source_timeframe_primary_from_row(row) for row in rows]
+  1835	    values = [value for value in values if value]
+  1836	    return values[0] if values else ""
+  1837	
+  1838	
+  1839	def _merged_htf_text(rows: list[dict[str, object]], column: str) -> str:
+  1840	    htf_rows = [row for row in rows if _has_htf_source(row)]
+  1841	    candidates = htf_rows or rows
+  1842	    values = [str(row.get(column, "") or "") for row in candidates]
+  1843	    values = [value for value in values if value]
+  1844	    if not values:
+  1845	        return ""
+  1846	    if column in {"htf_origin_timestamp", "htf_confirmation_timestamp"}:
+  1847	        return min(values)
+  1848	    return values[0]
+  1849	
+  1850	
+  1851	def _merged_htf_price(rows: list[dict[str, object]], fallback: float) -> float:
+  1852	    htf_rows = [row for row in rows if _has_htf_source(row)]
+  1853	    values = [_float_value(row.get("htf_origin_price", 0)) for row in htf_rows]
+  1854	    values = [value for value in values if value != 0]
+  1855	    if not values:
+  1856	        return fallback if htf_rows else 0.0
+  1857	    return min(values, key=lambda value: abs(value - fallback))
+  1858	
+  1859	
+  1860	def _htf_lifecycle_status(
+  1861	    *,
+  1862	    has_htf: bool,
+  1863	    htf_sweep_count: int,
+  1864	    htf_close_through_count: int,
+  1865	    htf_acceptance_count: int,
+  1866	    history_context_incomplete: bool,
+  1867	) -> str:
+  1868	    if not has_htf:
+  1869	        return "LOCAL_ONLY"
+  1870	    if history_context_incomplete:
+  1871	        return "HTF_HISTORY_INCOMPLETE"
+  1872	    if htf_acceptance_count > 0:
+  1873	        return "HTF_ACCEPTED"
+  1874	    if htf_close_through_count > 0:
+  1875	        return "HTF_CLOSE_THROUGH"
+  1876	    if htf_sweep_count > 0:
+  1877	        return "HTF_SWEPT"
+  1878	    return "HTF_ACTIVE"
+  1879	
+  1880	
+  1881	def _lifecycle_status_from_row(row: dict[str, object] | pd.Series) -> str:
+  1882	    return _lifecycle_status_from_values(
+  1883	        row=row,
+  1884	        has_htf=_has_htf_source(row),
+  1885	        htf_sweep_count=int(float(row.get("htf_sweep_count", 0) or 0)),
+  1886	        htf_close_through_count=int(float(row.get("htf_close_through_count", 0) or 0)),
+  1887	        htf_acceptance_count=int(float(row.get("htf_acceptance_count", 0) or 0)),
+  1888	        history_context_incomplete=_bool_value(row.get("history_context_incomplete", False)),
+  1889	        first_sweep_at=str(row.get("first_sweep_at", "") or ""),
+  1890	        close_above_count=int(float(row.get("close_above_count", 0) or 0)),
+  1891	        close_below_count=int(float(row.get("close_below_count", 0) or 0)),
+  1892	        accepted_above_at=str(row.get("accepted_above_at", "") or ""),
+  1893	        accepted_below_at=str(row.get("accepted_below_at", "") or ""),
+  1894	    )
+  1895	
+  1896	
+  1897	def _lifecycle_status_from_values(
+  1898	    *,
+  1899	    row: dict[str, object] | pd.Series,
+  1900	    has_htf: bool,
+  1901	    htf_sweep_count: int,
+  1902	    htf_close_through_count: int,
+  1903	    htf_acceptance_count: int,
+  1904	    history_context_incomplete: bool,
+  1905	    first_sweep_at: str,
+  1906	    close_above_count: int,
+  1907	    close_below_count: int,
+  1908	    accepted_above_at: str,
+  1909	    accepted_below_at: str,
+  1910	) -> str:
+  1911	    if _has_m15_source(row):
+  1912	        return _m15_lifecycle_status(
+  1913	            row=row,
+  1914	            first_sweep_at=first_sweep_at,
+  1915	            close_above_count=close_above_count,
+  1916	            close_below_count=close_below_count,
+  1917	            accepted_above_at=accepted_above_at,
+  1918	            accepted_below_at=accepted_below_at,
+  1919	        )
+  1920	    return _htf_lifecycle_status(
+  1921	        has_htf=has_htf,
+  1922	        htf_sweep_count=htf_sweep_count,
+  1923	        htf_close_through_count=htf_close_through_count,
+  1924	        htf_acceptance_count=htf_acceptance_count,
+  1925	        history_context_incomplete=history_context_incomplete,
+  1926	    )
+  1927	
+  1928	
+  1929	def _m15_lifecycle_status(
+  1930	    *,
+  1931	    row: dict[str, object] | pd.Series,
+  1932	    first_sweep_at: str,
+  1933	    close_above_count: int,
+  1934	    close_below_count: int,
+  1935	    accepted_above_at: str,
+  1936	    accepted_below_at: str,
+  1937	) -> str:
+  1938	    if str(row.get("side", "")) == "BUY_SIDE":
+  1939	        close_through_count = close_above_count
+  1940	        accepted_at = accepted_above_at
+  1941	    else:
+  1942	        close_through_count = close_below_count
+  1943	        accepted_at = accepted_below_at
+  1944	    if accepted_at:
+  1945	        return "M15_ACCEPTED"
+  1946	    if close_through_count > 0:
+  1947	        return "M15_CLOSE_THROUGH"
+  1948	    if first_sweep_at:
+  1949	        return "M15_SWEPT"
+  1950	    return "M15_ACTIVE"
+  1951	
+  1952	
+  1953	def _merged_htf_lifecycle_status(rows: list[dict[str, object]]) -> str:
+  1954	    values = [str(row.get("htf_lifecycle_status", "") or "") for row in rows]
+  1955	    for status in [
+  1956	        "HTF_ACCEPTED",
+  1957	        "HTF_CLOSE_THROUGH",
+  1958	        "HTF_SWEPT",
+  1959	        "HTF_HISTORY_INCOMPLETE",
+  1960	        "HTF_ACTIVE",
+  1961	    ]:
+  1962	        if status in values:
+  1963	            return status
+  1964	    for status in [
+  1965	        "M15_ACCEPTED",
+  1966	        "M15_CLOSE_THROUGH",
+  1967	        "M15_SWEPT",
+  1968	        "M15_ACTIVE",
+  1969	    ]:
+  1970	        if status in values:
+  1971	            return status
+  1972	    return "LOCAL_ONLY"
+  1973	
+  1974	
+  1975	def _sweep_importance_class_from_row(row: dict[str, object] | pd.Series) -> str:
+  1976	    return _sweep_importance_class_from_values(
+  1977	        row=row,
+  1978	        has_htf=_has_htf_source(row),
+  1979	        htf_sweep_count=int(float(row.get("htf_sweep_count", 0) or 0)),
+  1980	        first_sweep_at=str(row.get("first_sweep_at", "") or ""),
+  1981	        structural_zone_mode=_structural_zone_mode_from_row(row),
+  1982	    )
+  1983	
+  1984	
+  1985	def _sweep_importance_class_from_values(
+  1986	    *,
+  1987	    row: dict[str, object] | pd.Series,
+  1988	    has_htf: bool,
+  1989	    htf_sweep_count: int,
+  1990	    first_sweep_at: str,
+  1991	    structural_zone_mode: str,
+  1992	) -> str:
+  1993	    primary = _source_timeframe_primary_from_row(row)
+  1994	    swept = bool(first_sweep_at) or htf_sweep_count > 0
+  1995	    if has_htf or primary == "H4":
+  1996	        return "HTF_STRUCTURAL_SWEEP" if swept else "HTF_STRUCTURAL_LEVEL"
+  1997	    if primary == "H1":
+  1998	        return "HTF_STRUCTURAL_SWEEP" if swept else "HTF_STRUCTURAL_LEVEL"
+  1999	    if primary == "M15" or _has_m15_source(row):
+  2000	        return "M15_STRUCTURE_SWEEP" if swept else "M15_MINIMUM_STRUCTURE_LEVEL"
+  2001	    if primary == "SESSION":
+  2002	        return "LOCAL_SESSION_SWEEP" if swept else "LOCAL_SESSION_ZONE"
+  2003	    if structural_zone_mode == "PATTERN_DERIVED_ZONE" or primary == "PATTERN":
+  2004	        return "LOCAL_SESSION_SWEEP" if swept else "LOCAL_SESSION_ZONE"
+  2005	    return "MICRO_SWEEP" if swept else "M1_LOCAL_ZONE"
+  2006	
+  2007	
+  2008	def _merged_sweep_importance_class(rows: list[dict[str, object]]) -> str:
+  2009	    values = [_sweep_importance_class_from_row(row) for row in rows]
+  2010	    for value in [
+  2011	        "HTF_STRUCTURAL_SWEEP",
+  2012	        "HTF_STRUCTURAL_LEVEL",
+  2013	        "M15_STRUCTURE_SWEEP",
+  2014	        "M15_MINIMUM_STRUCTURE_LEVEL",
+  2015	        "LOCAL_SESSION_SWEEP",
+  2016	        "LOCAL_SESSION_ZONE",
+  2017	        "MICRO_SWEEP",
+  2018	        "M1_LOCAL_ZONE",
+  2019	    ]:
+  2020	        if value in values:
+  2021	            return value
+  2022	    return values[0] if values else ""
+  2023	
+  2024	
+  2025	def _min_timestamp_text(values) -> str:
+  2026	    timestamps = [str(value) for value in values if str(value or "")]
+  2027	    if not timestamps:
+  2028	        return ""
+  2029	    return min(timestamps)
+  2030	
+  2031	
+  2032	def _bool_value(value) -> bool:
+  2033	    if isinstance(value, bool):
+  2034	        return value
+  2035	    return str(value).strip().lower() in {"true", "1", "yes"}
+  2036	
+  2037	
+  2038	def _bool_text(value) -> str:
+  2039	    return "true" if _bool_value(value) else "false"
+  2040	
+  2041	
+  2042	def _quality_values(values) -> str:
+  2043	    unique = set(values)
+  2044	    if unique == {"RAW"}:
+  2045	        return "RAW"
+  2046	    if "RECOVERED_DEGRADED" in unique:
+  2047	        return "RECOVERED_DEGRADED"
+  2048	    return sorted(unique)[0] if unique else "RAW"
+  2049	
+  2050	
+  2051	def _confidence_tier(score: int) -> str:
+  2052	    if score <= 39:
+  2053	        return "LOW"
+  2054	    if score <= 69:
+  2055	        return "MEDIUM"
+  2056	    return "HIGH"
+  2057	
+  2058	
+  2059	def _distance_from_close(price_mid: float, latest_close: float | None) -> float:
+  2060	    if latest_close is None or latest_close == 0:
+  2061	        return 0.0
+  2062	    return (price_mid - float(latest_close)) / float(latest_close) * 100.0
+  2063	
+  2064	
+  2065	def _age_bars(first_seen_at: str, feed: pd.DataFrame) -> int:
+  2066	    first_seen = pd.Timestamp(first_seen_at)
+  2067	    if first_seen > feed["Timestamp"].max():
+  2068	        return 0
+  2069	    return int((feed["Timestamp"] >= first_seen).sum())
+  2070	
+  2071	
+  2072	def _age_days(first_seen_at: str, run_end: str) -> int:
+  2073	    return max(0, (pd.Timestamp(run_end).date() - pd.Timestamp(first_seen_at).date()).days)
+  2074	
+  2075	
+  2076	def _format_ts(value) -> str:
+  2077	    return pd.Timestamp(value).tz_convert("UTC").isoformat().replace("+00:00", "Z")

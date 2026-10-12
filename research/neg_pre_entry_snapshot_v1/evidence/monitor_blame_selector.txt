@@ -1,0 +1,1154 @@
+$ git blame market_monitor/significant_zone_selector.py
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    1) from __future__ import annotations
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    2) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    3) import json
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    4) import subprocess
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    5) from dataclasses import dataclass
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    6) from datetime import date, timedelta
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    7) from pathlib import Path
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    8) from typing import Iterable
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200    9) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   10) import pandas as pd
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   11) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   12) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   13) SELECTOR_VERSION = "SHI_RESET_36B_SIGNIFICANT_ZONE_SELECTOR_V0"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   14) SELECTED_ZONES_CSV = "selected_zones.csv"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   15) SELECTOR_SUMMARY_MD = "significant_zone_selector_summary.md"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   16) SELECTOR_MANIFEST_JSON = "significant_zone_selector_manifest.json"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   17) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   18) BUCKET_MAJOR = "MAJOR"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   19) BUCKET_PRIMARY = "PRIMARY"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   20) BUCKET_MINIMUM = "MINIMUM"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   21) BUCKET_LOCAL_CONTEXT = "LOCAL_CONTEXT"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   22) BUCKET_NOISE = "NOISE_HIDE_BY_DEFAULT"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   23) SIDE_BALANCE_PROMOTION_REASON = (
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   24)     "selected to preserve two-sided liquidity map; strong opposite-side MAJOR/PRIMARY zone within score gap"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   25) )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   26) SIDE_BALANCE_DISPLACED_REASON = (
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   27)     "hidden by side-balanced visibility cap; lower priority than opposite-side zone needed for market map"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200   28) )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   29) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   30) SELECTED_ZONE_COLUMNS = [
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   31)     "rank",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   32)     "zone_id",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   33)     "source_day",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   34)     "side",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   35)     "source_timeframe",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   36)     "source_family",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   37)     "level_type",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   38)     "label",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   39)     "price_lower",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   40)     "price_upper",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   41)     "representative_price",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   42)     "current_price",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   43)     "distance_to_current_price_pct",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   44)     "lifecycle_status",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   45)     "status",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   46)     "confidence",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   47)     "bucket",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   48)     "significance_score",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   49)     "score_components_json",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   50)     "penalty_components_json",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   51)     "evidence_fields_present",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   52)     "evidence_fields_missing",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   53)     "flow_evidence_summary",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   54)     "reason_selected",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   55)     "reason_hidden",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   56)     "visible_on_snapshot",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   57) ]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   58) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   59) INPUT_TABLES = [
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   60)     "structure_levels.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   61)     "liquidity_map.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   62)     "liquidity_zone_registry.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   63)     "event_log.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   64)     "post_sweep_observation.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   65)     "volume_delta_state.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   66)     "market_state_timeline.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   67)     "accumulation_zones.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   68)     "pattern_structures.csv",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   69) ]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   70) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   71) HIDDEN_STATUSES = {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   72)     "EXPIRED",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   73)     "INVALIDATED",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   74)     "CONSUMED",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   75)     "CHOPPED_THROUGH",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   76)     "MERGED",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   77) }
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   78) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   79) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   80) class SignificantZoneSelectorError(RuntimeError):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   81)     """Raised when significant zone selection cannot be completed."""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   82) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   83) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   84) @dataclass(frozen=True)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   85) class SignificantZoneSelectorResult:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   86)     output_dir: Path
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   87)     selected_zones_path: Path
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   88)     summary_path: Path
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   89)     manifest_path: Path
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   90)     total_candidate_count: int
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   91)     visible_zone_count: int
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   92)     visible_buy_side_count: int
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   93)     visible_sell_side_count: int
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   94) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   95) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   96) def run_significant_zone_selector(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   97)     *,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   98)     input_root: str | Path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200   99)     output_dir: str | Path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  100)     start: str | date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  101)     end: str | date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  102)     max_visible_zones: int = 7,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  103) ) -> SignificantZoneSelectorResult:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  104)     start_date = _parse_date(start, "start")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  105)     end_date = _parse_date(end, "end")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  106)     if start_date > end_date:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  107)         raise SignificantZoneSelectorError("start must be <= end")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  108)     if max_visible_zones < 1:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  109)         raise SignificantZoneSelectorError("max_visible_zones must be >= 1")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  110) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  111)     root = Path(input_root)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  112)     out_dir = Path(output_dir)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  113)     if not root.exists() or not root.is_dir():
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  114)         raise SignificantZoneSelectorError(f"input root not found: {root}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  115)     out_dir.mkdir(parents=True, exist_ok=True)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  116) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  117)     loaded = _load_window(root, start_date, end_date)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  118)     liquidity_map = loaded["liquidity_map.csv"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  119)     if liquidity_map.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  120)         selected = pd.DataFrame(columns=SELECTED_ZONE_COLUMNS)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  121)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  122)         selected = _score_candidates(loaded)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  123)         selected = _assign_visibility(selected, max_visible_zones=max_visible_zones)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  124)         selected = selected.sort_values(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  125)             ["visible_on_snapshot", "significance_score", "source_day", "zone_id"],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  126)             ascending=[False, False, True, True],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  127)             kind="mergesort",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  128)         ).reset_index(drop=True)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  129)         selected["rank"] = range(1, len(selected) + 1)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  130)         selected = selected[SELECTED_ZONE_COLUMNS]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  131) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  132)     selected_path = out_dir / SELECTED_ZONES_CSV
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  133)     summary_path = out_dir / SELECTOR_SUMMARY_MD
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  134)     manifest_path = out_dir / SELECTOR_MANIFEST_JSON
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  135)     selected.to_csv(selected_path, index=False)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  136) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  137)     row_counts = {name: int(len(frame)) for name, frame in loaded.items()}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  138)     missing_flags = _missing_data_flags(loaded)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  139)     summary_path.write_text(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  140)         _render_summary(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  141)             selected=selected,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  142)             row_counts=row_counts,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  143)             input_root=root,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  144)             start_date=start_date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  145)             end_date=end_date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  146)             max_visible_zones=max_visible_zones,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  147)             missing_flags=missing_flags,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  148)         ),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  149)         encoding="utf-8",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  150)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  151)     manifest = {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  152)         "selector_version": SELECTOR_VERSION,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  153)         "start_date": start_date.isoformat(),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  154)         "end_date": end_date.isoformat(),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  155)         "input_root": str(root),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  156)         "outputs": {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  157)             "selected_zones_csv": str(selected_path),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  158)             "summary_md": str(summary_path),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  159)             "manifest_json": str(manifest_path),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  160)         },
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  161)         "max_visible_zones": max_visible_zones,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  162)         "visible_zone_count": _visible_zone_count(selected),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  163)         "visible_side_counts": _visible_side_counts(selected),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  164)         "side_balance_policy": _side_balance_policy(max_visible_zones),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  165)         "total_candidate_count": int(len(selected)),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  166)         "missing_data_flags": missing_flags,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  167)         "repo_commit": _repo_commit(),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  168)         "scope": "research_monitor_selection_only_not_trading_advice",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  169)     }
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  170)     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  171) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  172)     visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  173)     return SignificantZoneSelectorResult(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  174)         output_dir=out_dir,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  175)         selected_zones_path=selected_path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  176)         summary_path=summary_path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  177)         manifest_path=manifest_path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  178)         total_candidate_count=int(len(selected)),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  179)         visible_zone_count=int(len(visible)),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  180)         visible_buy_side_count=int((visible["side"] == "BUY_SIDE").sum()) if not visible.empty else 0,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  181)         visible_sell_side_count=int((visible["side"] == "SELL_SIDE").sum()) if not visible.empty else 0,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  182)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  183) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  184) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  185) def _load_window(root: Path, start_date: date, end_date: date) -> dict[str, pd.DataFrame]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  186)     frames: dict[str, list[pd.DataFrame]] = {name: [] for name in INPUT_TABLES}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  187)     for day in _date_range(start_date, end_date):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  188)         day_dir = root / day.isoformat()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  189)         if not day_dir.exists():
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  190)             raise SignificantZoneSelectorError(f"missing daily output directory: {day_dir}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  191)         for filename in INPUT_TABLES:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  192)             path = day_dir / filename
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  193)             if path.exists():
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  194)                 try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  195)                     frame = pd.read_csv(path)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  196)                 except pd.errors.EmptyDataError:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  197)                     frame = pd.DataFrame()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  198)             else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  199)                 frame = pd.DataFrame()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  200)             frame["_source_day"] = day.isoformat()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  201)             frame["_source_path"] = str(path)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  202)             frames[filename].append(frame)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  203)     return {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  204)         name: pd.concat(parts, ignore_index=True, sort=False) if parts else pd.DataFrame()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  205)         for name, parts in frames.items()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  206)     }
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  207) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  208) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  209) def _score_candidates(loaded: dict[str, pd.DataFrame]) -> pd.DataFrame:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  210)     liquidity_map = loaded["liquidity_map.csv"].copy()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  211)     event_log = loaded["event_log.csv"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  212)     observations = loaded["post_sweep_observation.csv"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  213)     event_groups = _group_by_day_zone(event_log)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  214)     observation_groups = _group_by_day_zone(observations)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  215) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  216)     rows = []
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  217)     for _, zone in liquidity_map.iterrows():
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  218)         source_day = _string(zone.get("_source_day"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  219)         zone_id = _string(zone.get("zone_id"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  220)         events = event_groups.get((source_day, zone_id), pd.DataFrame())
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  221)         zone_observations = observation_groups.get((source_day, zone_id), pd.DataFrame())
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  222)         rows.append(_score_zone(zone, events, zone_observations))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  223)     frame = pd.DataFrame(rows)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  224)     return frame.sort_values(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  225)         ["significance_score", "source_day", "zone_id"],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  226)         ascending=[False, True, True],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  227)         kind="mergesort",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  228)     ).reset_index(drop=True)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  229) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  230) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  231) def _score_zone(zone: pd.Series, events: pd.DataFrame, observations: pd.DataFrame) -> dict[str, object]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  232)     score_components: dict[str, float] = {}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  233)     penalty_components: dict[str, float] = {}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  234)     evidence_present: set[str] = set()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  235)     evidence_missing: set[str] = set()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  236)     reasons: list[str] = []
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  237) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  238)     source_day = _string(zone.get("_source_day"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  239)     zone_id = _string(zone.get("zone_id"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  240)     side = _string(zone.get("side")) or "UNKNOWN"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  241)     source_timeframe = _string(zone.get("source_timeframes")) or "UNKNOWN"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  242)     source_family = _source_family(source_timeframe)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  243)     label = _first_nonempty(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  244)         zone.get("zone_type"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  245)         zone.get("htf_level_type"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  246)         _score_level_types(zone.get("score_components_json")),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  247)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  248)     level_type = _first_nonempty(zone.get("htf_level_type"), _score_level_types(zone.get("score_components_json")))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  249)     status = _string(zone.get("status")) or "UNKNOWN"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  250)     lifecycle_status = _first_nonempty(zone.get("htf_lifecycle_status"), zone.get("consumption_status"), status)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  251)     confidence = _string(zone.get("confidence_tier")) or "UNKNOWN"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  252)     representative_price = _float(zone.get("price_mid"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  253)     distance = _float(zone.get("distance_from_close_pct"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  254)     current_price = _current_price(representative_price, distance)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  255)     sources = _split_sources(source_timeframe)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  256) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  257)     _add_source_scores(zone, sources, score_components, evidence_present, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  258)     _add_lifecycle_scores(status, lifecycle_status, score_components, penalty_components, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  259)     _add_confidence_scores(confidence, score_components, penalty_components, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  260)     _add_distance_scores(distance, score_components, penalty_components, evidence_present, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  261)     _add_interaction_scores(zone, score_components, evidence_present, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  262)     _add_precision_scores(zone, score_components, penalty_components, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  263)     _add_event_scores(events, score_components, penalty_components, evidence_present, evidence_missing, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  264)     _add_observation_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  265)         observations,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  266)         score_components,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  267)         evidence_present,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  268)         evidence_missing,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  269)         reasons,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  270)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  271)     _add_context_penalties(sources, events, observations, penalty_components, reasons)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  272) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  273)     missing_data = _zone_missing_data_notes()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  274)     evidence_missing.update(missing_data)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  275) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  276)     raw_score = sum(score_components.values()) + sum(penalty_components.values())
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  277)     bucket = _bucket_for_zone(raw_score, sources, zone, status, events, observations)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  278)     flow_summary = _flow_summary(events, observations)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  279)     hidden_reason = _base_hidden_reason(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  280)         bucket=bucket,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  281)         status=status,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  282)         lifecycle_status=lifecycle_status,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  283)         events=events,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  284)         observations=observations,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  285)         sources=sources,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  286)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  287) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  288)     return {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  289)         "rank": 0,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  290)         "zone_id": zone_id,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  291)         "source_day": source_day,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  292)         "side": side,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  293)         "source_timeframe": source_timeframe,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  294)         "source_family": source_family,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  295)         "level_type": level_type,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  296)         "label": label,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  297)         "price_lower": zone.get("price_lower", ""),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  298)         "price_upper": zone.get("price_upper", ""),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  299)         "representative_price": representative_price,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  300)         "current_price": current_price,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  301)         "distance_to_current_price_pct": distance,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  302)         "lifecycle_status": lifecycle_status,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  303)         "status": status,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  304)         "confidence": confidence,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  305)         "bucket": bucket,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  306)         "significance_score": round(float(raw_score), 3),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  307)         "score_components_json": json.dumps(score_components, sort_keys=True),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  308)         "penalty_components_json": json.dumps(penalty_components, sort_keys=True),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  309)         "evidence_fields_present": "|".join(sorted(evidence_present)),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  310)         "evidence_fields_missing": "|".join(sorted(evidence_missing)),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  311)         "flow_evidence_summary": flow_summary,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  312)         "reason_selected": "; ".join(reasons[:12]),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  313)         "reason_hidden": hidden_reason,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  314)         "visible_on_snapshot": "false",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  315)     }
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  316) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  317) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  318) def _assign_visibility(frame: pd.DataFrame, *, max_visible_zones: int) -> pd.DataFrame:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  319)     out = frame.copy()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  320)     out["visible_on_snapshot"] = "false"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  321)     eligible = out[out.apply(_is_visibility_eligible, axis=1)].copy()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  322)     if eligible.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  323)         return out
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  324) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  325)     eligible_indices = _visibility_sorted_indices(out, eligible.index)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  326)     selected_indices = eligible_indices[:max_visible_zones]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  327)     selected_indices = _rebalance_visible_sides(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  328)         out,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  329)         eligible_indices=eligible_indices,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  330)         selected_indices=selected_indices,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  331)         max_visible_zones=max_visible_zones,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  332)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  333) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  334)     out.loc[selected_indices, "visible_on_snapshot"] = "true"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  335)     out.loc[out["visible_on_snapshot"] == "true", "reason_hidden"] = ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  336)     out.loc[
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  337)         (out["visible_on_snapshot"] == "false") & (out["reason_hidden"] == ""),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  338)         "reason_hidden",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  339)     ] = "outside max visible zone cap or lower ranked than selected zones"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  340)     return out
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  341) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  342) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  343) def _rebalance_visible_sides(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  344)     frame: pd.DataFrame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  345)     *,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  346)     eligible_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  347)     selected_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  348)     max_visible_zones: int,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  349) ) -> list[int]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  350)     if max_visible_zones < 2:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  351)         return selected_indices
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  352) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  353)     selected = list(selected_indices)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  354)     available_sides = {
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  355)         _string(frame.loc[idx, "side"])
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  356)         for idx in eligible_indices
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  357)         if _string(frame.loc[idx, "side"]) in {"BUY_SIDE", "SELL_SIDE"}
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  358)     }
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  359)     if not {"BUY_SIDE", "SELL_SIDE"}.issubset(available_sides):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  360)         return selected
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  361) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  362)     selected = _promote_to_side_minimum(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  363)         frame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  364)         eligible_indices=eligible_indices,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  365)         selected_indices=selected,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  366)         side="BUY_SIDE",
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  367)         target_count=1,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  368)         require_visible_side=True,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  369)     )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  370)     selected = _promote_to_side_minimum(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  371)         frame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  372)         eligible_indices=eligible_indices,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  373)         selected_indices=selected,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  374)         side="SELL_SIDE",
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  375)         target_count=1,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  376)         require_visible_side=True,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  377)     )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  378) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  379)     if max_visible_zones >= 6:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  380)         for side in ["BUY_SIDE", "SELL_SIDE"]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  381)             if _eligible_side_count(frame, eligible_indices, side) >= 2:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  382)                 selected = _promote_to_side_minimum(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  383)                     frame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  384)                     eligible_indices=eligible_indices,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  385)                     selected_indices=selected,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  386)                     side=side,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  387)                     target_count=2,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  388)                     require_visible_side=False,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  389)                 )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  390)     return _visibility_sorted_indices(frame, selected)[:max_visible_zones]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  391) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  392) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  393) def _promote_to_side_minimum(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  394)     frame: pd.DataFrame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  395)     *,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  396)     eligible_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  397)     selected_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  398)     side: str,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  399)     target_count: int,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  400)     require_visible_side: bool,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  401) ) -> list[int]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  402)     selected = list(selected_indices)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  403)     while _selected_side_count(frame, selected, side) < target_count:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  404)         candidate = _best_hidden_side_candidate(frame, eligible_indices, selected, side)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  405)         if candidate is None:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  406)             return selected
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  407)         displaced = _replacement_index_for_side_balance(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  408)             frame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  409)             selected,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  410)             candidate,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  411)             require_visible_side=require_visible_side,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  412)         )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  413)         if displaced is None:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  414)             return selected
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  415)         selected.remove(displaced)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  416)         selected.append(candidate)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  417)         _append_reason(frame, candidate, "reason_selected", SIDE_BALANCE_PROMOTION_REASON)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  418)         frame.loc[displaced, "reason_hidden"] = SIDE_BALANCE_DISPLACED_REASON
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  419)     return selected
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  420) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  421) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  422) def _best_hidden_side_candidate(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  423)     frame: pd.DataFrame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  424)     eligible_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  425)     selected_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  426)     side: str,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  427) ) -> int | None:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  428)     selected = set(selected_indices)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  429)     for idx in eligible_indices:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  430)         if idx in selected:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  431)             continue
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  432)         row = frame.loc[idx]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  433)         if _string(row.get("side")) != side:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  434)             continue
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  435)         if _is_side_balance_candidate(row):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  436)             return idx
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  437)     return None
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  438) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  439) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  440) def _replacement_index_for_side_balance(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  441)     frame: pd.DataFrame,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  442)     selected_indices: list[int],
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  443)     candidate_idx: int,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  444)     *,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  445)     require_visible_side: bool,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  446) ) -> int | None:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  447)     candidate = frame.loc[candidate_idx]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  448)     candidate_side = _string(candidate.get("side"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  449)     candidate_score = _float(candidate.get("significance_score"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  450)     side_counts = {
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  451)         side: _selected_side_count(frame, selected_indices, side)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  452)         for side in ["BUY_SIDE", "SELL_SIDE"]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  453)     }
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  454)     overrepresented_sides = [
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  455)         side for side, count in side_counts.items() if side != candidate_side and count > 1
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  456)     ]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  457)     if not overrepresented_sides:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  458)         return None
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  459) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  460)     replacement_pool = [
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  461)         idx
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  462)         for idx in selected_indices
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  463)         if _string(frame.loc[idx].get("side")) in overrepresented_sides
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  464)     ]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  465)     for replace_idx in reversed(_visibility_sorted_indices(frame, replacement_pool)):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  466)         replacement = frame.loc[replace_idx]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  467)         if require_visible_side:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  468)             return replace_idx
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  469)         replacement_score = _float(replacement.get("significance_score"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  470)         if replacement_score - candidate_score > 10:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  471)             continue
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  472)         if _candidate_can_replace(candidate, replacement):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  473)             return replace_idx
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  474)     return None
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  475) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  476) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  477) def _candidate_can_replace(candidate: pd.Series, replacement: pd.Series) -> bool:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  478)     candidate_distance = abs(_float(candidate.get("distance_to_current_price_pct"), 999.0))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  479)     replacement_distance = abs(_float(replacement.get("distance_to_current_price_pct"), 999.0))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  480)     if candidate_distance < replacement_distance:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  481)         return True
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  482)     if _bucket_strength(candidate.get("bucket")) > _bucket_strength(replacement.get("bucket")):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  483)         return True
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  484)     return _source_strength(candidate.get("source_timeframe")) > _source_strength(replacement.get("source_timeframe"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  485) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  486) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  487) def _is_side_balance_candidate(row: pd.Series) -> bool:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  488)     if _string(row.get("bucket")) not in {BUCKET_MAJOR, BUCKET_PRIMARY}:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  489)         return False
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  490)     if not _valid_price_range(row):
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  491)         return False
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  492)     if _string(row.get("side")) not in {"BUY_SIDE", "SELL_SIDE"}:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  493)         return False
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  494)     distance = abs(_float(row.get("distance_to_current_price_pct"), 999.0))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  495)     return distance <= 2.0 or _has_strong_structural_or_event_evidence(row)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  496) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  497) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  498) def _valid_price_range(row: pd.Series) -> bool:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  499)     lower = _float(row.get("price_lower"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  500)     upper = _float(row.get("price_upper"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  501)     return not pd.isna(lower) and not pd.isna(upper) and lower <= upper
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  502) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  503) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  504) def _has_strong_structural_or_event_evidence(row: pd.Series) -> bool:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  505)     present = set(_string(row.get("evidence_fields_present")).split("|"))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  506)     return bool({"has_h4_source", "has_h1_source", "event_log", "post_sweep_observation"} & present)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  507) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  508) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  509) def _eligible_side_count(frame: pd.DataFrame, eligible_indices: list[int], side: str) -> int:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  510)     return sum(1 for idx in eligible_indices if _string(frame.loc[idx].get("side")) == side)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  511) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  512) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  513) def _selected_side_count(frame: pd.DataFrame, selected_indices: list[int], side: str) -> int:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  514)     return sum(1 for idx in selected_indices if _string(frame.loc[idx].get("side")) == side)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  515) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  516) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  517) def _visibility_sorted_indices(frame: pd.DataFrame, indices: Iterable[int]) -> list[int]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  518)     return sorted((int(idx) for idx in indices), key=lambda idx: _visibility_priority_key(frame.loc[idx], idx))
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  519) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  520) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  521) def _visibility_priority_key(row: pd.Series, idx: int) -> tuple[float, float, int, int, str, int]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  522)     return (
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  523)         -_float(row.get("significance_score")),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  524)         abs(_float(row.get("distance_to_current_price_pct"), 999.0)),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  525)         -_bucket_strength(row.get("bucket")),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  526)         -_source_strength(row.get("source_timeframe")),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  527)         _string(row.get("zone_id")),
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  528)         idx,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  529)     )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  530) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  531) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  532) def _bucket_strength(bucket: object) -> int:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  533)     return {
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  534)         BUCKET_MAJOR: 4,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  535)         BUCKET_PRIMARY: 3,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  536)         BUCKET_MINIMUM: 2,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  537)         BUCKET_LOCAL_CONTEXT: 1,
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  538)     }.get(_string(bucket), 0)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  539) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  540) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  541) def _source_strength(source_timeframe: object) -> int:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  542)     sources = _split_sources(source_timeframe)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  543)     if "H4" in sources:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  544)         return 4
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  545)     if "H1" in sources:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  546)         return 3
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  547)     if "M15" in sources:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  548)         return 2
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  549)     if "SESSION" in sources:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  550)         return 1
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  551)     return 0
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  552) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  553) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  554) def _append_reason(frame: pd.DataFrame, idx: int, column: str, reason: str) -> None:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  555)     existing = _string(frame.loc[idx, column])
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  556)     if reason in existing:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  557)         return
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  558)     frame.loc[idx, column] = f"{existing}; {reason}" if existing else reason
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  559) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  560) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  561) def _is_visibility_eligible(row: pd.Series) -> bool:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  562)     if row["bucket"] == BUCKET_NOISE:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  563)         return False
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  564)     if row["status"] in HIDDEN_STATUSES:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  565)         return False
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  566)     if row["status"] == "CROSSED_UNCLASSIFIED" and not _has_supporting_evidence(row):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  567)         return False
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  568)     if row["bucket"] in {BUCKET_MAJOR, BUCKET_PRIMARY}:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  569)         return True
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  570)     if row["bucket"] == BUCKET_MINIMUM:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  571)         return abs(_float(row["distance_to_current_price_pct"], 999.0)) <= 1.0 and _has_supporting_evidence(row)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  572)     return False
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  573) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  574) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  575) def _has_supporting_evidence(row: pd.Series) -> bool:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  576)     present = set(_string(row.get("evidence_fields_present")).split("|"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  577)     return bool({"event_log", "post_sweep_observation", "sweep_count", "touch_count"} & present)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  578) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  579) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  580) def _visible_zone_count(selected: pd.DataFrame) -> int:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  581)     if selected.empty:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  582)         return 0
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  583)     return int((selected["visible_on_snapshot"].astype(str) == "true").sum())
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  584) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  585) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  586) def _visible_side_counts(selected: pd.DataFrame) -> dict[str, int]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  587)     if selected.empty:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  588)         return {}
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  589)     visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  590)     return {key: int(value) for key, value in visible["side"].value_counts().to_dict().items()}
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  591) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  592) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  593) def _side_balance_policy(max_visible_zones: int) -> str:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  594)     if max_visible_zones >= 6:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  595)         return "require one zone per side when available; prefer two zones per side from eligible MAJOR/PRIMARY zones within score gap"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  596)     if max_visible_zones >= 2:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  597)         return "require one zone per side when available"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  598)     return "single visible zone cap cannot preserve both sides"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  599) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  600) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  601) def _side_balance_note(selected: pd.DataFrame, max_visible_zones: int) -> str:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  602)     if selected.empty:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  603)         return "no candidate zones"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  604)     visible_counts = _visible_side_counts(selected)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  605)     if max_visible_zones < 6:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  606)         return "visible cap below six only guarantees one zone per side when available"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  607)     notes = []
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  608)     for side in ["BUY_SIDE", "SELL_SIDE"]:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  609)         eligible_count = int(
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  610)             selected[
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  611)                 (selected["side"] == side)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  612)                 & selected.apply(_is_visibility_eligible, axis=1)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  613)                 & selected.apply(_is_side_balance_candidate, axis=1)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  614)             ].shape[0]
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  615)         )
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  616)         visible_count = visible_counts.get(side, 0)
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  617)         if eligible_count < 2:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  618)             notes.append(f"{side} has fewer than two high-quality eligible zones")
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  619)         elif visible_count < 2:
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  620)             notes.append(f"{side} has fewer than two visible zones because score-gap replacement criteria were not met")
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  621)     return "; ".join(notes) if notes else "both sides preserved when high-quality eligible zones were available"
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  622) 
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  623) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  624) def _add_source_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  625)     zone: pd.Series,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  626)     sources: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  627)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  628)     evidence: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  629)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  630) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  631)     if "H4" in sources or _truth(zone.get("has_h4_source")):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  632)         score["h4_source"] = 40
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  633)         evidence.add("has_h4_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  634)         reasons.append("H4 structural source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  635)     if "H1" in sources or _truth(zone.get("has_h1_source")):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  636)         score["h1_source"] = 24
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  637)         evidence.add("has_h1_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  638)         reasons.append("H1 structural source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  639)     if _truth(zone.get("has_pdh_pdl_source")) or _contains_any(zone.get("zone_type"), ["PDH", "PDL"]):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  640)         score["pdh_pdl_source"] = 32
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  641)         evidence.add("has_pdh_pdl_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  642)         reasons.append("previous day reference")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  643)     if "M15" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  644)         score["m15_source"] = 12
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  645)         evidence.add("m15_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  646)         reasons.append("M15 structure")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  647)     if "SESSION" in sources or _truth(zone.get("has_session_source")):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  648)         score["session_context"] = 6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  649)         evidence.add("has_session_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  650)         reasons.append("session/local context")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  651)     if _truth(zone.get("has_equal_level_source")):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  652)         score["equal_level_source"] = 8
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  653)         evidence.add("has_equal_level_source")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  654)         reasons.append("equal high/low liquidity pool")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  655)     cluster_count = _int(zone.get("cluster_member_count"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  656)     if "CLUSTER" in sources or cluster_count > 1:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  657)         score["source_cluster"] = min(16, 4 * max(cluster_count, 2))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  658)         evidence.add("cluster_member_count")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  659)         reasons.append(f"clustered sources={cluster_count}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  660) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  661) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  662) def _add_lifecycle_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  663)     status: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  664)     lifecycle_status: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  665)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  666)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  667)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  668) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  669)     if status == "ACTIVE" or lifecycle_status == "ACTIVE":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  670)         score["active_lifecycle"] = 15
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  671)         reasons.append("active lifecycle")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  672)     if status in {"EXPIRED", "INVALIDATED"}:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  673)         penalty["expired_or_invalidated"] = -35
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  674)         reasons.append(f"hidden lifecycle={status}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  675)     elif status in {"CONSUMED", "CHOPPED_THROUGH", "MERGED"}:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  676)         penalty["consumed_or_chopped_or_merged"] = -24
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  677)         reasons.append(f"penalty lifecycle={status}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  678)     elif status == "CROSSED_UNCLASSIFIED":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  679)         penalty["crossed_unclassified"] = -18
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  680)         reasons.append("crossed but unclassified")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  681) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  682) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  683) def _add_confidence_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  684)     confidence: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  685)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  686)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  687)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  688) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  689)     if confidence == "HIGH":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  690)         score["high_confidence"] = 12
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  691)         reasons.append("high confidence")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  692)     elif confidence == "MEDIUM":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  693)         score["medium_confidence"] = 6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  694)         reasons.append("medium confidence")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  695)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  696)         penalty["low_or_unknown_confidence"] = -6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  697)         reasons.append("low/unknown confidence")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  698) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  699) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  700) def _add_distance_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  701)     distance: float,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  702)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  703)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  704)     evidence: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  705)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  706) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  707)     if not pd.isna(distance):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  708)         evidence.add("distance_to_current_price_pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  709)     absolute = abs(distance)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  710)     if absolute <= 0.5:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  711)         score["distance_within_0_5_pct"] = 18
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  712)         reasons.append("near current price <=0.5 pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  713)     elif absolute <= 1.0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  714)         score["distance_within_1_pct"] = 12
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  715)         reasons.append("near current price <=1 pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  716)     elif absolute <= 2.0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  717)         score["distance_within_2_pct"] = 6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  718)         reasons.append("near current price <=2 pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  719)     elif absolute > 5.0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  720)         penalty["far_from_current_price"] = -12
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  721)         reasons.append("far from current price >5 pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  722) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  723) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  724) def _add_interaction_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  725)     zone: pd.Series,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  726)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  727)     evidence: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  728)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  729) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  730)     touch_count = max(_int(zone.get("touch_count")), _int(zone.get("m1_interaction_count")))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  731)     if touch_count > 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  732)         score["touch_or_retest_history"] = min(8, touch_count * 2)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  733)         evidence.add("touch_count")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  734)         reasons.append(f"touch/retest count={touch_count}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  735)     sweep_count = max(_int(zone.get("sweep_count")), _int(zone.get("resweep_count")), _int(zone.get("htf_sweep_count")))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  736)     if sweep_count > 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  737)         score["sweep_history"] = min(30, sweep_count * 10)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  738)         evidence.add("sweep_count")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  739)         reasons.append(f"sweep history={sweep_count}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  740)     recent = _first_nonempty(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  741)         zone.get("last_touch_at"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  742)         zone.get("last_clean_reaction_at"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  743)         zone.get("first_sweep_at"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  744)         zone.get("drift_away_confirmed_at"),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  745)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  746)     if recent:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  747)         score["recent_interaction"] = 6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  748)         evidence.add("recent_interaction_timestamp")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  749)         reasons.append("recent interaction present")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  750) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  751) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  752) def _add_precision_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  753)     zone: pd.Series,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  754)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  755)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  756)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  757) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  758)     if _string(zone.get("precision_status")) == "PRECISE":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  759)         score["precise_zone_width"] = 4
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  760)         reasons.append("precise width")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  761)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  762)         penalty["imprecise_or_wide_zone"] = -8
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  763)         reasons.append("imprecise/wide zone")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  764)     if _float(zone.get("zone_width_pct")) > 0.5:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  765)         penalty["hard_wide_zone_width"] = -8
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  766)         reasons.append("wide zone width pct")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  767) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  768) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  769) def _add_event_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  770)     events: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  771)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  772)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  773)     present: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  774)     missing: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  775)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  776) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  777)     if events.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  778)         missing.add("event_log")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  779)         penalty["missing_event_evidence"] = -4
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  780)         return
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  781)     present.add("event_log")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  782)     score["event_evidence"] = min(12, len(events) * 3)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  783)     reasons.append(f"event evidence count={len(events)}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  784)     max_excursion = _column_abs_max(events, "excursion_abs")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  785)     if max_excursion > 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  786)         score["excursion_magnitude"] = min(8, max_excursion / 100)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  787)         present.add("excursion_abs")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  788)     max_volume = _column_abs_max(events, "volume_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  789)     if max_volume >= 2:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  790)         score["volume_anomaly"] = 8
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  791)         present.add("volume_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  792)         reasons.append(f"volume anomaly z={max_volume:.2f}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  793)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  794)         missing.add("volume_anomaly")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  795)     max_delta = _column_abs_max(events, "delta_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  796)     if max_delta >= 2:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  797)         score["delta_anomaly"] = 8
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  798)         present.add("delta_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  799)         reasons.append(f"delta anomaly z={max_delta:.2f}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  800)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  801)         missing.add("delta_anomaly")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  802)     if _column_abs_max(events, "oi_change") > 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  803)         score["oi_context"] = 4
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  804)         present.add("oi_change")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  805)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  806)         missing.add("oi_context")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  807) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  808) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  809) def _add_observation_scores(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  810)     observations: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  811)     score: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  812)     present: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  813)     missing: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  814)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  815) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  816)     if observations.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  817)         missing.add("post_sweep_observation")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  818)         return
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  819)     present.add("post_sweep_observation")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  820)     score["post_sweep_observation"] = min(10, len(observations) * 2)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  821)     reasons.append(f"post-sweep observations={len(observations)}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  822)     if _column_abs_max(observations, "post_max_volume_zscore") >= 2:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  823)         score["post_sweep_volume_context"] = 5
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  824)         present.add("post_max_volume_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  825)     if _column_abs_max(observations, "post_max_abs_delta_zscore") >= 2:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  826)         score["post_sweep_delta_context"] = 5
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  827)         present.add("post_max_abs_delta_zscore")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  828)     if _column_abs_max(observations, "post_oi_change") > 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  829)         score["post_sweep_oi_context"] = 4
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  830)         present.add("post_oi_change")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  831)     verdicts = [_reaction_verdict(row.get("evidence_json")) for _, row in observations.iterrows()]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  832)     if any(verdict not in {"", "NOT_CLASSIFIED", "UNCLASSIFIED", "NONE"} for verdict in verdicts):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  833)         score["classified_post_sweep_reaction"] = 10
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  834)         present.add("reaction_verdict")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  835)         reasons.append("classified post-sweep reaction")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  836)     else:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  837)         missing.add("classified_post_sweep_reaction")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  838) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  839) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  840) def _add_context_penalties(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  841)     sources: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  842)     events: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  843)     observations: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  844)     penalty: dict[str, float],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  845)     reasons: list[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  846) ) -> None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  847)     if sources and sources.issubset({"SESSION"}) and events.empty and observations.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  848)         penalty["session_only_without_event_evidence"] = -10
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  849)         reasons.append("session-only without event evidence")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  850)     if "PATTERN" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  851)         penalty["pattern_only_low_confidence_context"] = -6
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  852)         reasons.append("pattern source treated as context only")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  853) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  854) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  855) def _bucket_for_zone(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  856)     score: float,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  857)     sources: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  858)     zone: pd.Series,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  859)     status: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  860)     events: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  861)     observations: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  862) ) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  863)     if status in HIDDEN_STATUSES:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  864)         return BUCKET_NOISE
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  865)     if sources.issubset({"SESSION"}) and events.empty and observations.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  866)         return BUCKET_LOCAL_CONTEXT if score >= 35 else BUCKET_NOISE
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  867)     has_major = "H4" in sources or _truth(zone.get("has_h4_source")) or _truth(zone.get("has_pdh_pdl_source"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  868)     if score >= 85 and has_major:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  869)         return BUCKET_MAJOR
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  870)     if score >= 60 and ("H1" in sources or _truth(zone.get("has_h1_source")) or has_major):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  871)         return BUCKET_PRIMARY
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  872)     if score >= 35 and "M15" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  873)         return BUCKET_MINIMUM
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  874)     if score >= 35:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  875)         return BUCKET_LOCAL_CONTEXT
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  876)     return BUCKET_NOISE
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  877) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  878) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  879) def _base_hidden_reason(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  880)     *,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  881)     bucket: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  882)     status: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  883)     lifecycle_status: str,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  884)     events: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  885)     observations: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  886)     sources: set[str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  887) ) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  888)     if bucket == BUCKET_NOISE:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  889)         return "noise or hide-by-default bucket"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  890)     if status in HIDDEN_STATUSES or lifecycle_status in HIDDEN_STATUSES:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  891)         return f"hidden lifecycle/status={status or lifecycle_status}"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  892)     if status == "CROSSED_UNCLASSIFIED" and events.empty and observations.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  893)         return "crossed-unclassified without supporting event or observation evidence"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  894)     if bucket == BUCKET_LOCAL_CONTEXT:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  895)         return "local/session context, not dominant snapshot zone"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  896)     if sources.issubset({"SESSION"}):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  897)         return "session-only context"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  898)     return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  899) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  900) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  901) def _render_summary(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  902)     *,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  903)     selected: pd.DataFrame,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  904)     row_counts: dict[str, int],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  905)     input_root: Path,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  906)     start_date: date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  907)     end_date: date,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  908)     max_visible_zones: int,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  909)     missing_flags: dict[str, str],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  910) ) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  911)     visible = selected[selected["visible_on_snapshot"].astype(str) == "true"] if not selected.empty else selected
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  912)     hidden = selected[selected["visible_on_snapshot"].astype(str) != "true"] if not selected.empty else selected
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  913)     bucket_counts = selected["bucket"].value_counts().to_dict() if not selected.empty else {}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  914)     side_counts = selected["side"].value_counts().to_dict() if not selected.empty else {}
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  915)     visible_side_counts = _visible_side_counts(selected)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  916) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  917)     lines = [
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  918)         "# Significant Zone Selector Summary",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  919)         "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  920)         "Research monitor selection only. This is not trading advice.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  921)         "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  922)         "## Inputs",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  923)         "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  924)         f"- Date range: {start_date.isoformat()} to {end_date.isoformat()}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  925)         f"- Input root: `{input_root}`",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  926)         f"- Max visible zones: {max_visible_zones}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  927)         "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  928)         "## Row Counts",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  929)         "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  930)     ]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  931)     lines.extend(f"- `{name}`: {count}" for name, count in sorted(row_counts.items()))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  932)     lines.extend(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  933)         [
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  934)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  935)             "## Zone Inventory Counts",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  936)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  937)             f"- Total candidate zones: {len(selected)}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  938)             f"- Visible zones: {len(visible)}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  939)             f"- Side counts: {json.dumps(side_counts, sort_keys=True)}",
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  940)             f"- Visible side counts: {json.dumps(visible_side_counts, sort_keys=True)}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  941)             f"- Bucket counts: {json.dumps(bucket_counts, sort_keys=True)}",
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  942)             f"- Side balance policy: {_side_balance_policy(max_visible_zones)}.",
+2cbfea30 (Mykh-Ai 2026-06-06 19:40:10 +0200  943)             f"- Side balance note: {_side_balance_note(selected, max_visible_zones)}",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  944)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  945)             "## Scoring Model Summary",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  946)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  947)             "- Priority sequence: H4 major structure > H1 primary structure > M15 minimum structure > SESSION/local context.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  948)             "- Positive components: structural source weight, PDH/PDL, equal level source, clustering, lifecycle, confidence, proximity, touch/retest, sweep, event, flow, OI, post-sweep observation, reaction, and precision.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  949)             "- Negative components: expired/invalidated/consumed/chopped/merged lifecycle, crossed-unclassified without support, distance, old/no recent interaction, local-only clutter, pattern context, imprecision, and missing evidence.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  950)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  951)             "## Visible Selected Zones",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  952)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  953)             _markdown_table(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  954)                 visible,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  955)                 ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_selected"],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  956)             ),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  957)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  958)             "## Hidden Top-Ranked Zones",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  959)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  960)             _markdown_table(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  961)                 hidden.head(10),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  962)                 ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_hidden"],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  963)             ),
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  964)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  965)             "## Missing Data Notes",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  966)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  967)         ]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  968)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  969)     lines.extend(f"- {key}: {value}" for key, value in sorted(missing_flags.items()))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  970)     lines.extend(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  971)         [
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  972)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  973)             "## Limitations",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  974)             "",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  975)             "- Selector consumes existing Market Monitor outputs only; it does not create new market logic.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  976)             "- Compression boundaries are not faked when first-class compression zones are unavailable.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  977)             "- Liquidation and VWAP confirmations are marked unavailable when absent.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  978)             "- Scores are deterministic v0 selection weights, not strategy validation.",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  979)         ]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  980)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  981)     return "\n".join(lines) + "\n"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  982) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  983) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  984) def _markdown_table(frame: pd.DataFrame, columns: list[str]) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  985)     if frame.empty:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  986)         return "_None_"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  987)     out = ["| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  988)     for _, row in frame.iterrows():
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  989)         values = [_escape_markdown(_string(row.get(column))) for column in columns]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  990)         out.append("| " + " | ".join(values) + " |")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  991)     return "\n".join(out)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  992) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  993) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  994) def _missing_data_flags(loaded: dict[str, pd.DataFrame]) -> dict[str, str]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  995)     accumulation = loaded["accumulation_zones.csv"]
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  996)     return {
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  997)         "liquidations": "not_available",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  998)         "vwap": "not_available",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200  999)         "compression": "not_available" if accumulation.empty else "partial",
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1000)     }
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1001) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1002) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1003) def _zone_missing_data_notes() -> set[str]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1004)     return {"liquidations=not_available", "vwap=not_available", "compression=not_available_or_partial"}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1005) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1006) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1007) def _flow_summary(events: pd.DataFrame, observations: pd.DataFrame) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1008)     event_count = 0 if events.empty else len(events)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1009)     observation_count = 0 if observations.empty else len(observations)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1010)     max_volume = max(_column_abs_max(events, "volume_zscore"), _column_abs_max(observations, "post_max_volume_zscore"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1011)     max_delta = max(_column_abs_max(events, "delta_zscore"), _column_abs_max(observations, "post_max_abs_delta_zscore"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1012)     max_oi = max(_column_abs_max(events, "oi_change"), _column_abs_max(observations, "post_oi_change"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1013)     return (
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1014)         f"events={event_count}; post_sweep_observations={observation_count}; "
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1015)         f"max_volume_zscore={max_volume:.3f}; max_abs_delta_zscore={max_delta:.3f}; "
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1016)         f"max_abs_oi_change={max_oi:.3f}; liquidations=not_available; vwap=not_available"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1017)     )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1018) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1019) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1020) def _group_by_day_zone(frame: pd.DataFrame) -> dict[tuple[str, str], pd.DataFrame]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1021)     if frame.empty or "zone_id" not in frame.columns:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1022)         return {}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1023)     grouped = {}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1024)     for key, group in frame.groupby(["_source_day", "zone_id"], dropna=False, sort=False):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1025)         grouped[(str(key[0]), str(key[1]))] = group.copy()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1026)     return grouped
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1027) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1028) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1029) def _source_family(source_timeframe: str) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1030)     sources = _split_sources(source_timeframe)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1031)     if "H4" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1032)         return "H4_MAJOR_STRUCTURE"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1033)     if "H1" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1034)         return "H1_PRIMARY_STRUCTURE"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1035)     if "M15" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1036)         return "M15_MINIMUM_STRUCTURE"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1037)     if "SESSION" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1038)         return "SESSION_LOCAL_CONTEXT"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1039)     if "PATTERN" in sources:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1040)         return "PATTERN_CONTEXT"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1041)     return "UNKNOWN_CONTEXT"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1042) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1043) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1044) def _split_sources(value: object) -> set[str]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1045)     text = _string(value).replace(",", "|")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1046)     return {part.strip() for part in text.split("|") if part.strip()} or {"UNKNOWN"}
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1047) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1048) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1049) def _score_level_types(raw_json: object) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1050)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1051)         data = json.loads(_string(raw_json) or "{}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1052)     except json.JSONDecodeError:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1053)         return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1054)     return _string(data.get("level_types"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1055) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1056) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1057) def _reaction_verdict(raw_json: object) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1058)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1059)         data = json.loads(_string(raw_json) or "{}")
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1060)     except json.JSONDecodeError:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1061)         return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1062)     return _string(data.get("reaction_verdict"))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1063) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1064) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1065) def _column_abs_max(frame: pd.DataFrame, column: str) -> float:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1066)     if frame.empty or column not in frame.columns:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1067)         return 0.0
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1068)     values = pd.to_numeric(frame[column], errors="coerce").abs().fillna(0)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1069)     return float(values.max()) if not values.empty else 0.0
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1070) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1071) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1072) def _current_price(representative_price: float, distance_pct: float) -> float:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1073)     if pd.isna(representative_price) or pd.isna(distance_pct):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1074)         return representative_price
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1075)     denominator = 1.0 + (distance_pct / 100.0)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1076)     if denominator == 0:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1077)         return representative_price
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1078)     return representative_price / denominator
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1079) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1080) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1081) def _parse_date(value: str | date, field_name: str) -> date:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1082)     if isinstance(value, date):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1083)         return value
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1084)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1085)         return date.fromisoformat(str(value))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1086)     except ValueError as exc:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1087)         raise SignificantZoneSelectorError(f"{field_name} must be YYYY-MM-DD") from exc
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1088) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1089) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1090) def _date_range(start_date: date, end_date: date) -> Iterable[date]:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1091)     days = (end_date - start_date).days
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1092)     for offset in range(days + 1):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1093)         yield start_date + timedelta(days=offset)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1094) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1095) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1096) def _repo_commit() -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1097)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1098)         result = subprocess.run(
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1099)             ["git", "rev-parse", "HEAD"],
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1100)             check=True,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1101)             capture_output=True,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1102)             text=True,
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1103)         )
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1104)     except (OSError, subprocess.CalledProcessError):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1105)         return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1106)     return result.stdout.strip()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1107) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1108) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1109) def _float(value: object, default: float = float("nan")) -> float:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1110)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1111)         if value is None or value == "":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1112)             return default
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1113)         return float(value)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1114)     except (TypeError, ValueError):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1115)         return default
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1116) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1117) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1118) def _int(value: object, default: int = 0) -> int:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1119)     try:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1120)         if value is None or value == "":
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1121)             return default
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1122)         return int(float(value))
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1123)     except (TypeError, ValueError):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1124)         return default
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1125) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1126) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1127) def _truth(value: object) -> bool:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1128)     return _string(value).lower() == "true"
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1129) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1130) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1131) def _contains_any(value: object, candidates: list[str]) -> bool:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1132)     text = _string(value).upper()
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1133)     return any(candidate in text for candidate in candidates)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1134) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1135) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1136) def _first_nonempty(*values: object) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1137)     for value in values:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1138)         text = _string(value)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1139)         if text:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1140)             return text
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1141)     return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1142) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1143) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1144) def _string(value: object) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1145)     if value is None:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1146)         return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1147)     if isinstance(value, float) and pd.isna(value):
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1148)         return ""
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1149)     return str(value)
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1150) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1151) 
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1152) def _escape_markdown(value: str) -> str:
+39f698fe (Mykh-Ai 2026-06-06 19:08:07 +0200 1153)     return value.replace("|", "/").replace("\n", " ")

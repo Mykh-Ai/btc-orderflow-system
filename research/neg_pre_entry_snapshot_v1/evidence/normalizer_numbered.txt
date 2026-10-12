@@ -1,0 +1,232 @@
+     1	from __future__ import annotations
+     2	
+     3	import argparse
+     4	import csv
+     5	import hashlib
+     6	from datetime import datetime, timedelta, timezone
+     7	from pathlib import Path
+     8	from zoneinfo import ZoneInfo
+     9	
+    10	
+    11	INPUT_COLUMNS = {
+    12	    "Timestamp",
+    13	    "Trades",
+    14	    "TotalQty",
+    15	    "BuyQty",
+    16	    "SellQty",
+    17	    "AvgPrice",
+    18	    "ClosePrice",
+    19	    "HiPrice",
+    20	    "LowPrice",
+    21	}
+    22	
+    23	OUTPUT_COLUMNS = [
+    24	    "Timestamp",
+    25	    "Open",
+    26	    "High",
+    27	    "Low",
+    28	    "Close",
+    29	    "Volume",
+    30	    "AggTrades",
+    31	    "BuyQty",
+    32	    "SellQty",
+    33	    "VWAP",
+    34	    "OpenInterest",
+    35	    "FundingRate",
+    36	    "LiqBuyQty",
+    37	    "LiqSellQty",
+    38	    "IsSynthetic",
+    39	]
+    40	
+    41	QUALITY_COLUMNS = [
+    42	    "date_utc",
+    43	    "row_count",
+    44	    "unique_minutes",
+    45	    "expected_minutes",
+    46	    "missing_minutes",
+    47	    "duplicate_minutes",
+    48	    "first_open_time_utc",
+    49	    "last_open_time_utc",
+    50	    "source_file",
+    51	    "normalized_sha256",
+    52	]
+    53	
+    54	
+    55	def _parse_timestamp(value: str, source_timezone: ZoneInfo) -> datetime:
+    56	    parsed = datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S")
+    57	    localized = parsed.replace(tzinfo=source_timezone, fold=0)
+    58	    result = localized.astimezone(timezone.utc)
+    59	    if result.astimezone(source_timezone).replace(tzinfo=None) != parsed:
+    60	        raise ValueError(f"nonexistent or ambiguous legacy timestamp={value!r}")
+    61	    # The legacy minute loop occasionally stamped a completed aggregation at
+    62	    # xx:xx:59 (and very rarely xx:xx:01/02). Assign it to the nearest minute,
+    63	    # matching the minute-key semantics used by DeltaScout and Executor.
+    64	    if result.second >= 30:
+    65	        result += timedelta(minutes=1)
+    66	    return result.replace(second=0, microsecond=0)
+    67	
+    68	
+    69	def _number(row: dict[str, str], field: str, path: Path, row_number: int) -> float:
+    70	    try:
+    71	        return float(row[field])
+    72	    except (KeyError, TypeError, ValueError) as exc:
+    73	        raise ValueError(f"invalid {field} at {path}:{row_number}") from exc
+    74	
+    75	
+    76	def _price(value: float) -> str:
+    77	    return f"{value:.8f}".rstrip("0").rstrip(".")
+    78	
+    79	
+    80	def _sha256(path: Path) -> str:
+    81	    digest = hashlib.sha256()
+    82	    with path.open("rb") as handle:
+    83	        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+    84	            digest.update(chunk)
+    85	    return digest.hexdigest()
+    86	
+    87	
+    88	def normalize_legacy_aggregator_feed(
+    89	    input_root: Path,
+    90	    output_root: Path,
+    91	    *,
+    92	    date_from: str,
+    93	    date_to: str,
+    94	    source_timezone: str = "Europe/Bratislava",
+    95	) -> tuple[int, int]:
+    96	    daily_root = output_root / "daily"
+    97	    provenance_root = output_root / "provenance"
+    98	    daily_root.mkdir(parents=True, exist_ok=True)
+    99	    provenance_root.mkdir(parents=True, exist_ok=True)
+   100	
+   101	    paths = [
+   102	        path
+   103	        for path in sorted(input_root.glob("*.csv"))
+   104	        if date_from <= path.stem <= date_to
+   105	    ]
+   106	    if not paths:
+   107	        raise ValueError(f"no legacy feed files for {date_from}..{date_to} under {input_root}")
+   108	
+   109	    zone = ZoneInfo(source_timezone)
+   110	    source_rows: list[tuple[datetime, dict[str, str], Path, int]] = []
+   111	    seen_source_minutes: set[datetime] = set()
+   112	    duplicate_source_minutes = 0
+   113	
+   114	    for path in paths:
+   115	        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+   116	            reader = csv.DictReader(handle)
+   117	            missing = INPUT_COLUMNS.difference(reader.fieldnames or [])
+   118	            if missing:
+   119	                raise ValueError(f"missing legacy columns={sorted(missing)} in {path}")
+   120	            for row_number, row in enumerate(reader, start=2):
+   121	                ts = _parse_timestamp(row["Timestamp"], zone)
+   122	                if ts in seen_source_minutes:
+   123	                    duplicate_source_minutes += 1
+   124	                    continue
+   125	                seen_source_minutes.add(ts)
+   126	                source_rows.append((ts, row, path, row_number))
+   127	
+   128	    source_rows.sort(key=lambda item: item[0])
+   129	    previous_close: float | None = None
+   130	    rows_by_utc_day: dict[str, list[dict[str, str]]] = {}
+   131	    source_files_by_utc_day: dict[str, set[str]] = {}
+   132	
+   133	    for ts, row, path, row_number in source_rows:
+   134	        close = _number(row, "ClosePrice", path, row_number)
+   135	        raw_high = _number(row, "HiPrice", path, row_number)
+   136	        raw_low = _number(row, "LowPrice", path, row_number)
+   137	        open_price = close if previous_close is None else previous_close
+   138	        high = max(raw_high, open_price, close)
+   139	        low = min(raw_low, open_price, close)
+   140	        utc_day = ts.date().isoformat()
+   141	        rows_by_utc_day.setdefault(utc_day, []).append(
+   142	            {
+   143	                "Timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+   144	                "Open": _price(open_price),
+   145	                "High": _price(high),
+   146	                "Low": _price(low),
+   147	                "Close": _price(close),
+   148	                "Volume": row["TotalQty"],
+   149	                "AggTrades": row["Trades"],
+   150	                "BuyQty": row["BuyQty"],
+   151	                "SellQty": row["SellQty"],
+   152	                "VWAP": row["AvgPrice"],
+   153	                "OpenInterest": "",
+   154	                "FundingRate": "",
+   155	                "LiqBuyQty": "",
+   156	                "LiqSellQty": "",
+   157	                "IsSynthetic": "0",
+   158	            }
+   159	        )
+   160	        source_files_by_utc_day.setdefault(utc_day, set()).add(str(path))
+   161	        previous_close = close
+   162	
+   163	    quality_rows: list[dict[str, str | int]] = []
+   164	    total_rows = 0
+   165	
+   166	    for utc_day, output_rows in sorted(rows_by_utc_day.items()):
+   167	        timestamps = [
+   168	            datetime.strptime(row["Timestamp"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+   169	            for row in output_rows
+   170	        ]
+   171	        output_path = daily_root / f"{utc_day}.csv"
+   172	        with output_path.open("w", encoding="utf-8", newline="") as handle:
+   173	            writer = csv.DictWriter(handle, fieldnames=OUTPUT_COLUMNS)
+   174	            writer.writeheader()
+   175	            writer.writerows(output_rows)
+   176	
+   177	        expected_minutes = 0
+   178	        if timestamps:
+   179	            expected_minutes = int((timestamps[-1] - timestamps[0]) / timedelta(minutes=1)) + 1
+   180	        quality_rows.append(
+   181	            {
+   182	                "date_utc": utc_day,
+   183	                "row_count": len(output_rows),
+   184	                "unique_minutes": len(timestamps),
+   185	                "expected_minutes": expected_minutes,
+   186	                "missing_minutes": max(0, expected_minutes - len(timestamps)),
+   187	                "duplicate_minutes": duplicate_source_minutes,
+   188	                "first_open_time_utc": timestamps[0].isoformat() if timestamps else "",
+   189	                "last_open_time_utc": timestamps[-1].isoformat() if timestamps else "",
+   190	                "source_file": "|".join(sorted(source_files_by_utc_day[utc_day])),
+   191	                "normalized_sha256": _sha256(output_path),
+   192	            }
+   193	        )
+   194	        total_rows += len(output_rows)
+   195	
+   196	    quality_path = provenance_root / "daily_quality.csv"
+   197	    with quality_path.open("w", encoding="utf-8", newline="") as handle:
+   198	        writer = csv.DictWriter(handle, fieldnames=QUALITY_COLUMNS)
+   199	        writer.writeheader()
+   200	        writer.writerows(quality_rows)
+   201	
+   202	    return len(paths), total_rows
+   203	
+   204	
+   205	def build_parser() -> argparse.ArgumentParser:
+   206	    parser = argparse.ArgumentParser(
+   207	        description="Normalize the archived legacy Binance Spot aggregator feed for Scout replay"
+   208	    )
+   209	    parser.add_argument("--input-root", type=Path, required=True)
+   210	    parser.add_argument("--output-root", type=Path, required=True)
+   211	    parser.add_argument("--date-from", required=True)
+   212	    parser.add_argument("--date-to", required=True)
+   213	    parser.add_argument("--source-timezone", default="Europe/Bratislava")
+   214	    return parser
+   215	
+   216	
+   217	def main() -> None:
+   218	    args = build_parser().parse_args()
+   219	    files, rows = normalize_legacy_aggregator_feed(
+   220	        args.input_root,
+   221	        args.output_root,
+   222	        date_from=args.date_from,
+   223	        date_to=args.date_to,
+   224	        source_timezone=args.source_timezone,
+   225	    )
+   226	    print(f"normalized_files={files}")
+   227	    print(f"normalized_rows={rows}")
+   228	    print(f"daily_root={args.output_root / 'daily'}")
+   229	
+   230	
+   231	if __name__ == "__main__":
+   232	    main()

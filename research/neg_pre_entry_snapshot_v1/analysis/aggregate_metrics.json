@@ -1,0 +1,17 @@
+{
+  "N": 262,
+  "gross_wins": 120,
+  "net_wins": 105,
+  "gross_win_rate": 0.4580152671755725,
+  "net_win_rate": 0.40076335877862596,
+  "gross": 155.00423700000067,
+  "net": -1152.2953946533712,
+  "gross_per_trade": 0.5916192251908422,
+  "net_per_trade": -4.398074025394546,
+  "PF": 0.7192291465266885,
+  "commission": 1169.319473211792,
+  "slippage": 137.98015844158,
+  "gross_positive_net_negative": 15,
+  "tp1_reached": 120,
+  "tp2_reached": 74
+}

@@ -1,0 +1,2030 @@
+$ git log -p -S significance_score -- market_monitor
+commit fbcdce26b0308c10cafa591e4d265a045b5a5f94
+Author: Codex <codex@openai.com>
+Date:   Sat Oct 10 23:20:20 2026 -0700
+
+    Add causal H1/H4 research adapter for delta-triggered reclaim
+
+diff --git a/market_monitor/closed_structure_adapter.py b/market_monitor/closed_structure_adapter.py
+new file mode 100644
+index 0000000..c04344a
+--- /dev/null
++++ b/market_monitor/closed_structure_adapter.py
+@@ -0,0 +1,187 @@
++"""Research-only, as-of H1/H4 structural inventory over completed minute feed.
++
++Reuses canonical swing geometry, zone construction, lifecycle and significance.
++This is NOT the complete v39A snapshot: it excludes M15/session/pattern/merged
++zones and event/post-sweep score bonuses. References retain immutable identities.
++Full available history is retained; no daily reset or visible-seven restriction.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import json
++
++import numpy as np
++import pandas as pd
++
++from market_monitor.structure import _confirmed_swing_levels
++from market_monitor.liquidity_zones import build_liquidity_map
++from market_monitor.zone_registry import _current_zones_to_registry, _update_lifecycle, REGISTRY_COLUMNS
++from market_monitor.significant_zone_selector import _score_zone, HIDDEN_STATUSES
++
++ADAPTER_VERSION = "CLOSED_H1_H4_IMMUTABLE_REFERENCES_V1"
++
++
++@dataclass(frozen=True)
++class Reference:
++    zone_id: str
++    available_at: pd.Timestamp
++    timeframe: str
++    price: float
++    lower: float
++    upper: float
++    level: dict
++
++
++def minute_frame(bars) -> pd.DataFrame:
++    """Replay FeedBar.ts is availability/close time; native structure uses OPEN labels."""
++    frame = pd.DataFrame({
++        "Timestamp": [b.ts for b in bars],
++        "OpenPrice": [b.open for b in bars], "HiPrice": [b.high for b in bars],
++        "LowPrice": [b.low for b in bars], "ClosePrice": [b.close for b in bars],
++        "TotalQty": [b.volume for b in bars], "Trades": 0,
++        "BuyQty": [b.buy_qty for b in bars], "SellQty": [b.sell_qty for b in bars],
++        # Unavailable derivatives context is not a fabricated zero observation.
++        # These compatibility columns do not participate in this adapter's scores.
++        "OpenInterest": 0., "FundingRate": 0.,
++        "DataQuality": ["INVALID" if b.is_synthetic else "RAW" for b in bars],
++    })
++    frame["Timestamp"] = pd.to_datetime(frame["Timestamp"], utc=True) - pd.Timedelta(minutes=1)
++    if frame.empty or frame.Timestamp.duplicated().any() or not frame.Timestamp.is_monotonic_increasing:
++        raise ValueError("minute feed must be nonempty, unique and chronological")
++    return frame
++
++
++class ClosedStructureMonitor:
++    """Lazy deterministic lifecycle reconstruction, always restricted to an as-of prefix.
++
++    Swing discovery can be precomputed because each reference is published only
++    at its final confirmation bar CLOSE. Prefix-equivalence is a required test.
++    Lifecycle state is reconstructed from its complete past, never a recent slice.
++    """
++    def __init__(self, bars):
++        self.bars = bars
++        self.frame = minute_frame(bars)
++        self.times = pd.DatetimeIndex([b.ts for b in bars])
++        self.closes = self.frame.ClosePrice.to_numpy()
++        self.highs = self.frame.HiPrice.to_numpy()
++        bad = np.array([b.is_synthetic or b.volume <= 0 for b in bars])
++        gaps = np.r_[False, np.diff(self.times.asi8) != 60_000_000_000]
++        self.bad_prefix = np.r_[0, np.cumsum(bad | gaps)]
++        self.references = self._discover_references()
++        self._base_registry = {}
++        self.last_query = None
++
++    def _discover_references(self):
++        references = []
++        for tf, minutes, lr in (("H1", 60, 2), ("H4", 240, 1)):
++            duration = pd.Timedelta(minutes=minutes)
++            for row in _confirmed_swing_levels(self.frame, tf, lr):
++                if row["side"] != "BUY_SIDE":
++                    continue
++                confirm_open = pd.Timestamp(row["created_at"])
++                window_start = confirm_open - 2 * lr * duration
++                available = confirm_open + duration
++                first = self.times.searchsorted(window_start + pd.Timedelta(minutes=1))
++                stop = self.times.searchsorted(available, side="right")
++                expected = (2 * lr + 1) * minutes
++                if stop - first != expected:
++                    continue
++                # Ignore a preceding gap, but never a gap inside the confirming window.
++                window = self.bars[first:stop]
++                if any(b.is_synthetic or b.volume <= 0 for b in window):
++                    continue
++                if np.any(np.diff(self.times.asi8[first:stop]) != 60_000_000_000):
++                    continue
++                if self.times[first] != window_start + pd.Timedelta(minutes=1) or self.times[stop-1] != available:
++                    continue
++                identity = f"{tf}|{row['level_timestamp']}|{row['price']}|{available.isoformat()}"
++                zone_id = "HZONE_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
++                row = dict(row, level_id=zone_id, source_level_ids=zone_id,
++                           created_at=available.isoformat(), htf_confirmation_timestamp=available.isoformat())
++                # Exactly the canonical single-reference band (not a fitted parameter).
++                band = max(abs(float(row["price"])) * .0005, 10.)
++                references.append(Reference(zone_id, available, tf, float(row["price"]),
++                                            float(row["price"])-band, float(row["price"])+band, row))
++        return sorted(references, key=lambda r: (r.available_at, r.zone_id))
++
++    def _registry_for(self, ref):
++        if ref.zone_id not in self._base_registry:
++            zones = build_liquidity_map(pd.DataFrame([ref.level]), ref.price)
++            if len(zones) != 1:
++                raise ValueError(f"single structural reference did not produce one zone: {ref.zone_id}")
++            registry = _current_zones_to_registry(zones, pd.DataFrame(columns=REGISTRY_COLUMNS))
++            registry["zone_id"] = ref.zone_id
++            self._base_registry[ref.zone_id] = registry
++        return self._base_registry[ref.zone_id].copy(deep=True)
++
++    def query(self, ts, *, crossing_lookback_minutes=240):
++        ts = pd.Timestamp(ts)
++        if self.last_query is not None and ts < self.last_query:
++            raise ValueError("monitor queries must be chronological")
++        self.last_query = ts
++        i = self.times.get_indexer([ts])[0]
++        if i < 0:
++            raise ValueError("missing exact monitor minute")
++        price = self.closes[i]
++        available = [r for r in self.references if r.available_at < ts]
++        counts = {"known_references": len(available), "price_not_above": 0,
++                  "no_recent_cross": 0, "gap_or_invalid_since_cross": 0,
++                  "inactive_or_insignificant": 0, "incomplete_level_history": 0}
++        eligible, evidence = [], []
++        for ref in available:
++            if price <= ref.upper:
++                counts["price_not_above"] += 1
++                continue
++            first = int(self.times.searchsorted(max(ref.available_at, ts-pd.Timedelta(minutes=crossing_lookback_minutes+1))))
++            before = np.flatnonzero(self.closes[first:i] <= ref.upper)
++            if len(before) == 0:
++                counts["no_recent_cross"] += 1
++                continue
++            k = first + int(before[-1]) + 1
++            crossed_at = self.times[k]
++            if crossed_at <= ref.available_at or ts-crossed_at > pd.Timedelta(minutes=crossing_lookback_minutes):
++                counts["no_recent_cross"] += 1
++                continue
++            # Include the bar immediately before crossing to rule out a gap jump.
++            if self.bad_prefix[i+1] - self.bad_prefix[max(0,k-1)] != 0:
++                counts["gap_or_invalid_since_cross"] += 1
++                continue
++            # Native lifecycle only consumes observations since first_seen_at.
++            # Retain that WHOLE interval, not a sliding recent-history window.
++            history_start = int(self.times.searchsorted(ref.available_at + pd.Timedelta(minutes=1)))
++            if self.bad_prefix[i+1] - self.bad_prefix[history_start] != 0:
++                counts["incomplete_level_history"] += 1
++                continue
++            history = self.frame.iloc[history_start:i+1]
++            registry = _update_lifecycle(self._registry_for(ref), history, closed_htf_only=True)
++            row = registry.iloc[0].copy()
++            row["distance_from_close_pct"] = (ref.price-price)/price*100
++            score = _score_zone(row, pd.DataFrame(), pd.DataFrame())
++            decision = "ELIGIBLE"
++            if (score["bucket"] not in {"MAJOR", "PRIMARY"}
++                or str(row["status"]) in HIDDEN_STATUSES
++                or str(row["consumption_status"]) in HIDDEN_STATUSES):
++                counts["inactive_or_insignificant"] += 1
++                decision = "INACTIVE_OR_INSIGNIFICANT"
++            sweep_hour_start = (crossed_at-pd.Timedelta(minutes=1)).floor("h") + pd.Timedelta(minutes=1)
++            sweep_first = int(self.times.searchsorted(sweep_hour_start))
++            if self.times[sweep_first] != sweep_hour_start or self.bad_prefix[i+1]-self.bad_prefix[sweep_first+1] != 0:
++                decision = "INCOMPLETE_SWEEP_HOUR"
++            item = {**score, "available_at": ref.available_at.isoformat(), "asof_ts": ts.isoformat(),
++                    "crossed_at": crossed_at.isoformat(), "sweep_start_ts": sweep_hour_start.isoformat(),
++                    "sweep_high": float(self.highs[sweep_first:i+1].max()),
++                    "consumption_status": str(row["consumption_status"]), "decision": decision,
++                    "adapter_version": ADAPTER_VERSION,
++                    "market_state_reset": False, "structure_levels_reset": False,
++                    "future_data_used": False}
++            evidence.append(item)
++            if decision == "ELIGIBLE":
++                eligible.append(item)
++        eligible.sort(key=lambda r: (price-float(r["price_upper"]), -r["significance_score"], r["zone_id"]))
++        return eligible, counts, evidence
++
++    def inventory(self):
++        return [{"zone_id": r.zone_id, "available_at": r.available_at.isoformat(),
++                 "timeframe": r.timeframe, "price": r.price, "lower": r.lower, "upper": r.upper,
++                 "level": json.dumps(r.level, sort_keys=True)} for r in self.references]
+
+commit c08700751f6ec49782c28f52adda0e0130d38dd2
+Author: Mykh-Ai <liveworkch@gmail.com>
+Date:   Sat Jun 6 20:47:07 2026 +0200
+
+    Add SHI_RESET_36C trader snapshot builder v0
+    
+    Add static trader snapshot renderer from selected_zones.csv.
+    
+    Render only visible selected zones from significant zone selector and generate HTML, SVG, PNG, manifest, rendered_zones.csv, and snapshot_state.json.
+    
+    Include current price, nearest BUY_SIDE/SELL_SIDE liquidity zones, zone-in-front-of-price, and missing-data notes.
+    
+    Avoid raw registry rendering, Backtester, Executor, signals, entries, exits, PnL, orders, live-readiness, or edge-validation claims.
+
+diff --git a/market_monitor/trader_snapshot_builder.py b/market_monitor/trader_snapshot_builder.py
+new file mode 100644
+index 0000000..0aee35c
+--- /dev/null
++++ b/market_monitor/trader_snapshot_builder.py
+@@ -0,0 +1,536 @@
++from __future__ import annotations
++
++import html
++import json
++import subprocess
++from dataclasses import dataclass
++from datetime import date, timedelta
++from pathlib import Path
++from typing import Iterable
++
++import pandas as pd
++from PIL import Image, ImageDraw, ImageFont
++
++
++RENDERER_VERSION = "SHI_RESET_36C_TRADER_SNAPSHOT_BUILDER_V0"
++HTML_OUTPUT = "trader_snapshot.html"
++SVG_OUTPUT = "trader_snapshot.svg"
++PNG_OUTPUT = "trader_snapshot.png"
++MANIFEST_OUTPUT = "trader_snapshot_manifest.json"
++RENDERED_ZONES_OUTPUT = "rendered_zones.csv"
++STATE_OUTPUT = "snapshot_state.json"
++
++WIDTH = 1600
++HEIGHT = 980
++CHART_X = 70
++CHART_Y = 72
++CHART_W = 1040
++CHART_H = 555
++PANEL_X = 1140
++PANEL_Y = 72
++PANEL_W = 390
++TABLE_Y = 675
++TABLE_H = 245
++MAX_VISIBLE_ZONES = 7
++
++RENDERED_ZONE_COLUMNS = [
++    "rank",
++    "zone_id",
++    "side",
++    "bucket",
++    "source_timeframe",
++    "source_family",
++    "price_lower",
++    "price_upper",
++    "representative_price",
++    "current_price",
++    "distance_to_current_price_pct",
++    "significance_score",
++    "reason_selected",
++    "visible_on_snapshot",
++]
++
++
++class TraderSnapshotBuilderError(RuntimeError):
++    """Raised when a trader snapshot cannot be rendered from accepted inputs."""
++
++
++@dataclass(frozen=True)
++class TraderSnapshotResult:
++    output_dir: Path
++    html_path: Path
++    svg_path: Path
++    png_path: Path
++    manifest_path: Path
++    rendered_zones_path: Path
++    state_path: Path
++
++
++def build_trader_snapshot(
++    *,
++    start: str | date,
++    end: str | date,
++    selected_zones_path: str | Path,
++    input_root: str | Path,
++    feed_dir: str | Path,
++    output_dir: str | Path,
++) -> TraderSnapshotResult:
++    start_date = _parse_date(start, "start")
++    end_date = _parse_date(end, "end")
++    if start_date > end_date:
++        raise TraderSnapshotBuilderError("start must be <= end")
++
++    selected_path = Path(selected_zones_path)
++    input_root_path = Path(input_root)
++    feed_root = Path(feed_dir)
++    out_dir = Path(output_dir)
++    if not selected_path.exists():
++        raise TraderSnapshotBuilderError(f"selected_zones.csv not found: {selected_path}")
++    if not input_root_path.exists():
++        raise TraderSnapshotBuilderError(f"input root not found: {input_root_path}")
++    if not feed_root.exists():
++        raise TraderSnapshotBuilderError(f"feed dir not found: {feed_root}")
++    out_dir.mkdir(parents=True, exist_ok=True)
++
++    selected = pd.read_csv(selected_path)
++    _validate_selected_zones(selected, selected_path)
++    rendered_zones = _visible_zones(selected)
++    price_path = _load_price_path(feed_root, start_date, end_date)
++    current_price = float(price_path["Close"].iloc[-1])
++    missing_flags = _missing_data_flags(selected)
++    state = _snapshot_state(
++        start_date=start_date,
++        end_date=end_date,
++        current_price=current_price,
++        rendered_zones=rendered_zones,
++        missing_flags=missing_flags,
++    )
++
++    rendered_zones_path = out_dir / RENDERED_ZONES_OUTPUT
++    rendered_zones[RENDERED_ZONE_COLUMNS].to_csv(rendered_zones_path, index=False)
++
++    svg_text = _render_svg(price_path, rendered_zones, state)
++    html_text = _render_html(svg_text, state, rendered_zones)
++    svg_path = out_dir / SVG_OUTPUT
++    html_path = out_dir / HTML_OUTPUT
++    png_path = out_dir / PNG_OUTPUT
++    state_path = out_dir / STATE_OUTPUT
++    manifest_path = out_dir / MANIFEST_OUTPUT
++    svg_path.write_text(svg_text, encoding="utf-8")
++    html_path.write_text(html_text, encoding="utf-8")
++    _render_png(price_path, rendered_zones, state, png_path)
++
++    state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
++    manifest = {
++        "renderer_version": RENDERER_VERSION,
++        "start": start_date.isoformat(),
++        "end": end_date.isoformat(),
++        "input_selected_zones": str(selected_path),
++        "input_root": str(input_root_path),
++        "feed_dir": str(feed_root),
++        "selected_visible_count": int(len(rendered_zones)),
++        "no_hidden_zones_rendered": True,
++        "repo_commit": _repo_commit(),
++        "outputs": {
++            "trader_snapshot_html": str(html_path),
++            "trader_snapshot_svg": str(svg_path),
++            "trader_snapshot_png": str(png_path),
++            "trader_snapshot_manifest_json": str(manifest_path),
++            "rendered_zones_csv": str(rendered_zones_path),
++            "snapshot_state_json": str(state_path),
++        },
++    }
++    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
++
++    return TraderSnapshotResult(
++        output_dir=out_dir,
++        html_path=html_path,
++        svg_path=svg_path,
++        png_path=png_path,
++        manifest_path=manifest_path,
++        rendered_zones_path=rendered_zones_path,
++        state_path=state_path,
++    )
++
++
++def _validate_selected_zones(frame: pd.DataFrame, path: Path) -> None:
++    required = set(RENDERED_ZONE_COLUMNS)
++    missing = sorted(required - set(frame.columns))
++    if missing:
++        raise TraderSnapshotBuilderError(f"{path} missing required columns: {', '.join(missing)}")
++
++
++def _visible_zones(selected: pd.DataFrame) -> pd.DataFrame:
++    visible = selected[selected["visible_on_snapshot"].astype(str).str.lower() == "true"].copy()
++    if len(visible) > MAX_VISIBLE_ZONES:
++        raise TraderSnapshotBuilderError(f"selected visible zones exceeds {MAX_VISIBLE_ZONES}: {len(visible)}")
++    if visible.empty:
++        raise TraderSnapshotBuilderError("selected_zones.csv has no visible_on_snapshot=true rows")
++    for column in ["price_lower", "price_upper", "representative_price", "significance_score"]:
++        visible[column] = pd.to_numeric(visible[column], errors="coerce")
++    if visible[["price_lower", "price_upper", "representative_price"]].isna().any().any():
++        raise TraderSnapshotBuilderError("visible selected zones contain missing price fields")
++    return visible.sort_values(["rank", "zone_id"], kind="mergesort").reset_index(drop=True)
++
++
++def _load_price_path(feed_dir: Path, start_date: date, end_date: date) -> pd.DataFrame:
++    frames = []
++    for day in _date_range(start_date, end_date):
++        path = feed_dir / f"{day.isoformat()}.csv"
++        if not path.exists():
++            raise TraderSnapshotBuilderError(f"missing feed file: {path}")
++        frame = pd.read_csv(path)
++        required = {"Timestamp", "Open", "High", "Low", "Close"}
++        missing = sorted(required - set(frame.columns))
++        if missing:
++            raise TraderSnapshotBuilderError(f"{path} missing price columns: {', '.join(missing)}")
++        frame = frame[["Timestamp", "Open", "High", "Low", "Close"]].copy()
++        frame["Timestamp"] = pd.to_datetime(frame["Timestamp"], errors="coerce")
++        for column in ["Open", "High", "Low", "Close"]:
++            frame[column] = pd.to_numeric(frame[column], errors="coerce")
++        frame = frame.dropna(subset=["Timestamp", "Open", "High", "Low", "Close"])
++        if frame.empty:
++            raise TraderSnapshotBuilderError(f"{path} has no usable price rows")
++        frames.append(frame)
++    out = pd.concat(frames, ignore_index=True)
++    out = out.sort_values("Timestamp", kind="mergesort").reset_index(drop=True)
++    if out.empty:
++        raise TraderSnapshotBuilderError("no usable price data loaded")
++    return out
++
++
++def _missing_data_flags(selected: pd.DataFrame) -> dict[str, str]:
++    text = "|".join(selected.get("evidence_fields_missing", pd.Series(dtype=str)).fillna("").astype(str)).lower()
++    flags = {}
++    for key in ["liquidations", "vwap", "compression"]:
++        flags[key] = "not_available" if f"{key}=not_available" in text else "available_or_not_reported"
++    return flags
++
++
++def _snapshot_state(
++    *,
++    start_date: date,
++    end_date: date,
++    current_price: float,
++    rendered_zones: pd.DataFrame,
++    missing_flags: dict[str, str],
++) -> dict[str, object]:
++    buy_rows = rendered_zones[rendered_zones["side"] == "BUY_SIDE"]
++    sell_rows = rendered_zones[rendered_zones["side"] == "SELL_SIDE"]
++    nearest_buy = _nearest_zone(buy_rows, current_price)
++    nearest_sell = _nearest_zone(sell_rows, current_price)
++    nearest_above = _nearest_above(rendered_zones, current_price)
++    nearest_below = _nearest_below(rendered_zones, current_price)
++    zone_front = {
++        "above_price": nearest_above or "not_available_from_selected_zones",
++        "below_price": nearest_below or "not_available_from_selected_zones",
++    }
++    return {
++        "start": start_date.isoformat(),
++        "end": end_date.isoformat(),
++        "current_price": round(current_price, 4),
++        "visible_zone_count": int(len(rendered_zones)),
++        "buy_side_visible_count": int((rendered_zones["side"] == "BUY_SIDE").sum()),
++        "sell_side_visible_count": int((rendered_zones["side"] == "SELL_SIDE").sum()),
++        "nearest_buy_side_zone": nearest_buy or "not_available_from_selected_zones",
++        "nearest_sell_side_zone": nearest_sell or "not_available_from_selected_zones",
++        "nearest_above_price_zone": nearest_above or "not_available_from_selected_zones",
++        "nearest_below_price_zone": nearest_below or "not_available_from_selected_zones",
++        "zone_in_front_of_price": zone_front,
++        "missing_data_flags": missing_flags,
++        "forbidden_trade_fields_absent": True,
++    }
++
++
++def _nearest_zone(frame: pd.DataFrame, current_price: float) -> dict[str, object] | None:
++    if frame.empty:
++        return None
++    distances = (frame["representative_price"].astype(float) - current_price).abs()
++    row = frame.loc[distances.sort_values(kind="mergesort").index[0]]
++    return _zone_ref(row)
++
++
++def _nearest_above(frame: pd.DataFrame, current_price: float) -> dict[str, object] | None:
++    above = frame[frame["price_lower"].astype(float) > current_price]
++    if above.empty:
++        return None
++    row = above.sort_values(["price_lower", "rank"], kind="mergesort").iloc[0]
++    return _zone_ref(row)
++
++
++def _nearest_below(frame: pd.DataFrame, current_price: float) -> dict[str, object] | None:
++    below = frame[frame["price_upper"].astype(float) < current_price]
++    if below.empty:
++        return None
++    row = below.sort_values(["price_upper", "rank"], ascending=[False, True], kind="mergesort").iloc[0]
++    return _zone_ref(row)
++
++
++def _zone_ref(row: pd.Series) -> dict[str, object]:
++    return {
++        "rank": int(row["rank"]),
++        "zone_id": str(row["zone_id"]),
++        "side": str(row["side"]),
++        "bucket": str(row["bucket"]),
++        "representative_price": round(float(row["representative_price"]), 4),
++        "price_lower": round(float(row["price_lower"]), 4),
++        "price_upper": round(float(row["price_upper"]), 4),
++        "distance_to_current_price_pct": round(float(row["distance_to_current_price_pct"]), 4),
++    }
++
++
++def _render_svg(price_path: pd.DataFrame, zones: pd.DataFrame, state: dict[str, object]) -> str:
++    scale = _scale(price_path, zones)
++    points = _decimated_points(price_path, max_points=520)
++    polyline = " ".join(f"{_x(i, len(points)):.1f},{scale(float(row.Close)):.1f}" for i, row in enumerate(points.itertuples()))
++    current_y = scale(float(state["current_price"]))
++    parts = [
++        f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}">',
++        '<rect width="1600" height="980" fill="#f7f8fa"/>',
++        '<text x="70" y="36" font-family="Arial" font-size="24" font-weight="700" fill="#17202a">SHI_RESET_36C Trader Snapshot Research</text>',
++        f'<text x="70" y="58" font-family="Arial" font-size="13" fill="#5f6b7a">{state["start"]} to {state["end"]} | research monitor snapshot, not trading advice</text>',
++        f'<rect x="{CHART_X}" y="{CHART_Y}" width="{CHART_W}" height="{CHART_H}" fill="#ffffff" stroke="#b8c0cc"/>',
++    ]
++    parts.extend(_price_grid_svg(scale))
++    parts.extend(_zone_svg(zones, scale))
++    parts.append(f'<polyline points="{polyline}" fill="none" stroke="#1f2937" stroke-width="2"/>')
++    parts.append(f'<line x1="{CHART_X}" x2="{CHART_X + CHART_W}" y1="{current_y:.1f}" y2="{current_y:.1f}" stroke="#111827" stroke-width="1.5" stroke-dasharray="6 5"/>')
++    parts.append(f'<text x="{CHART_X + CHART_W - 150}" y="{current_y - 7:.1f}" font-family="Arial" font-size="12" fill="#111827">current {float(state["current_price"]):.1f}</text>')
++    parts.extend(_right_panel_svg(state))
++    parts.extend(_bottom_table_svg(zones))
++    parts.append("</svg>")
++    return "\n".join(parts)
++
++
++def _render_html(svg_text: str, state: dict[str, object], zones: pd.DataFrame) -> str:
++    zone_notes = "\n".join(
++        f"<li>#{int(row.rank)} {html.escape(str(row.side))} {html.escape(str(row.bucket))}: "
++        f"{html.escape(_short(row.reason_selected, 130))} | flow: "
++        f"{html.escape(_short(getattr(row, 'flow_evidence_summary', 'not_available'), 130))}</li>"
++        for row in zones.itertuples()
++    )
++    return "\n".join(
++        [
++            "<!doctype html>",
++            '<html lang="en">',
++            "<head>",
++            '<meta charset="utf-8"/>',
++            "<title>SHI_RESET_36C Trader Snapshot Research</title>",
++            "<style>body{margin:0;background:#eef1f5;font-family:Arial,sans-serif;color:#17202a}.wrap{width:1600px;margin:0 auto;background:#f7f8fa}.notes{padding:0 70px 32px 70px;font-size:13px;line-height:1.35}.notes h2{font-size:16px;margin:12px 0 6px}.notes ul{columns:2;margin-top:6px}</style>",
++            "</head>",
++            "<body>",
++            '<div class="wrap">',
++            svg_text,
++            '<div class="notes">',
++            "<h2>Selected Zone Evidence Notes</h2>",
++            f"<ul>{zone_notes}</ul>",
++            "<p>Research monitor snapshot, not trading advice. Hidden selector rows are retained in selected_zones.csv but are not drawn on the main chart.</p>",
++            "</div>",
++            "</div>",
++            "</body>",
++            "</html>",
++        ]
++    )
++
++
++def _render_png(price_path: pd.DataFrame, zones: pd.DataFrame, state: dict[str, object], path: Path) -> None:
++    image = Image.new("RGB", (WIDTH, HEIGHT), "#f7f8fa")
++    draw = ImageDraw.Draw(image)
++    font = ImageFont.load_default()
++    scale = _scale(price_path, zones)
++    points = _decimated_points(price_path, max_points=520)
++    draw.text((70, 20), "SHI_RESET_36C Trader Snapshot Research", fill="#17202a", font=font)
++    draw.text((70, 44), f"{state['start']} to {state['end']} | research monitor snapshot, not trading advice", fill="#5f6b7a", font=font)
++    draw.rectangle([CHART_X, CHART_Y, CHART_X + CHART_W, CHART_Y + CHART_H], fill="#ffffff", outline="#b8c0cc")
++    zone_rows = list(zones.itertuples())
++    label_y = _zone_label_positions(zone_rows, scale)
++    for idx, zone in enumerate(zone_rows):
++        y1 = scale(float(zone.price_upper))
++        y2 = scale(float(zone.price_lower))
++        fill = "#fde2e2" if zone.side == "BUY_SIDE" else "#d9f0ff"
++        outline = "#b42318" if zone.side == "BUY_SIDE" else "#075985"
++        draw.rectangle([CHART_X + 1, y1, CHART_X + CHART_W - 1, y2], fill=fill, outline=outline)
++        draw.text(
++            (CHART_X + 8, label_y[idx]),
++            f"#{int(zone.rank)} {zone.side} {zone.source_family} {float(zone.representative_price):.1f}",
++            fill=outline,
++            font=font,
++        )
++    xy = [(_x(i, len(points)), scale(float(row.Close))) for i, row in enumerate(points.itertuples())]
++    if len(xy) > 1:
++        draw.line(xy, fill="#1f2937", width=2)
++    current_y = scale(float(state["current_price"]))
++    draw.line([CHART_X, current_y, CHART_X + CHART_W, current_y], fill="#111827", width=1)
++    draw.text((CHART_X + CHART_W - 140, current_y - 12), f"current {float(state['current_price']):.1f}", fill="#111827", font=font)
++    draw.rectangle([PANEL_X, PANEL_Y, PANEL_X + PANEL_W, 620], fill="#ffffff", outline="#b8c0cc")
++    for idx, line in enumerate(_panel_lines(state)):
++        draw.text((PANEL_X + 16, PANEL_Y + 18 + idx * 21), line, fill="#17202a", font=font)
++    draw.rectangle([CHART_X, TABLE_Y, CHART_X + 1460, TABLE_Y + TABLE_H], fill="#ffffff", outline="#b8c0cc")
++    for idx, line in enumerate(_table_lines(zones)):
++        draw.text((CHART_X + 12, TABLE_Y + 14 + idx * 23), line, fill="#17202a", font=font)
++    image.save(path)
++
++
++def _price_grid_svg(scale) -> list[str]:
++    lines = []
++    for i in range(1, 5):
++        y = CHART_Y + i * CHART_H / 5
++        lines.append(f'<line x1="{CHART_X}" x2="{CHART_X + CHART_W}" y1="{y:.1f}" y2="{y:.1f}" stroke="#e5e7eb"/>')
++    return lines
++
++
++def _zone_svg(zones: pd.DataFrame, scale) -> list[str]:
++    parts = []
++    zone_rows = list(zones.itertuples())
++    label_y = _zone_label_positions(zone_rows, scale)
++    for idx, row in enumerate(zone_rows):
++        y_top = scale(float(row.price_upper))
++        y_bottom = scale(float(row.price_lower))
++        height = max(8.0, y_bottom - y_top)
++        fill = "#fde2e2" if row.side == "BUY_SIDE" else "#d9f0ff"
++        stroke = "#b42318" if row.side == "BUY_SIDE" else "#075985"
++        parts.append(f'<rect x="{CHART_X + 1}" y="{y_top:.1f}" width="{CHART_W - 2}" height="{height:.1f}" fill="{fill}" fill-opacity="0.72" stroke="{stroke}" stroke-width="1.3"/>')
++        label = f"#{int(row.rank)} {row.side} {row.source_family} {float(row.representative_price):.1f}"
++        parts.append(f'<text x="{CHART_X + 10}" y="{label_y[idx] + 10:.1f}" font-family="Arial" font-size="12" font-weight="700" fill="{stroke}">{html.escape(label)}</text>')
++    return parts
++
++
++def _zone_label_positions(zone_rows: list[object], scale) -> list[float]:
++    keyed = []
++    for idx, row in enumerate(zone_rows):
++        y = scale(float(row.price_upper)) + 4
++        keyed.append((y, idx))
++    keyed.sort()
++    min_gap = 17.0
++    placed: list[tuple[float, int]] = []
++    previous = CHART_Y + 4
++    for y, idx in keyed:
++        placed_y = max(y, previous)
++        placed_y = min(placed_y, CHART_Y + CHART_H - 18)
++        placed.append((placed_y, idx))
++        previous = placed_y + min_gap
++    out = [0.0 for _ in zone_rows]
++    for y, idx in placed:
++        out[idx] = y
++    return out
++
++
++def _right_panel_svg(state: dict[str, object]) -> list[str]:
++    lines = [
++        f'<rect x="{PANEL_X}" y="{PANEL_Y}" width="{PANEL_W}" height="555" fill="#ffffff" stroke="#b8c0cc"/>',
++        f'<text x="{PANEL_X + 16}" y="{PANEL_Y + 28}" font-family="Arial" font-size="18" font-weight="700" fill="#17202a">Market State</text>',
++    ]
++    for idx, line in enumerate(_panel_lines(state)):
++        y = PANEL_Y + 58 + idx * 24
++        lines.append(f'<text x="{PANEL_X + 16}" y="{y}" font-family="Arial" font-size="13" fill="#17202a">{html.escape(line)}</text>')
++    return lines
++
++
++def _bottom_table_svg(zones: pd.DataFrame) -> list[str]:
++    lines = [
++        f'<rect x="{CHART_X}" y="{TABLE_Y}" width="1460" height="{TABLE_H}" fill="#ffffff" stroke="#b8c0cc"/>',
++        f'<text x="{CHART_X + 14}" y="{TABLE_Y + 24}" font-family="Arial" font-size="17" font-weight="700" fill="#17202a">Selected Visible Zones</text>',
++    ]
++    for idx, line in enumerate(_table_lines(zones)):
++        y = TABLE_Y + 52 + idx * 24
++        lines.append(f'<text x="{CHART_X + 14}" y="{y}" font-family="Arial" font-size="12" fill="#17202a">{html.escape(line)}</text>')
++    return lines
++
++
++def _panel_lines(state: dict[str, object]) -> list[str]:
++    nearest_buy = _state_zone_label(state["nearest_buy_side_zone"])
++    nearest_sell = _state_zone_label(state["nearest_sell_side_zone"])
++    above = _state_zone_label(state["nearest_above_price_zone"])
++    below = _state_zone_label(state["nearest_below_price_zone"])
++    flags = state["missing_data_flags"]
++    return [
++        f"Date range: {state['start']} to {state['end']}",
++        f"Current price: {float(state['current_price']):.1f}",
++        f"Visible zones: {state['visible_zone_count']} ({state['buy_side_visible_count']} BUY_SIDE / {state['sell_side_visible_count']} SELL_SIDE)",
++        f"Nearest BUY_SIDE liquidity: {nearest_buy}",
++        f"Nearest SELL_SIDE liquidity: {nearest_sell}",
++        f"Nearest above price: {above}",
++        f"Nearest below price: {below}",
++        "Current level context: unclear from selected zones",
++        f"Liquidations: {flags['liquidations']}",
++        f"VWAP: {flags['vwap']}",
++        f"Compression: {flags['compression']}",
++        "Research monitor snapshot, not trading advice",
++    ]
++
++
++def _table_lines(zones: pd.DataFrame) -> list[str]:
++    lines = ["rank | side | bucket | source | range | distance | score | reason"]
++    for row in zones.itertuples():
++        price_range = f"{float(row.price_lower):.1f}-{float(row.price_upper):.1f}"
++        reason = _short(str(row.reason_selected), 82)
++        lines.append(
++            f"#{int(row.rank)} | {row.side} | {row.bucket} | {row.source_family} | "
++            f"{price_range} | {float(row.distance_to_current_price_pct):.2f}% | "
++            f"{float(row.significance_score):.1f} | {reason}"
++        )
++    return lines
++
++
++def _state_zone_label(value: object) -> str:
++    if isinstance(value, dict):
++        return f"#{value['rank']} {value['side']} {value['representative_price']:.1f}"
++    return str(value)
++
++
++def _scale(price_path: pd.DataFrame, zones: pd.DataFrame):
++    lows = [float(price_path["Low"].min()), *zones["price_lower"].astype(float).tolist()]
++    highs = [float(price_path["High"].max()), *zones["price_upper"].astype(float).tolist()]
++    low = min(lows)
++    high = max(highs)
++    padding = max((high - low) * 0.08, 1.0)
++    low -= padding
++    high += padding
++
++    def y(price: float) -> float:
++        return CHART_Y + (high - price) / (high - low) * CHART_H
++
++    return y
++
++
++def _x(index: int, count: int) -> float:
++    if count <= 1:
++        return CHART_X
++    return CHART_X + index / (count - 1) * CHART_W
++
++
++def _decimated_points(frame: pd.DataFrame, *, max_points: int) -> pd.DataFrame:
++    if len(frame) <= max_points:
++        return frame
++    step = max(1, len(frame) // max_points)
++    return frame.iloc[::step].copy()
++
++
++def _short(text: str, length: int) -> str:
++    clean = " ".join(str(text).split())
++    if len(clean) <= length:
++        return clean
++    return clean[: max(0, length - 3)].rstrip() + "..."
++
++
++def _parse_date(value: str | date, name: str) -> date:
++    if isinstance(value, date):
++        return value
++    try:
++        return date.fromisoformat(str(value))
++    except ValueError as exc:
++        raise TraderSnapshotBuilderError(f"{name} must be YYYY-MM-DD: {value}") from exc
++
++
++def _date_range(start_date: date, end_date: date) -> Iterable[date]:
++    current = start_date
++    while current <= end_date:
++        yield current
++        current += timedelta(days=1)
++
++
++def _repo_commit() -> str:
++    try:
++        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
++    except Exception:
++        return "unknown"
+
+commit 2cbfea3042ccadccb97db67e72b8212f6f047a56
+Author: Mykh-Ai <liveworkch@gmail.com>
+Date:   Sat Jun 6 19:40:10 2026 +0200
+
+    Balance visible zone selection by liquidity side
+    
+    Preserve full ranked zone candidates while improving visible zone allocation so snapshot input keeps both buy-side and sell-side liquidity.
+    
+    Promote strong opposite-side MAJOR/PRIMARY zones when hidden only by cap, keep noisy/expired/consumed/session clutter hidden by default, and add tests for side-balanced visibility allocation.
+    
+    No Backtester, Executor, signals, entries, exits, PnL, orders, live-readiness, or edge-validation claims.
+
+diff --git a/market_monitor/significant_zone_selector.py b/market_monitor/significant_zone_selector.py
+index 5fbcb65..8ce6d59 100644
+--- a/market_monitor/significant_zone_selector.py
++++ b/market_monitor/significant_zone_selector.py
+@@ -20,6 +20,12 @@ BUCKET_PRIMARY = "PRIMARY"
+ BUCKET_MINIMUM = "MINIMUM"
+ BUCKET_LOCAL_CONTEXT = "LOCAL_CONTEXT"
+ BUCKET_NOISE = "NOISE_HIDE_BY_DEFAULT"
++SIDE_BALANCE_PROMOTION_REASON = (
++    "selected to preserve two-sided liquidity map; strong opposite-side MAJOR/PRIMARY zone within score gap"
++)
++SIDE_BALANCE_DISPLACED_REASON = (
++    "hidden by side-balanced visibility cap; lower priority than opposite-side zone needed for market map"
++)
+ 
+ SELECTED_ZONE_COLUMNS = [
+     "rank",
+@@ -153,9 +159,9 @@ def run_significant_zone_selector(
+             "manifest_json": str(manifest_path),
+         },
+         "max_visible_zones": max_visible_zones,
+-        "visible_zone_count": int((selected["visible_on_snapshot"].astype(str) == "true").sum())
+-        if not selected.empty
+-        else 0,
++        "visible_zone_count": _visible_zone_count(selected),
++        "visible_side_counts": _visible_side_counts(selected),
++        "side_balance_policy": _side_balance_policy(max_visible_zones),
+         "total_candidate_count": int(len(selected)),
+         "missing_data_flags": missing_flags,
+         "repo_commit": _repo_commit(),
+@@ -316,19 +322,14 @@ def _assign_visibility(frame: pd.DataFrame, *, max_visible_zones: int) -> pd.Dat
+     if eligible.empty:
+         return out
+ 
+-    selected_indices: list[int] = []
+-    for side in ["BUY_SIDE", "SELL_SIDE"]:
+-        side_rows = eligible[eligible["side"] == side]
+-        if not side_rows.empty and len(selected_indices) < max_visible_zones:
+-            selected_indices.append(int(side_rows.index[0]))
+-
+-    for idx in eligible.index:
+-        idx = int(idx)
+-        if idx in selected_indices:
+-            continue
+-        if len(selected_indices) >= max_visible_zones:
+-            break
+-        selected_indices.append(idx)
++    eligible_indices = _visibility_sorted_indices(out, eligible.index)
++    selected_indices = eligible_indices[:max_visible_zones]
++    selected_indices = _rebalance_visible_sides(
++        out,
++        eligible_indices=eligible_indices,
++        selected_indices=selected_indices,
++        max_visible_zones=max_visible_zones,
++    )
+ 
+     out.loc[selected_indices, "visible_on_snapshot"] = "true"
+     out.loc[out["visible_on_snapshot"] == "true", "reason_hidden"] = ""
+@@ -339,6 +340,224 @@ def _assign_visibility(frame: pd.DataFrame, *, max_visible_zones: int) -> pd.Dat
+     return out
+ 
+ 
++def _rebalance_visible_sides(
++    frame: pd.DataFrame,
++    *,
++    eligible_indices: list[int],
++    selected_indices: list[int],
++    max_visible_zones: int,
++) -> list[int]:
++    if max_visible_zones < 2:
++        return selected_indices
++
++    selected = list(selected_indices)
++    available_sides = {
++        _string(frame.loc[idx, "side"])
++        for idx in eligible_indices
++        if _string(frame.loc[idx, "side"]) in {"BUY_SIDE", "SELL_SIDE"}
++    }
++    if not {"BUY_SIDE", "SELL_SIDE"}.issubset(available_sides):
++        return selected
++
++    selected = _promote_to_side_minimum(
++        frame,
++        eligible_indices=eligible_indices,
++        selected_indices=selected,
++        side="BUY_SIDE",
++        target_count=1,
++        require_visible_side=True,
++    )
++    selected = _promote_to_side_minimum(
++        frame,
++        eligible_indices=eligible_indices,
++        selected_indices=selected,
++        side="SELL_SIDE",
++        target_count=1,
++        require_visible_side=True,
++    )
++
++    if max_visible_zones >= 6:
++        for side in ["BUY_SIDE", "SELL_SIDE"]:
++            if _eligible_side_count(frame, eligible_indices, side) >= 2:
++                selected = _promote_to_side_minimum(
++                    frame,
++                    eligible_indices=eligible_indices,
++                    selected_indices=selected,
++                    side=side,
++                    target_count=2,
++                    require_visible_side=False,
++                )
++    return _visibility_sorted_indices(frame, selected)[:max_visible_zones]
++
++
++def _promote_to_side_minimum(
++    frame: pd.DataFrame,
++    *,
++    eligible_indices: list[int],
++    selected_indices: list[int],
++    side: str,
++    target_count: int,
++    require_visible_side: bool,
++) -> list[int]:
++    selected = list(selected_indices)
++    while _selected_side_count(frame, selected, side) < target_count:
++        candidate = _best_hidden_side_candidate(frame, eligible_indices, selected, side)
++        if candidate is None:
++            return selected
++        displaced = _replacement_index_for_side_balance(
++            frame,
++            selected,
++            candidate,
++            require_visible_side=require_visible_side,
++        )
++        if displaced is None:
++            return selected
++        selected.remove(displaced)
++        selected.append(candidate)
++        _append_reason(frame, candidate, "reason_selected", SIDE_BALANCE_PROMOTION_REASON)
++        frame.loc[displaced, "reason_hidden"] = SIDE_BALANCE_DISPLACED_REASON
++    return selected
++
++
++def _best_hidden_side_candidate(
++    frame: pd.DataFrame,
++    eligible_indices: list[int],
++    selected_indices: list[int],
++    side: str,
++) -> int | None:
++    selected = set(selected_indices)
++    for idx in eligible_indices:
++        if idx in selected:
++            continue
++        row = frame.loc[idx]
++        if _string(row.get("side")) != side:
++            continue
++        if _is_side_balance_candidate(row):
++            return idx
++    return None
++
++
++def _replacement_index_for_side_balance(
++    frame: pd.DataFrame,
++    selected_indices: list[int],
++    candidate_idx: int,
++    *,
++    require_visible_side: bool,
++) -> int | None:
++    candidate = frame.loc[candidate_idx]
++    candidate_side = _string(candidate.get("side"))
++    candidate_score = _float(candidate.get("significance_score"))
++    side_counts = {
++        side: _selected_side_count(frame, selected_indices, side)
++        for side in ["BUY_SIDE", "SELL_SIDE"]
++    }
++    overrepresented_sides = [
++        side for side, count in side_counts.items() if side != candidate_side and count > 1
++    ]
++    if not overrepresented_sides:
++        return None
++
++    replacement_pool = [
++        idx
++        for idx in selected_indices
++        if _string(frame.loc[idx].get("side")) in overrepresented_sides
++    ]
++    for replace_idx in reversed(_visibility_sorted_indices(frame, replacement_pool)):
++        replacement = frame.loc[replace_idx]
++        if require_visible_side:
++            return replace_idx
++        replacement_score = _float(replacement.get("significance_score"))
++        if replacement_score - candidate_score > 10:
++            continue
++        if _candidate_can_replace(candidate, replacement):
++            return replace_idx
++    return None
++
++
++def _candidate_can_replace(candidate: pd.Series, replacement: pd.Series) -> bool:
++    candidate_distance = abs(_float(candidate.get("distance_to_current_price_pct"), 999.0))
++    replacement_distance = abs(_float(replacement.get("distance_to_current_price_pct"), 999.0))
++    if candidate_distance < replacement_distance:
++        return True
++    if _bucket_strength(candidate.get("bucket")) > _bucket_strength(replacement.get("bucket")):
++        return True
++    return _source_strength(candidate.get("source_timeframe")) > _source_strength(replacement.get("source_timeframe"))
++
++
++def _is_side_balance_candidate(row: pd.Series) -> bool:
++    if _string(row.get("bucket")) not in {BUCKET_MAJOR, BUCKET_PRIMARY}:
++        return False
++    if not _valid_price_range(row):
++        return False
++    if _string(row.get("side")) not in {"BUY_SIDE", "SELL_SIDE"}:
++        return False
++    distance = abs(_float(row.get("distance_to_current_price_pct"), 999.0))
++    return distance <= 2.0 or _has_strong_structural_or_event_evidence(row)
++
++
++def _valid_price_range(row: pd.Series) -> bool:
++    lower = _float(row.get("price_lower"))
++    upper = _float(row.get("price_upper"))
++    return not pd.isna(lower) and not pd.isna(upper) and lower <= upper
++
++
++def _has_strong_structural_or_event_evidence(row: pd.Series) -> bool:
++    present = set(_string(row.get("evidence_fields_present")).split("|"))
++    return bool({"has_h4_source", "has_h1_source", "event_log", "post_sweep_observation"} & present)
++
++
++def _eligible_side_count(frame: pd.DataFrame, eligible_indices: list[int], side: str) -> int:
++    return sum(1 for idx in eligible_indices if _string(frame.loc[idx].get("side")) == side)
++
++
++def _selected_side_count(frame: pd.DataFrame, selected_indices: list[int], side: str) -> int:
++    return sum(1 for idx in selected_indices if _string(frame.loc[idx].get("side")) == side)
++
++
++def _visibility_sorted_indices(frame: pd.DataFrame, indices: Iterable[int]) -> list[int]:
++    return sorted((int(idx) for idx in indices), key=lambda idx: _visibility_priority_key(frame.loc[idx], idx))
++
++
++def _visibility_priority_key(row: pd.Series, idx: int) -> tuple[float, float, int, int, str, int]:
++    return (
++        -_float(row.get("significance_score")),
++        abs(_float(row.get("distance_to_current_price_pct"), 999.0)),
++        -_bucket_strength(row.get("bucket")),
++        -_source_strength(row.get("source_timeframe")),
++        _string(row.get("zone_id")),
++        idx,
++    )
++
++
++def _bucket_strength(bucket: object) -> int:
++    return {
++        BUCKET_MAJOR: 4,
++        BUCKET_PRIMARY: 3,
++        BUCKET_MINIMUM: 2,
++        BUCKET_LOCAL_CONTEXT: 1,
++    }.get(_string(bucket), 0)
++
++
++def _source_strength(source_timeframe: object) -> int:
++    sources = _split_sources(source_timeframe)
++    if "H4" in sources:
++        return 4
++    if "H1" in sources:
++        return 3
++    if "M15" in sources:
++        return 2
++    if "SESSION" in sources:
++        return 1
++    return 0
++
++
++def _append_reason(frame: pd.DataFrame, idx: int, column: str, reason: str) -> None:
++    existing = _string(frame.loc[idx, column])
++    if reason in existing:
++        return
++    frame.loc[idx, column] = f"{existing}; {reason}" if existing else reason
++
++
+ def _is_visibility_eligible(row: pd.Series) -> bool:
+     if row["bucket"] == BUCKET_NOISE:
+         return False
+@@ -358,6 +577,50 @@ def _has_supporting_evidence(row: pd.Series) -> bool:
+     return bool({"event_log", "post_sweep_observation", "sweep_count", "touch_count"} & present)
+ 
+ 
++def _visible_zone_count(selected: pd.DataFrame) -> int:
++    if selected.empty:
++        return 0
++    return int((selected["visible_on_snapshot"].astype(str) == "true").sum())
++
++
++def _visible_side_counts(selected: pd.DataFrame) -> dict[str, int]:
++    if selected.empty:
++        return {}
++    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
++    return {key: int(value) for key, value in visible["side"].value_counts().to_dict().items()}
++
++
++def _side_balance_policy(max_visible_zones: int) -> str:
++    if max_visible_zones >= 6:
++        return "require one zone per side when available; prefer two zones per side from eligible MAJOR/PRIMARY zones within score gap"
++    if max_visible_zones >= 2:
++        return "require one zone per side when available"
++    return "single visible zone cap cannot preserve both sides"
++
++
++def _side_balance_note(selected: pd.DataFrame, max_visible_zones: int) -> str:
++    if selected.empty:
++        return "no candidate zones"
++    visible_counts = _visible_side_counts(selected)
++    if max_visible_zones < 6:
++        return "visible cap below six only guarantees one zone per side when available"
++    notes = []
++    for side in ["BUY_SIDE", "SELL_SIDE"]:
++        eligible_count = int(
++            selected[
++                (selected["side"] == side)
++                & selected.apply(_is_visibility_eligible, axis=1)
++                & selected.apply(_is_side_balance_candidate, axis=1)
++            ].shape[0]
++        )
++        visible_count = visible_counts.get(side, 0)
++        if eligible_count < 2:
++            notes.append(f"{side} has fewer than two high-quality eligible zones")
++        elif visible_count < 2:
++            notes.append(f"{side} has fewer than two visible zones because score-gap replacement criteria were not met")
++    return "; ".join(notes) if notes else "both sides preserved when high-quality eligible zones were available"
++
++
+ def _add_source_scores(
+     zone: pd.Series,
+     sources: set[str],
+@@ -649,6 +912,7 @@ def _render_summary(
+     hidden = selected[selected["visible_on_snapshot"].astype(str) != "true"] if not selected.empty else selected
+     bucket_counts = selected["bucket"].value_counts().to_dict() if not selected.empty else {}
+     side_counts = selected["side"].value_counts().to_dict() if not selected.empty else {}
++    visible_side_counts = _visible_side_counts(selected)
+ 
+     lines = [
+         "# Significant Zone Selector Summary",
+@@ -673,7 +937,10 @@ def _render_summary(
+             f"- Total candidate zones: {len(selected)}",
+             f"- Visible zones: {len(visible)}",
+             f"- Side counts: {json.dumps(side_counts, sort_keys=True)}",
++            f"- Visible side counts: {json.dumps(visible_side_counts, sort_keys=True)}",
+             f"- Bucket counts: {json.dumps(bucket_counts, sort_keys=True)}",
++            f"- Side balance policy: {_side_balance_policy(max_visible_zones)}.",
++            f"- Side balance note: {_side_balance_note(selected, max_visible_zones)}",
+             "",
+             "## Scoring Model Summary",
+             "",
+
+commit 39f698fe238979d66b4c7014a9e54e64ab5ab76f
+Author: Mykh-Ai <liveworkch@gmail.com>
+Date:   Sat Jun 6 19:08:07 2026 +0200
+
+    Add SHI_RESET_36B significant zone selector v0
+    
+    Adds a deterministic research-only selector that consumes accepted Market Monitor daily outputs and writes selected_zones.csv, significant_zone_selector_summary.md, and significant_zone_selector_manifest.json.
+    
+    The selector caps visible zones, preserves side coverage when available, scores higher-timeframe and evidence-backed zones above local/session clutter, and marks unavailable liquidation/VWAP/compression evidence without inventing it.
+    
+    Acceptance: python -m market_monitor.run_significant_zone_selector --start 2026-03-22 --end 2026-04-05 --input-root market_monitor_runs\\batch_clean_2026_03_16_to_2026_04_19_label_taxonomy_v1\\daily --out-dir market_monitor_runs\\SHI_RESET_36B_significant_zone_selector_v0 --max-visible-zones 7
+    
+    Tests: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q
+
+diff --git a/market_monitor/significant_zone_selector.py b/market_monitor/significant_zone_selector.py
+new file mode 100644
+index 0000000..5fbcb65
+--- /dev/null
++++ b/market_monitor/significant_zone_selector.py
+@@ -0,0 +1,886 @@
++from __future__ import annotations
++
++import json
++import subprocess
++from dataclasses import dataclass
++from datetime import date, timedelta
++from pathlib import Path
++from typing import Iterable
++
++import pandas as pd
++
++
++SELECTOR_VERSION = "SHI_RESET_36B_SIGNIFICANT_ZONE_SELECTOR_V0"
++SELECTED_ZONES_CSV = "selected_zones.csv"
++SELECTOR_SUMMARY_MD = "significant_zone_selector_summary.md"
++SELECTOR_MANIFEST_JSON = "significant_zone_selector_manifest.json"
++
++BUCKET_MAJOR = "MAJOR"
++BUCKET_PRIMARY = "PRIMARY"
++BUCKET_MINIMUM = "MINIMUM"
++BUCKET_LOCAL_CONTEXT = "LOCAL_CONTEXT"
++BUCKET_NOISE = "NOISE_HIDE_BY_DEFAULT"
++
++SELECTED_ZONE_COLUMNS = [
++    "rank",
++    "zone_id",
++    "source_day",
++    "side",
++    "source_timeframe",
++    "source_family",
++    "level_type",
++    "label",
++    "price_lower",
++    "price_upper",
++    "representative_price",
++    "current_price",
++    "distance_to_current_price_pct",
++    "lifecycle_status",
++    "status",
++    "confidence",
++    "bucket",
++    "significance_score",
++    "score_components_json",
++    "penalty_components_json",
++    "evidence_fields_present",
++    "evidence_fields_missing",
++    "flow_evidence_summary",
++    "reason_selected",
++    "reason_hidden",
++    "visible_on_snapshot",
++]
++
++INPUT_TABLES = [
++    "structure_levels.csv",
++    "liquidity_map.csv",
++    "liquidity_zone_registry.csv",
++    "event_log.csv",
++    "post_sweep_observation.csv",
++    "volume_delta_state.csv",
++    "market_state_timeline.csv",
++    "accumulation_zones.csv",
++    "pattern_structures.csv",
++]
++
++HIDDEN_STATUSES = {
++    "EXPIRED",
++    "INVALIDATED",
++    "CONSUMED",
++    "CHOPPED_THROUGH",
++    "MERGED",
++}
++
++
++class SignificantZoneSelectorError(RuntimeError):
++    """Raised when significant zone selection cannot be completed."""
++
++
++@dataclass(frozen=True)
++class SignificantZoneSelectorResult:
++    output_dir: Path
++    selected_zones_path: Path
++    summary_path: Path
++    manifest_path: Path
++    total_candidate_count: int
++    visible_zone_count: int
++    visible_buy_side_count: int
++    visible_sell_side_count: int
++
++
++def run_significant_zone_selector(
++    *,
++    input_root: str | Path,
++    output_dir: str | Path,
++    start: str | date,
++    end: str | date,
++    max_visible_zones: int = 7,
++) -> SignificantZoneSelectorResult:
++    start_date = _parse_date(start, "start")
++    end_date = _parse_date(end, "end")
++    if start_date > end_date:
++        raise SignificantZoneSelectorError("start must be <= end")
++    if max_visible_zones < 1:
++        raise SignificantZoneSelectorError("max_visible_zones must be >= 1")
++
++    root = Path(input_root)
++    out_dir = Path(output_dir)
++    if not root.exists() or not root.is_dir():
++        raise SignificantZoneSelectorError(f"input root not found: {root}")
++    out_dir.mkdir(parents=True, exist_ok=True)
++
++    loaded = _load_window(root, start_date, end_date)
++    liquidity_map = loaded["liquidity_map.csv"]
++    if liquidity_map.empty:
++        selected = pd.DataFrame(columns=SELECTED_ZONE_COLUMNS)
++    else:
++        selected = _score_candidates(loaded)
++        selected = _assign_visibility(selected, max_visible_zones=max_visible_zones)
++        selected = selected.sort_values(
++            ["visible_on_snapshot", "significance_score", "source_day", "zone_id"],
++            ascending=[False, False, True, True],
++            kind="mergesort",
++        ).reset_index(drop=True)
++        selected["rank"] = range(1, len(selected) + 1)
++        selected = selected[SELECTED_ZONE_COLUMNS]
++
++    selected_path = out_dir / SELECTED_ZONES_CSV
++    summary_path = out_dir / SELECTOR_SUMMARY_MD
++    manifest_path = out_dir / SELECTOR_MANIFEST_JSON
++    selected.to_csv(selected_path, index=False)
++
++    row_counts = {name: int(len(frame)) for name, frame in loaded.items()}
++    missing_flags = _missing_data_flags(loaded)
++    summary_path.write_text(
++        _render_summary(
++            selected=selected,
++            row_counts=row_counts,
++            input_root=root,
++            start_date=start_date,
++            end_date=end_date,
++            max_visible_zones=max_visible_zones,
++            missing_flags=missing_flags,
++        ),
++        encoding="utf-8",
++    )
++    manifest = {
++        "selector_version": SELECTOR_VERSION,
++        "start_date": start_date.isoformat(),
++        "end_date": end_date.isoformat(),
++        "input_root": str(root),
++        "outputs": {
++            "selected_zones_csv": str(selected_path),
++            "summary_md": str(summary_path),
++            "manifest_json": str(manifest_path),
++        },
++        "max_visible_zones": max_visible_zones,
++        "visible_zone_count": int((selected["visible_on_snapshot"].astype(str) == "true").sum())
++        if not selected.empty
++        else 0,
++        "total_candidate_count": int(len(selected)),
++        "missing_data_flags": missing_flags,
++        "repo_commit": _repo_commit(),
++        "scope": "research_monitor_selection_only_not_trading_advice",
++    }
++    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
++
++    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
++    return SignificantZoneSelectorResult(
++        output_dir=out_dir,
++        selected_zones_path=selected_path,
++        summary_path=summary_path,
++        manifest_path=manifest_path,
++        total_candidate_count=int(len(selected)),
++        visible_zone_count=int(len(visible)),
++        visible_buy_side_count=int((visible["side"] == "BUY_SIDE").sum()) if not visible.empty else 0,
++        visible_sell_side_count=int((visible["side"] == "SELL_SIDE").sum()) if not visible.empty else 0,
++    )
++
++
++def _load_window(root: Path, start_date: date, end_date: date) -> dict[str, pd.DataFrame]:
++    frames: dict[str, list[pd.DataFrame]] = {name: [] for name in INPUT_TABLES}
++    for day in _date_range(start_date, end_date):
++        day_dir = root / day.isoformat()
++        if not day_dir.exists():
++            raise SignificantZoneSelectorError(f"missing daily output directory: {day_dir}")
++        for filename in INPUT_TABLES:
++            path = day_dir / filename
++            if path.exists():
++                try:
++                    frame = pd.read_csv(path)
++                except pd.errors.EmptyDataError:
++                    frame = pd.DataFrame()
++            else:
++                frame = pd.DataFrame()
++            frame["_source_day"] = day.isoformat()
++            frame["_source_path"] = str(path)
++            frames[filename].append(frame)
++    return {
++        name: pd.concat(parts, ignore_index=True, sort=False) if parts else pd.DataFrame()
++        for name, parts in frames.items()
++    }
++
++
++def _score_candidates(loaded: dict[str, pd.DataFrame]) -> pd.DataFrame:
++    liquidity_map = loaded["liquidity_map.csv"].copy()
++    event_log = loaded["event_log.csv"]
++    observations = loaded["post_sweep_observation.csv"]
++    event_groups = _group_by_day_zone(event_log)
++    observation_groups = _group_by_day_zone(observations)
++
++    rows = []
++    for _, zone in liquidity_map.iterrows():
++        source_day = _string(zone.get("_source_day"))
++        zone_id = _string(zone.get("zone_id"))
++        events = event_groups.get((source_day, zone_id), pd.DataFrame())
++        zone_observations = observation_groups.get((source_day, zone_id), pd.DataFrame())
++        rows.append(_score_zone(zone, events, zone_observations))
++    frame = pd.DataFrame(rows)
++    return frame.sort_values(
++        ["significance_score", "source_day", "zone_id"],
++        ascending=[False, True, True],
++        kind="mergesort",
++    ).reset_index(drop=True)
++
++
++def _score_zone(zone: pd.Series, events: pd.DataFrame, observations: pd.DataFrame) -> dict[str, object]:
++    score_components: dict[str, float] = {}
++    penalty_components: dict[str, float] = {}
++    evidence_present: set[str] = set()
++    evidence_missing: set[str] = set()
++    reasons: list[str] = []
++
++    source_day = _string(zone.get("_source_day"))
++    zone_id = _string(zone.get("zone_id"))
++    side = _string(zone.get("side")) or "UNKNOWN"
++    source_timeframe = _string(zone.get("source_timeframes")) or "UNKNOWN"
++    source_family = _source_family(source_timeframe)
++    label = _first_nonempty(
++        zone.get("zone_type"),
++        zone.get("htf_level_type"),
++        _score_level_types(zone.get("score_components_json")),
++    )
++    level_type = _first_nonempty(zone.get("htf_level_type"), _score_level_types(zone.get("score_components_json")))
++    status = _string(zone.get("status")) or "UNKNOWN"
++    lifecycle_status = _first_nonempty(zone.get("htf_lifecycle_status"), zone.get("consumption_status"), status)
++    confidence = _string(zone.get("confidence_tier")) or "UNKNOWN"
++    representative_price = _float(zone.get("price_mid"))
++    distance = _float(zone.get("distance_from_close_pct"))
++    current_price = _current_price(representative_price, distance)
++    sources = _split_sources(source_timeframe)
++
++    _add_source_scores(zone, sources, score_components, evidence_present, reasons)
++    _add_lifecycle_scores(status, lifecycle_status, score_components, penalty_components, reasons)
++    _add_confidence_scores(confidence, score_components, penalty_components, reasons)
++    _add_distance_scores(distance, score_components, penalty_components, evidence_present, reasons)
++    _add_interaction_scores(zone, score_components, evidence_present, reasons)
++    _add_precision_scores(zone, score_components, penalty_components, reasons)
++    _add_event_scores(events, score_components, penalty_components, evidence_present, evidence_missing, reasons)
++    _add_observation_scores(
++        observations,
++        score_components,
++        evidence_present,
++        evidence_missing,
++        reasons,
++    )
++    _add_context_penalties(sources, events, observations, penalty_components, reasons)
++
++    missing_data = _zone_missing_data_notes()
++    evidence_missing.update(missing_data)
++
++    raw_score = sum(score_components.values()) + sum(penalty_components.values())
++    bucket = _bucket_for_zone(raw_score, sources, zone, status, events, observations)
++    flow_summary = _flow_summary(events, observations)
++    hidden_reason = _base_hidden_reason(
++        bucket=bucket,
++        status=status,
++        lifecycle_status=lifecycle_status,
++        events=events,
++        observations=observations,
++        sources=sources,
++    )
++
++    return {
++        "rank": 0,
++        "zone_id": zone_id,
++        "source_day": source_day,
++        "side": side,
++        "source_timeframe": source_timeframe,
++        "source_family": source_family,
++        "level_type": level_type,
++        "label": label,
++        "price_lower": zone.get("price_lower", ""),
++        "price_upper": zone.get("price_upper", ""),
++        "representative_price": representative_price,
++        "current_price": current_price,
++        "distance_to_current_price_pct": distance,
++        "lifecycle_status": lifecycle_status,
++        "status": status,
++        "confidence": confidence,
++        "bucket": bucket,
++        "significance_score": round(float(raw_score), 3),
++        "score_components_json": json.dumps(score_components, sort_keys=True),
++        "penalty_components_json": json.dumps(penalty_components, sort_keys=True),
++        "evidence_fields_present": "|".join(sorted(evidence_present)),
++        "evidence_fields_missing": "|".join(sorted(evidence_missing)),
++        "flow_evidence_summary": flow_summary,
++        "reason_selected": "; ".join(reasons[:12]),
++        "reason_hidden": hidden_reason,
++        "visible_on_snapshot": "false",
++    }
++
++
++def _assign_visibility(frame: pd.DataFrame, *, max_visible_zones: int) -> pd.DataFrame:
++    out = frame.copy()
++    out["visible_on_snapshot"] = "false"
++    eligible = out[out.apply(_is_visibility_eligible, axis=1)].copy()
++    if eligible.empty:
++        return out
++
++    selected_indices: list[int] = []
++    for side in ["BUY_SIDE", "SELL_SIDE"]:
++        side_rows = eligible[eligible["side"] == side]
++        if not side_rows.empty and len(selected_indices) < max_visible_zones:
++            selected_indices.append(int(side_rows.index[0]))
++
++    for idx in eligible.index:
++        idx = int(idx)
++        if idx in selected_indices:
++            continue
++        if len(selected_indices) >= max_visible_zones:
++            break
++        selected_indices.append(idx)
++
++    out.loc[selected_indices, "visible_on_snapshot"] = "true"
++    out.loc[out["visible_on_snapshot"] == "true", "reason_hidden"] = ""
++    out.loc[
++        (out["visible_on_snapshot"] == "false") & (out["reason_hidden"] == ""),
++        "reason_hidden",
++    ] = "outside max visible zone cap or lower ranked than selected zones"
++    return out
++
++
++def _is_visibility_eligible(row: pd.Series) -> bool:
++    if row["bucket"] == BUCKET_NOISE:
++        return False
++    if row["status"] in HIDDEN_STATUSES:
++        return False
++    if row["status"] == "CROSSED_UNCLASSIFIED" and not _has_supporting_evidence(row):
++        return False
++    if row["bucket"] in {BUCKET_MAJOR, BUCKET_PRIMARY}:
++        return True
++    if row["bucket"] == BUCKET_MINIMUM:
++        return abs(_float(row["distance_to_current_price_pct"], 999.0)) <= 1.0 and _has_supporting_evidence(row)
++    return False
++
++
++def _has_supporting_evidence(row: pd.Series) -> bool:
++    present = set(_string(row.get("evidence_fields_present")).split("|"))
++    return bool({"event_log", "post_sweep_observation", "sweep_count", "touch_count"} & present)
++
++
++def _add_source_scores(
++    zone: pd.Series,
++    sources: set[str],
++    score: dict[str, float],
++    evidence: set[str],
++    reasons: list[str],
++) -> None:
++    if "H4" in sources or _truth(zone.get("has_h4_source")):
++        score["h4_source"] = 40
++        evidence.add("has_h4_source")
++        reasons.append("H4 structural source")
++    if "H1" in sources or _truth(zone.get("has_h1_source")):
++        score["h1_source"] = 24
++        evidence.add("has_h1_source")
++        reasons.append("H1 structural source")
++    if _truth(zone.get("has_pdh_pdl_source")) or _contains_any(zone.get("zone_type"), ["PDH", "PDL"]):
++        score["pdh_pdl_source"] = 32
++        evidence.add("has_pdh_pdl_source")
++        reasons.append("previous day reference")
++    if "M15" in sources:
++        score["m15_source"] = 12
++        evidence.add("m15_source")
++        reasons.append("M15 structure")
++    if "SESSION" in sources or _truth(zone.get("has_session_source")):
++        score["session_context"] = 6
++        evidence.add("has_session_source")
++        reasons.append("session/local context")
++    if _truth(zone.get("has_equal_level_source")):
++        score["equal_level_source"] = 8
++        evidence.add("has_equal_level_source")
++        reasons.append("equal high/low liquidity pool")
++    cluster_count = _int(zone.get("cluster_member_count"))
++    if "CLUSTER" in sources or cluster_count > 1:
++        score["source_cluster"] = min(16, 4 * max(cluster_count, 2))
++        evidence.add("cluster_member_count")
++        reasons.append(f"clustered sources={cluster_count}")
++
++
++def _add_lifecycle_scores(
++    status: str,
++    lifecycle_status: str,
++    score: dict[str, float],
++    penalty: dict[str, float],
++    reasons: list[str],
++) -> None:
++    if status == "ACTIVE" or lifecycle_status == "ACTIVE":
++        score["active_lifecycle"] = 15
++        reasons.append("active lifecycle")
++    if status in {"EXPIRED", "INVALIDATED"}:
++        penalty["expired_or_invalidated"] = -35
++        reasons.append(f"hidden lifecycle={status}")
++    elif status in {"CONSUMED", "CHOPPED_THROUGH", "MERGED"}:
++        penalty["consumed_or_chopped_or_merged"] = -24
++        reasons.append(f"penalty lifecycle={status}")
++    elif status == "CROSSED_UNCLASSIFIED":
++        penalty["crossed_unclassified"] = -18
++        reasons.append("crossed but unclassified")
++
++
++def _add_confidence_scores(
++    confidence: str,
++    score: dict[str, float],
++    penalty: dict[str, float],
++    reasons: list[str],
++) -> None:
++    if confidence == "HIGH":
++        score["high_confidence"] = 12
++        reasons.append("high confidence")
++    elif confidence == "MEDIUM":
++        score["medium_confidence"] = 6
++        reasons.append("medium confidence")
++    else:
++        penalty["low_or_unknown_confidence"] = -6
++        reasons.append("low/unknown confidence")
++
++
++def _add_distance_scores(
++    distance: float,
++    score: dict[str, float],
++    penalty: dict[str, float],
++    evidence: set[str],
++    reasons: list[str],
++) -> None:
++    if not pd.isna(distance):
++        evidence.add("distance_to_current_price_pct")
++    absolute = abs(distance)
++    if absolute <= 0.5:
++        score["distance_within_0_5_pct"] = 18
++        reasons.append("near current price <=0.5 pct")
++    elif absolute <= 1.0:
++        score["distance_within_1_pct"] = 12
++        reasons.append("near current price <=1 pct")
++    elif absolute <= 2.0:
++        score["distance_within_2_pct"] = 6
++        reasons.append("near current price <=2 pct")
++    elif absolute > 5.0:
++        penalty["far_from_current_price"] = -12
++        reasons.append("far from current price >5 pct")
++
++
++def _add_interaction_scores(
++    zone: pd.Series,
++    score: dict[str, float],
++    evidence: set[str],
++    reasons: list[str],
++) -> None:
++    touch_count = max(_int(zone.get("touch_count")), _int(zone.get("m1_interaction_count")))
++    if touch_count > 0:
++        score["touch_or_retest_history"] = min(8, touch_count * 2)
++        evidence.add("touch_count")
++        reasons.append(f"touch/retest count={touch_count}")
++    sweep_count = max(_int(zone.get("sweep_count")), _int(zone.get("resweep_count")), _int(zone.get("htf_sweep_count")))
++    if sweep_count > 0:
++        score["sweep_history"] = min(30, sweep_count * 10)
++        evidence.add("sweep_count")
++        reasons.append(f"sweep history={sweep_count}")
++    recent = _first_nonempty(
++        zone.get("last_touch_at"),
++        zone.get("last_clean_reaction_at"),
++        zone.get("first_sweep_at"),
++        zone.get("drift_away_confirmed_at"),
++    )
++    if recent:
++        score["recent_interaction"] = 6
++        evidence.add("recent_interaction_timestamp")
++        reasons.append("recent interaction present")
++
++
++def _add_precision_scores(
++    zone: pd.Series,
++    score: dict[str, float],
++    penalty: dict[str, float],
++    reasons: list[str],
++) -> None:
++    if _string(zone.get("precision_status")) == "PRECISE":
++        score["precise_zone_width"] = 4
++        reasons.append("precise width")
++    else:
++        penalty["imprecise_or_wide_zone"] = -8
++        reasons.append("imprecise/wide zone")
++    if _float(zone.get("zone_width_pct")) > 0.5:
++        penalty["hard_wide_zone_width"] = -8
++        reasons.append("wide zone width pct")
++
++
++def _add_event_scores(
++    events: pd.DataFrame,
++    score: dict[str, float],
++    penalty: dict[str, float],
++    present: set[str],
++    missing: set[str],
++    reasons: list[str],
++) -> None:
++    if events.empty:
++        missing.add("event_log")
++        penalty["missing_event_evidence"] = -4
++        return
++    present.add("event_log")
++    score["event_evidence"] = min(12, len(events) * 3)
++    reasons.append(f"event evidence count={len(events)}")
++    max_excursion = _column_abs_max(events, "excursion_abs")
++    if max_excursion > 0:
++        score["excursion_magnitude"] = min(8, max_excursion / 100)
++        present.add("excursion_abs")
++    max_volume = _column_abs_max(events, "volume_zscore")
++    if max_volume >= 2:
++        score["volume_anomaly"] = 8
++        present.add("volume_zscore")
++        reasons.append(f"volume anomaly z={max_volume:.2f}")
++    else:
++        missing.add("volume_anomaly")
++    max_delta = _column_abs_max(events, "delta_zscore")
++    if max_delta >= 2:
++        score["delta_anomaly"] = 8
++        present.add("delta_zscore")
++        reasons.append(f"delta anomaly z={max_delta:.2f}")
++    else:
++        missing.add("delta_anomaly")
++    if _column_abs_max(events, "oi_change") > 0:
++        score["oi_context"] = 4
++        present.add("oi_change")
++    else:
++        missing.add("oi_context")
++
++
++def _add_observation_scores(
++    observations: pd.DataFrame,
++    score: dict[str, float],
++    present: set[str],
++    missing: set[str],
++    reasons: list[str],
++) -> None:
++    if observations.empty:
++        missing.add("post_sweep_observation")
++        return
++    present.add("post_sweep_observation")
++    score["post_sweep_observation"] = min(10, len(observations) * 2)
++    reasons.append(f"post-sweep observations={len(observations)}")
++    if _column_abs_max(observations, "post_max_volume_zscore") >= 2:
++        score["post_sweep_volume_context"] = 5
++        present.add("post_max_volume_zscore")
++    if _column_abs_max(observations, "post_max_abs_delta_zscore") >= 2:
++        score["post_sweep_delta_context"] = 5
++        present.add("post_max_abs_delta_zscore")
++    if _column_abs_max(observations, "post_oi_change") > 0:
++        score["post_sweep_oi_context"] = 4
++        present.add("post_oi_change")
++    verdicts = [_reaction_verdict(row.get("evidence_json")) for _, row in observations.iterrows()]
++    if any(verdict not in {"", "NOT_CLASSIFIED", "UNCLASSIFIED", "NONE"} for verdict in verdicts):
++        score["classified_post_sweep_reaction"] = 10
++        present.add("reaction_verdict")
++        reasons.append("classified post-sweep reaction")
++    else:
++        missing.add("classified_post_sweep_reaction")
++
++
++def _add_context_penalties(
++    sources: set[str],
++    events: pd.DataFrame,
++    observations: pd.DataFrame,
++    penalty: dict[str, float],
++    reasons: list[str],
++) -> None:
++    if sources and sources.issubset({"SESSION"}) and events.empty and observations.empty:
++        penalty["session_only_without_event_evidence"] = -10
++        reasons.append("session-only without event evidence")
++    if "PATTERN" in sources:
++        penalty["pattern_only_low_confidence_context"] = -6
++        reasons.append("pattern source treated as context only")
++
++
++def _bucket_for_zone(
++    score: float,
++    sources: set[str],
++    zone: pd.Series,
++    status: str,
++    events: pd.DataFrame,
++    observations: pd.DataFrame,
++) -> str:
++    if status in HIDDEN_STATUSES:
++        return BUCKET_NOISE
++    if sources.issubset({"SESSION"}) and events.empty and observations.empty:
++        return BUCKET_LOCAL_CONTEXT if score >= 35 else BUCKET_NOISE
++    has_major = "H4" in sources or _truth(zone.get("has_h4_source")) or _truth(zone.get("has_pdh_pdl_source"))
++    if score >= 85 and has_major:
++        return BUCKET_MAJOR
++    if score >= 60 and ("H1" in sources or _truth(zone.get("has_h1_source")) or has_major):
++        return BUCKET_PRIMARY
++    if score >= 35 and "M15" in sources:
++        return BUCKET_MINIMUM
++    if score >= 35:
++        return BUCKET_LOCAL_CONTEXT
++    return BUCKET_NOISE
++
++
++def _base_hidden_reason(
++    *,
++    bucket: str,
++    status: str,
++    lifecycle_status: str,
++    events: pd.DataFrame,
++    observations: pd.DataFrame,
++    sources: set[str],
++) -> str:
++    if bucket == BUCKET_NOISE:
++        return "noise or hide-by-default bucket"
++    if status in HIDDEN_STATUSES or lifecycle_status in HIDDEN_STATUSES:
++        return f"hidden lifecycle/status={status or lifecycle_status}"
++    if status == "CROSSED_UNCLASSIFIED" and events.empty and observations.empty:
++        return "crossed-unclassified without supporting event or observation evidence"
++    if bucket == BUCKET_LOCAL_CONTEXT:
++        return "local/session context, not dominant snapshot zone"
++    if sources.issubset({"SESSION"}):
++        return "session-only context"
++    return ""
++
++
++def _render_summary(
++    *,
++    selected: pd.DataFrame,
++    row_counts: dict[str, int],
++    input_root: Path,
++    start_date: date,
++    end_date: date,
++    max_visible_zones: int,
++    missing_flags: dict[str, str],
++) -> str:
++    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"] if not selected.empty else selected
++    hidden = selected[selected["visible_on_snapshot"].astype(str) != "true"] if not selected.empty else selected
++    bucket_counts = selected["bucket"].value_counts().to_dict() if not selected.empty else {}
++    side_counts = selected["side"].value_counts().to_dict() if not selected.empty else {}
++
++    lines = [
++        "# Significant Zone Selector Summary",
++        "",
++        "Research monitor selection only. This is not trading advice.",
++        "",
++        "## Inputs",
++        "",
++        f"- Date range: {start_date.isoformat()} to {end_date.isoformat()}",
++        f"- Input root: `{input_root}`",
++        f"- Max visible zones: {max_visible_zones}",
++        "",
++        "## Row Counts",
++        "",
++    ]
++    lines.extend(f"- `{name}`: {count}" for name, count in sorted(row_counts.items()))
++    lines.extend(
++        [
++            "",
++            "## Zone Inventory Counts",
++            "",
++            f"- Total candidate zones: {len(selected)}",
++            f"- Visible zones: {len(visible)}",
++            f"- Side counts: {json.dumps(side_counts, sort_keys=True)}",
++            f"- Bucket counts: {json.dumps(bucket_counts, sort_keys=True)}",
++            "",
++            "## Scoring Model Summary",
++            "",
++            "- Priority sequence: H4 major structure > H1 primary structure > M15 minimum structure > SESSION/local context.",
++            "- Positive components: structural source weight, PDH/PDL, equal level source, clustering, lifecycle, confidence, proximity, touch/retest, sweep, event, flow, OI, post-sweep observation, reaction, and precision.",
++            "- Negative components: expired/invalidated/consumed/chopped/merged lifecycle, crossed-unclassified without support, distance, old/no recent interaction, local-only clutter, pattern context, imprecision, and missing evidence.",
++            "",
++            "## Visible Selected Zones",
++            "",
++            _markdown_table(
++                visible,
++                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_selected"],
++            ),
++            "",
++            "## Hidden Top-Ranked Zones",
++            "",
++            _markdown_table(
++                hidden.head(10),
++                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_hidden"],
++            ),
++            "",
++            "## Missing Data Notes",
++            "",
++        ]
++    )
++    lines.extend(f"- {key}: {value}" for key, value in sorted(missing_flags.items()))
++    lines.extend(
++        [
++            "",
++            "## Limitations",
++            "",
++            "- Selector consumes existing Market Monitor outputs only; it does not create new market logic.",
++            "- Compression boundaries are not faked when first-class compression zones are unavailable.",
++            "- Liquidation and VWAP confirmations are marked unavailable when absent.",
++            "- Scores are deterministic v0 selection weights, not strategy validation.",
++        ]
++    )
++    return "\n".join(lines) + "\n"
++
++
++def _markdown_table(frame: pd.DataFrame, columns: list[str]) -> str:
++    if frame.empty:
++        return "_None_"
++    out = ["| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
++    for _, row in frame.iterrows():
++        values = [_escape_markdown(_string(row.get(column))) for column in columns]
++        out.append("| " + " | ".join(values) + " |")
++    return "\n".join(out)
++
++
++def _missing_data_flags(loaded: dict[str, pd.DataFrame]) -> dict[str, str]:
++    accumulation = loaded["accumulation_zones.csv"]
++    return {
++        "liquidations": "not_available",
++        "vwap": "not_available",
++        "compression": "not_available" if accumulation.empty else "partial",
++    }
++
++
++def _zone_missing_data_notes() -> set[str]:
++    return {"liquidations=not_available", "vwap=not_available", "compression=not_available_or_partial"}
++
++
++def _flow_summary(events: pd.DataFrame, observations: pd.DataFrame) -> str:
++    event_count = 0 if events.empty else len(events)
++    observation_count = 0 if observations.empty else len(observations)
++    max_volume = max(_column_abs_max(events, "volume_zscore"), _column_abs_max(observations, "post_max_volume_zscore"))
++    max_delta = max(_column_abs_max(events, "delta_zscore"), _column_abs_max(observations, "post_max_abs_delta_zscore"))
++    max_oi = max(_column_abs_max(events, "oi_change"), _column_abs_max(observations, "post_oi_change"))
++    return (
++        f"events={event_count}; post_sweep_observations={observation_count}; "
++        f"max_volume_zscore={max_volume:.3f}; max_abs_delta_zscore={max_delta:.3f}; "
++        f"max_abs_oi_change={max_oi:.3f}; liquidations=not_available; vwap=not_available"
++    )
++
++
++def _group_by_day_zone(frame: pd.DataFrame) -> dict[tuple[str, str], pd.DataFrame]:
++    if frame.empty or "zone_id" not in frame.columns:
++        return {}
++    grouped = {}
++    for key, group in frame.groupby(["_source_day", "zone_id"], dropna=False, sort=False):
++        grouped[(str(key[0]), str(key[1]))] = group.copy()
++    return grouped
++
++
++def _source_family(source_timeframe: str) -> str:
++    sources = _split_sources(source_timeframe)
++    if "H4" in sources:
++        return "H4_MAJOR_STRUCTURE"
++    if "H1" in sources:
++        return "H1_PRIMARY_STRUCTURE"
++    if "M15" in sources:
++        return "M15_MINIMUM_STRUCTURE"
++    if "SESSION" in sources:
++        return "SESSION_LOCAL_CONTEXT"
++    if "PATTERN" in sources:
++        return "PATTERN_CONTEXT"
++    return "UNKNOWN_CONTEXT"
++
++
++def _split_sources(value: object) -> set[str]:
++    text = _string(value).replace(",", "|")
++    return {part.strip() for part in text.split("|") if part.strip()} or {"UNKNOWN"}
++
++
++def _score_level_types(raw_json: object) -> str:
++    try:
++        data = json.loads(_string(raw_json) or "{}")
++    except json.JSONDecodeError:
++        return ""
++    return _string(data.get("level_types"))
++
++
++def _reaction_verdict(raw_json: object) -> str:
++    try:
++        data = json.loads(_string(raw_json) or "{}")
++    except json.JSONDecodeError:
++        return ""
++    return _string(data.get("reaction_verdict"))
++
++
++def _column_abs_max(frame: pd.DataFrame, column: str) -> float:
++    if frame.empty or column not in frame.columns:
++        return 0.0
++    values = pd.to_numeric(frame[column], errors="coerce").abs().fillna(0)
++    return float(values.max()) if not values.empty else 0.0
++
++
++def _current_price(representative_price: float, distance_pct: float) -> float:
++    if pd.isna(representative_price) or pd.isna(distance_pct):
++        return representative_price
++    denominator = 1.0 + (distance_pct / 100.0)
++    if denominator == 0:
++        return representative_price
++    return representative_price / denominator
++
++
++def _parse_date(value: str | date, field_name: str) -> date:
++    if isinstance(value, date):
++        return value
++    try:
++        return date.fromisoformat(str(value))
++    except ValueError as exc:
++        raise SignificantZoneSelectorError(f"{field_name} must be YYYY-MM-DD") from exc
++
++
++def _date_range(start_date: date, end_date: date) -> Iterable[date]:
++    days = (end_date - start_date).days
++    for offset in range(days + 1):
++        yield start_date + timedelta(days=offset)
++
++
++def _repo_commit() -> str:
++    try:
++        result = subprocess.run(
++            ["git", "rev-parse", "HEAD"],
++            check=True,
++            capture_output=True,
++            text=True,
++        )
++    except (OSError, subprocess.CalledProcessError):
++        return ""
++    return result.stdout.strip()
++
++
++def _float(value: object, default: float = float("nan")) -> float:
++    try:
++        if value is None or value == "":
++            return default
++        return float(value)
++    except (TypeError, ValueError):
++        return default
++
++
++def _int(value: object, default: int = 0) -> int:
++    try:
++        if value is None or value == "":
++            return default
++        return int(float(value))
++    except (TypeError, ValueError):
++        return default
++
++
++def _truth(value: object) -> bool:
++    return _string(value).lower() == "true"
++
++
++def _contains_any(value: object, candidates: list[str]) -> bool:
++    text = _string(value).upper()
++    return any(candidate in text for candidate in candidates)
++
++
++def _first_nonempty(*values: object) -> str:
++    for value in values:
++        text = _string(value)
++        if text:
++            return text
++    return ""
++
++
++def _string(value: object) -> str:
++    if value is None:
++        return ""
++    if isinstance(value, float) and pd.isna(value):
++        return ""
++    return str(value)
++
++
++def _escape_markdown(value: str) -> str:
++    return value.replace("|", "/").replace("\n", " ")

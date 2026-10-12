@@ -1,0 +1,1153 @@
+     1	from __future__ import annotations
+     2	
+     3	import json
+     4	import subprocess
+     5	from dataclasses import dataclass
+     6	from datetime import date, timedelta
+     7	from pathlib import Path
+     8	from typing import Iterable
+     9	
+    10	import pandas as pd
+    11	
+    12	
+    13	SELECTOR_VERSION = "SHI_RESET_36B_SIGNIFICANT_ZONE_SELECTOR_V0"
+    14	SELECTED_ZONES_CSV = "selected_zones.csv"
+    15	SELECTOR_SUMMARY_MD = "significant_zone_selector_summary.md"
+    16	SELECTOR_MANIFEST_JSON = "significant_zone_selector_manifest.json"
+    17	
+    18	BUCKET_MAJOR = "MAJOR"
+    19	BUCKET_PRIMARY = "PRIMARY"
+    20	BUCKET_MINIMUM = "MINIMUM"
+    21	BUCKET_LOCAL_CONTEXT = "LOCAL_CONTEXT"
+    22	BUCKET_NOISE = "NOISE_HIDE_BY_DEFAULT"
+    23	SIDE_BALANCE_PROMOTION_REASON = (
+    24	    "selected to preserve two-sided liquidity map; strong opposite-side MAJOR/PRIMARY zone within score gap"
+    25	)
+    26	SIDE_BALANCE_DISPLACED_REASON = (
+    27	    "hidden by side-balanced visibility cap; lower priority than opposite-side zone needed for market map"
+    28	)
+    29	
+    30	SELECTED_ZONE_COLUMNS = [
+    31	    "rank",
+    32	    "zone_id",
+    33	    "source_day",
+    34	    "side",
+    35	    "source_timeframe",
+    36	    "source_family",
+    37	    "level_type",
+    38	    "label",
+    39	    "price_lower",
+    40	    "price_upper",
+    41	    "representative_price",
+    42	    "current_price",
+    43	    "distance_to_current_price_pct",
+    44	    "lifecycle_status",
+    45	    "status",
+    46	    "confidence",
+    47	    "bucket",
+    48	    "significance_score",
+    49	    "score_components_json",
+    50	    "penalty_components_json",
+    51	    "evidence_fields_present",
+    52	    "evidence_fields_missing",
+    53	    "flow_evidence_summary",
+    54	    "reason_selected",
+    55	    "reason_hidden",
+    56	    "visible_on_snapshot",
+    57	]
+    58	
+    59	INPUT_TABLES = [
+    60	    "structure_levels.csv",
+    61	    "liquidity_map.csv",
+    62	    "liquidity_zone_registry.csv",
+    63	    "event_log.csv",
+    64	    "post_sweep_observation.csv",
+    65	    "volume_delta_state.csv",
+    66	    "market_state_timeline.csv",
+    67	    "accumulation_zones.csv",
+    68	    "pattern_structures.csv",
+    69	]
+    70	
+    71	HIDDEN_STATUSES = {
+    72	    "EXPIRED",
+    73	    "INVALIDATED",
+    74	    "CONSUMED",
+    75	    "CHOPPED_THROUGH",
+    76	    "MERGED",
+    77	}
+    78	
+    79	
+    80	class SignificantZoneSelectorError(RuntimeError):
+    81	    """Raised when significant zone selection cannot be completed."""
+    82	
+    83	
+    84	@dataclass(frozen=True)
+    85	class SignificantZoneSelectorResult:
+    86	    output_dir: Path
+    87	    selected_zones_path: Path
+    88	    summary_path: Path
+    89	    manifest_path: Path
+    90	    total_candidate_count: int
+    91	    visible_zone_count: int
+    92	    visible_buy_side_count: int
+    93	    visible_sell_side_count: int
+    94	
+    95	
+    96	def run_significant_zone_selector(
+    97	    *,
+    98	    input_root: str | Path,
+    99	    output_dir: str | Path,
+   100	    start: str | date,
+   101	    end: str | date,
+   102	    max_visible_zones: int = 7,
+   103	) -> SignificantZoneSelectorResult:
+   104	    start_date = _parse_date(start, "start")
+   105	    end_date = _parse_date(end, "end")
+   106	    if start_date > end_date:
+   107	        raise SignificantZoneSelectorError("start must be <= end")
+   108	    if max_visible_zones < 1:
+   109	        raise SignificantZoneSelectorError("max_visible_zones must be >= 1")
+   110	
+   111	    root = Path(input_root)
+   112	    out_dir = Path(output_dir)
+   113	    if not root.exists() or not root.is_dir():
+   114	        raise SignificantZoneSelectorError(f"input root not found: {root}")
+   115	    out_dir.mkdir(parents=True, exist_ok=True)
+   116	
+   117	    loaded = _load_window(root, start_date, end_date)
+   118	    liquidity_map = loaded["liquidity_map.csv"]
+   119	    if liquidity_map.empty:
+   120	        selected = pd.DataFrame(columns=SELECTED_ZONE_COLUMNS)
+   121	    else:
+   122	        selected = _score_candidates(loaded)
+   123	        selected = _assign_visibility(selected, max_visible_zones=max_visible_zones)
+   124	        selected = selected.sort_values(
+   125	            ["visible_on_snapshot", "significance_score", "source_day", "zone_id"],
+   126	            ascending=[False, False, True, True],
+   127	            kind="mergesort",
+   128	        ).reset_index(drop=True)
+   129	        selected["rank"] = range(1, len(selected) + 1)
+   130	        selected = selected[SELECTED_ZONE_COLUMNS]
+   131	
+   132	    selected_path = out_dir / SELECTED_ZONES_CSV
+   133	    summary_path = out_dir / SELECTOR_SUMMARY_MD
+   134	    manifest_path = out_dir / SELECTOR_MANIFEST_JSON
+   135	    selected.to_csv(selected_path, index=False)
+   136	
+   137	    row_counts = {name: int(len(frame)) for name, frame in loaded.items()}
+   138	    missing_flags = _missing_data_flags(loaded)
+   139	    summary_path.write_text(
+   140	        _render_summary(
+   141	            selected=selected,
+   142	            row_counts=row_counts,
+   143	            input_root=root,
+   144	            start_date=start_date,
+   145	            end_date=end_date,
+   146	            max_visible_zones=max_visible_zones,
+   147	            missing_flags=missing_flags,
+   148	        ),
+   149	        encoding="utf-8",
+   150	    )
+   151	    manifest = {
+   152	        "selector_version": SELECTOR_VERSION,
+   153	        "start_date": start_date.isoformat(),
+   154	        "end_date": end_date.isoformat(),
+   155	        "input_root": str(root),
+   156	        "outputs": {
+   157	            "selected_zones_csv": str(selected_path),
+   158	            "summary_md": str(summary_path),
+   159	            "manifest_json": str(manifest_path),
+   160	        },
+   161	        "max_visible_zones": max_visible_zones,
+   162	        "visible_zone_count": _visible_zone_count(selected),
+   163	        "visible_side_counts": _visible_side_counts(selected),
+   164	        "side_balance_policy": _side_balance_policy(max_visible_zones),
+   165	        "total_candidate_count": int(len(selected)),
+   166	        "missing_data_flags": missing_flags,
+   167	        "repo_commit": _repo_commit(),
+   168	        "scope": "research_monitor_selection_only_not_trading_advice",
+   169	    }
+   170	    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+   171	
+   172	    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
+   173	    return SignificantZoneSelectorResult(
+   174	        output_dir=out_dir,
+   175	        selected_zones_path=selected_path,
+   176	        summary_path=summary_path,
+   177	        manifest_path=manifest_path,
+   178	        total_candidate_count=int(len(selected)),
+   179	        visible_zone_count=int(len(visible)),
+   180	        visible_buy_side_count=int((visible["side"] == "BUY_SIDE").sum()) if not visible.empty else 0,
+   181	        visible_sell_side_count=int((visible["side"] == "SELL_SIDE").sum()) if not visible.empty else 0,
+   182	    )
+   183	
+   184	
+   185	def _load_window(root: Path, start_date: date, end_date: date) -> dict[str, pd.DataFrame]:
+   186	    frames: dict[str, list[pd.DataFrame]] = {name: [] for name in INPUT_TABLES}
+   187	    for day in _date_range(start_date, end_date):
+   188	        day_dir = root / day.isoformat()
+   189	        if not day_dir.exists():
+   190	            raise SignificantZoneSelectorError(f"missing daily output directory: {day_dir}")
+   191	        for filename in INPUT_TABLES:
+   192	            path = day_dir / filename
+   193	            if path.exists():
+   194	                try:
+   195	                    frame = pd.read_csv(path)
+   196	                except pd.errors.EmptyDataError:
+   197	                    frame = pd.DataFrame()
+   198	            else:
+   199	                frame = pd.DataFrame()
+   200	            frame["_source_day"] = day.isoformat()
+   201	            frame["_source_path"] = str(path)
+   202	            frames[filename].append(frame)
+   203	    return {
+   204	        name: pd.concat(parts, ignore_index=True, sort=False) if parts else pd.DataFrame()
+   205	        for name, parts in frames.items()
+   206	    }
+   207	
+   208	
+   209	def _score_candidates(loaded: dict[str, pd.DataFrame]) -> pd.DataFrame:
+   210	    liquidity_map = loaded["liquidity_map.csv"].copy()
+   211	    event_log = loaded["event_log.csv"]
+   212	    observations = loaded["post_sweep_observation.csv"]
+   213	    event_groups = _group_by_day_zone(event_log)
+   214	    observation_groups = _group_by_day_zone(observations)
+   215	
+   216	    rows = []
+   217	    for _, zone in liquidity_map.iterrows():
+   218	        source_day = _string(zone.get("_source_day"))
+   219	        zone_id = _string(zone.get("zone_id"))
+   220	        events = event_groups.get((source_day, zone_id), pd.DataFrame())
+   221	        zone_observations = observation_groups.get((source_day, zone_id), pd.DataFrame())
+   222	        rows.append(_score_zone(zone, events, zone_observations))
+   223	    frame = pd.DataFrame(rows)
+   224	    return frame.sort_values(
+   225	        ["significance_score", "source_day", "zone_id"],
+   226	        ascending=[False, True, True],
+   227	        kind="mergesort",
+   228	    ).reset_index(drop=True)
+   229	
+   230	
+   231	def _score_zone(zone: pd.Series, events: pd.DataFrame, observations: pd.DataFrame) -> dict[str, object]:
+   232	    score_components: dict[str, float] = {}
+   233	    penalty_components: dict[str, float] = {}
+   234	    evidence_present: set[str] = set()
+   235	    evidence_missing: set[str] = set()
+   236	    reasons: list[str] = []
+   237	
+   238	    source_day = _string(zone.get("_source_day"))
+   239	    zone_id = _string(zone.get("zone_id"))
+   240	    side = _string(zone.get("side")) or "UNKNOWN"
+   241	    source_timeframe = _string(zone.get("source_timeframes")) or "UNKNOWN"
+   242	    source_family = _source_family(source_timeframe)
+   243	    label = _first_nonempty(
+   244	        zone.get("zone_type"),
+   245	        zone.get("htf_level_type"),
+   246	        _score_level_types(zone.get("score_components_json")),
+   247	    )
+   248	    level_type = _first_nonempty(zone.get("htf_level_type"), _score_level_types(zone.get("score_components_json")))
+   249	    status = _string(zone.get("status")) or "UNKNOWN"
+   250	    lifecycle_status = _first_nonempty(zone.get("htf_lifecycle_status"), zone.get("consumption_status"), status)
+   251	    confidence = _string(zone.get("confidence_tier")) or "UNKNOWN"
+   252	    representative_price = _float(zone.get("price_mid"))
+   253	    distance = _float(zone.get("distance_from_close_pct"))
+   254	    current_price = _current_price(representative_price, distance)
+   255	    sources = _split_sources(source_timeframe)
+   256	
+   257	    _add_source_scores(zone, sources, score_components, evidence_present, reasons)
+   258	    _add_lifecycle_scores(status, lifecycle_status, score_components, penalty_components, reasons)
+   259	    _add_confidence_scores(confidence, score_components, penalty_components, reasons)
+   260	    _add_distance_scores(distance, score_components, penalty_components, evidence_present, reasons)
+   261	    _add_interaction_scores(zone, score_components, evidence_present, reasons)
+   262	    _add_precision_scores(zone, score_components, penalty_components, reasons)
+   263	    _add_event_scores(events, score_components, penalty_components, evidence_present, evidence_missing, reasons)
+   264	    _add_observation_scores(
+   265	        observations,
+   266	        score_components,
+   267	        evidence_present,
+   268	        evidence_missing,
+   269	        reasons,
+   270	    )
+   271	    _add_context_penalties(sources, events, observations, penalty_components, reasons)
+   272	
+   273	    missing_data = _zone_missing_data_notes()
+   274	    evidence_missing.update(missing_data)
+   275	
+   276	    raw_score = sum(score_components.values()) + sum(penalty_components.values())
+   277	    bucket = _bucket_for_zone(raw_score, sources, zone, status, events, observations)
+   278	    flow_summary = _flow_summary(events, observations)
+   279	    hidden_reason = _base_hidden_reason(
+   280	        bucket=bucket,
+   281	        status=status,
+   282	        lifecycle_status=lifecycle_status,
+   283	        events=events,
+   284	        observations=observations,
+   285	        sources=sources,
+   286	    )
+   287	
+   288	    return {
+   289	        "rank": 0,
+   290	        "zone_id": zone_id,
+   291	        "source_day": source_day,
+   292	        "side": side,
+   293	        "source_timeframe": source_timeframe,
+   294	        "source_family": source_family,
+   295	        "level_type": level_type,
+   296	        "label": label,
+   297	        "price_lower": zone.get("price_lower", ""),
+   298	        "price_upper": zone.get("price_upper", ""),
+   299	        "representative_price": representative_price,
+   300	        "current_price": current_price,
+   301	        "distance_to_current_price_pct": distance,
+   302	        "lifecycle_status": lifecycle_status,
+   303	        "status": status,
+   304	        "confidence": confidence,
+   305	        "bucket": bucket,
+   306	        "significance_score": round(float(raw_score), 3),
+   307	        "score_components_json": json.dumps(score_components, sort_keys=True),
+   308	        "penalty_components_json": json.dumps(penalty_components, sort_keys=True),
+   309	        "evidence_fields_present": "|".join(sorted(evidence_present)),
+   310	        "evidence_fields_missing": "|".join(sorted(evidence_missing)),
+   311	        "flow_evidence_summary": flow_summary,
+   312	        "reason_selected": "; ".join(reasons[:12]),
+   313	        "reason_hidden": hidden_reason,
+   314	        "visible_on_snapshot": "false",
+   315	    }
+   316	
+   317	
+   318	def _assign_visibility(frame: pd.DataFrame, *, max_visible_zones: int) -> pd.DataFrame:
+   319	    out = frame.copy()
+   320	    out["visible_on_snapshot"] = "false"
+   321	    eligible = out[out.apply(_is_visibility_eligible, axis=1)].copy()
+   322	    if eligible.empty:
+   323	        return out
+   324	
+   325	    eligible_indices = _visibility_sorted_indices(out, eligible.index)
+   326	    selected_indices = eligible_indices[:max_visible_zones]
+   327	    selected_indices = _rebalance_visible_sides(
+   328	        out,
+   329	        eligible_indices=eligible_indices,
+   330	        selected_indices=selected_indices,
+   331	        max_visible_zones=max_visible_zones,
+   332	    )
+   333	
+   334	    out.loc[selected_indices, "visible_on_snapshot"] = "true"
+   335	    out.loc[out["visible_on_snapshot"] == "true", "reason_hidden"] = ""
+   336	    out.loc[
+   337	        (out["visible_on_snapshot"] == "false") & (out["reason_hidden"] == ""),
+   338	        "reason_hidden",
+   339	    ] = "outside max visible zone cap or lower ranked than selected zones"
+   340	    return out
+   341	
+   342	
+   343	def _rebalance_visible_sides(
+   344	    frame: pd.DataFrame,
+   345	    *,
+   346	    eligible_indices: list[int],
+   347	    selected_indices: list[int],
+   348	    max_visible_zones: int,
+   349	) -> list[int]:
+   350	    if max_visible_zones < 2:
+   351	        return selected_indices
+   352	
+   353	    selected = list(selected_indices)
+   354	    available_sides = {
+   355	        _string(frame.loc[idx, "side"])
+   356	        for idx in eligible_indices
+   357	        if _string(frame.loc[idx, "side"]) in {"BUY_SIDE", "SELL_SIDE"}
+   358	    }
+   359	    if not {"BUY_SIDE", "SELL_SIDE"}.issubset(available_sides):
+   360	        return selected
+   361	
+   362	    selected = _promote_to_side_minimum(
+   363	        frame,
+   364	        eligible_indices=eligible_indices,
+   365	        selected_indices=selected,
+   366	        side="BUY_SIDE",
+   367	        target_count=1,
+   368	        require_visible_side=True,
+   369	    )
+   370	    selected = _promote_to_side_minimum(
+   371	        frame,
+   372	        eligible_indices=eligible_indices,
+   373	        selected_indices=selected,
+   374	        side="SELL_SIDE",
+   375	        target_count=1,
+   376	        require_visible_side=True,
+   377	    )
+   378	
+   379	    if max_visible_zones >= 6:
+   380	        for side in ["BUY_SIDE", "SELL_SIDE"]:
+   381	            if _eligible_side_count(frame, eligible_indices, side) >= 2:
+   382	                selected = _promote_to_side_minimum(
+   383	                    frame,
+   384	                    eligible_indices=eligible_indices,
+   385	                    selected_indices=selected,
+   386	                    side=side,
+   387	                    target_count=2,
+   388	                    require_visible_side=False,
+   389	                )
+   390	    return _visibility_sorted_indices(frame, selected)[:max_visible_zones]
+   391	
+   392	
+   393	def _promote_to_side_minimum(
+   394	    frame: pd.DataFrame,
+   395	    *,
+   396	    eligible_indices: list[int],
+   397	    selected_indices: list[int],
+   398	    side: str,
+   399	    target_count: int,
+   400	    require_visible_side: bool,
+   401	) -> list[int]:
+   402	    selected = list(selected_indices)
+   403	    while _selected_side_count(frame, selected, side) < target_count:
+   404	        candidate = _best_hidden_side_candidate(frame, eligible_indices, selected, side)
+   405	        if candidate is None:
+   406	            return selected
+   407	        displaced = _replacement_index_for_side_balance(
+   408	            frame,
+   409	            selected,
+   410	            candidate,
+   411	            require_visible_side=require_visible_side,
+   412	        )
+   413	        if displaced is None:
+   414	            return selected
+   415	        selected.remove(displaced)
+   416	        selected.append(candidate)
+   417	        _append_reason(frame, candidate, "reason_selected", SIDE_BALANCE_PROMOTION_REASON)
+   418	        frame.loc[displaced, "reason_hidden"] = SIDE_BALANCE_DISPLACED_REASON
+   419	    return selected
+   420	
+   421	
+   422	def _best_hidden_side_candidate(
+   423	    frame: pd.DataFrame,
+   424	    eligible_indices: list[int],
+   425	    selected_indices: list[int],
+   426	    side: str,
+   427	) -> int | None:
+   428	    selected = set(selected_indices)
+   429	    for idx in eligible_indices:
+   430	        if idx in selected:
+   431	            continue
+   432	        row = frame.loc[idx]
+   433	        if _string(row.get("side")) != side:
+   434	            continue
+   435	        if _is_side_balance_candidate(row):
+   436	            return idx
+   437	    return None
+   438	
+   439	
+   440	def _replacement_index_for_side_balance(
+   441	    frame: pd.DataFrame,
+   442	    selected_indices: list[int],
+   443	    candidate_idx: int,
+   444	    *,
+   445	    require_visible_side: bool,
+   446	) -> int | None:
+   447	    candidate = frame.loc[candidate_idx]
+   448	    candidate_side = _string(candidate.get("side"))
+   449	    candidate_score = _float(candidate.get("significance_score"))
+   450	    side_counts = {
+   451	        side: _selected_side_count(frame, selected_indices, side)
+   452	        for side in ["BUY_SIDE", "SELL_SIDE"]
+   453	    }
+   454	    overrepresented_sides = [
+   455	        side for side, count in side_counts.items() if side != candidate_side and count > 1
+   456	    ]
+   457	    if not overrepresented_sides:
+   458	        return None
+   459	
+   460	    replacement_pool = [
+   461	        idx
+   462	        for idx in selected_indices
+   463	        if _string(frame.loc[idx].get("side")) in overrepresented_sides
+   464	    ]
+   465	    for replace_idx in reversed(_visibility_sorted_indices(frame, replacement_pool)):
+   466	        replacement = frame.loc[replace_idx]
+   467	        if require_visible_side:
+   468	            return replace_idx
+   469	        replacement_score = _float(replacement.get("significance_score"))
+   470	        if replacement_score - candidate_score > 10:
+   471	            continue
+   472	        if _candidate_can_replace(candidate, replacement):
+   473	            return replace_idx
+   474	    return None
+   475	
+   476	
+   477	def _candidate_can_replace(candidate: pd.Series, replacement: pd.Series) -> bool:
+   478	    candidate_distance = abs(_float(candidate.get("distance_to_current_price_pct"), 999.0))
+   479	    replacement_distance = abs(_float(replacement.get("distance_to_current_price_pct"), 999.0))
+   480	    if candidate_distance < replacement_distance:
+   481	        return True
+   482	    if _bucket_strength(candidate.get("bucket")) > _bucket_strength(replacement.get("bucket")):
+   483	        return True
+   484	    return _source_strength(candidate.get("source_timeframe")) > _source_strength(replacement.get("source_timeframe"))
+   485	
+   486	
+   487	def _is_side_balance_candidate(row: pd.Series) -> bool:
+   488	    if _string(row.get("bucket")) not in {BUCKET_MAJOR, BUCKET_PRIMARY}:
+   489	        return False
+   490	    if not _valid_price_range(row):
+   491	        return False
+   492	    if _string(row.get("side")) not in {"BUY_SIDE", "SELL_SIDE"}:
+   493	        return False
+   494	    distance = abs(_float(row.get("distance_to_current_price_pct"), 999.0))
+   495	    return distance <= 2.0 or _has_strong_structural_or_event_evidence(row)
+   496	
+   497	
+   498	def _valid_price_range(row: pd.Series) -> bool:
+   499	    lower = _float(row.get("price_lower"))
+   500	    upper = _float(row.get("price_upper"))
+   501	    return not pd.isna(lower) and not pd.isna(upper) and lower <= upper
+   502	
+   503	
+   504	def _has_strong_structural_or_event_evidence(row: pd.Series) -> bool:
+   505	    present = set(_string(row.get("evidence_fields_present")).split("|"))
+   506	    return bool({"has_h4_source", "has_h1_source", "event_log", "post_sweep_observation"} & present)
+   507	
+   508	
+   509	def _eligible_side_count(frame: pd.DataFrame, eligible_indices: list[int], side: str) -> int:
+   510	    return sum(1 for idx in eligible_indices if _string(frame.loc[idx].get("side")) == side)
+   511	
+   512	
+   513	def _selected_side_count(frame: pd.DataFrame, selected_indices: list[int], side: str) -> int:
+   514	    return sum(1 for idx in selected_indices if _string(frame.loc[idx].get("side")) == side)
+   515	
+   516	
+   517	def _visibility_sorted_indices(frame: pd.DataFrame, indices: Iterable[int]) -> list[int]:
+   518	    return sorted((int(idx) for idx in indices), key=lambda idx: _visibility_priority_key(frame.loc[idx], idx))
+   519	
+   520	
+   521	def _visibility_priority_key(row: pd.Series, idx: int) -> tuple[float, float, int, int, str, int]:
+   522	    return (
+   523	        -_float(row.get("significance_score")),
+   524	        abs(_float(row.get("distance_to_current_price_pct"), 999.0)),
+   525	        -_bucket_strength(row.get("bucket")),
+   526	        -_source_strength(row.get("source_timeframe")),
+   527	        _string(row.get("zone_id")),
+   528	        idx,
+   529	    )
+   530	
+   531	
+   532	def _bucket_strength(bucket: object) -> int:
+   533	    return {
+   534	        BUCKET_MAJOR: 4,
+   535	        BUCKET_PRIMARY: 3,
+   536	        BUCKET_MINIMUM: 2,
+   537	        BUCKET_LOCAL_CONTEXT: 1,
+   538	    }.get(_string(bucket), 0)
+   539	
+   540	
+   541	def _source_strength(source_timeframe: object) -> int:
+   542	    sources = _split_sources(source_timeframe)
+   543	    if "H4" in sources:
+   544	        return 4
+   545	    if "H1" in sources:
+   546	        return 3
+   547	    if "M15" in sources:
+   548	        return 2
+   549	    if "SESSION" in sources:
+   550	        return 1
+   551	    return 0
+   552	
+   553	
+   554	def _append_reason(frame: pd.DataFrame, idx: int, column: str, reason: str) -> None:
+   555	    existing = _string(frame.loc[idx, column])
+   556	    if reason in existing:
+   557	        return
+   558	    frame.loc[idx, column] = f"{existing}; {reason}" if existing else reason
+   559	
+   560	
+   561	def _is_visibility_eligible(row: pd.Series) -> bool:
+   562	    if row["bucket"] == BUCKET_NOISE:
+   563	        return False
+   564	    if row["status"] in HIDDEN_STATUSES:
+   565	        return False
+   566	    if row["status"] == "CROSSED_UNCLASSIFIED" and not _has_supporting_evidence(row):
+   567	        return False
+   568	    if row["bucket"] in {BUCKET_MAJOR, BUCKET_PRIMARY}:
+   569	        return True
+   570	    if row["bucket"] == BUCKET_MINIMUM:
+   571	        return abs(_float(row["distance_to_current_price_pct"], 999.0)) <= 1.0 and _has_supporting_evidence(row)
+   572	    return False
+   573	
+   574	
+   575	def _has_supporting_evidence(row: pd.Series) -> bool:
+   576	    present = set(_string(row.get("evidence_fields_present")).split("|"))
+   577	    return bool({"event_log", "post_sweep_observation", "sweep_count", "touch_count"} & present)
+   578	
+   579	
+   580	def _visible_zone_count(selected: pd.DataFrame) -> int:
+   581	    if selected.empty:
+   582	        return 0
+   583	    return int((selected["visible_on_snapshot"].astype(str) == "true").sum())
+   584	
+   585	
+   586	def _visible_side_counts(selected: pd.DataFrame) -> dict[str, int]:
+   587	    if selected.empty:
+   588	        return {}
+   589	    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"]
+   590	    return {key: int(value) for key, value in visible["side"].value_counts().to_dict().items()}
+   591	
+   592	
+   593	def _side_balance_policy(max_visible_zones: int) -> str:
+   594	    if max_visible_zones >= 6:
+   595	        return "require one zone per side when available; prefer two zones per side from eligible MAJOR/PRIMARY zones within score gap"
+   596	    if max_visible_zones >= 2:
+   597	        return "require one zone per side when available"
+   598	    return "single visible zone cap cannot preserve both sides"
+   599	
+   600	
+   601	def _side_balance_note(selected: pd.DataFrame, max_visible_zones: int) -> str:
+   602	    if selected.empty:
+   603	        return "no candidate zones"
+   604	    visible_counts = _visible_side_counts(selected)
+   605	    if max_visible_zones < 6:
+   606	        return "visible cap below six only guarantees one zone per side when available"
+   607	    notes = []
+   608	    for side in ["BUY_SIDE", "SELL_SIDE"]:
+   609	        eligible_count = int(
+   610	            selected[
+   611	                (selected["side"] == side)
+   612	                & selected.apply(_is_visibility_eligible, axis=1)
+   613	                & selected.apply(_is_side_balance_candidate, axis=1)
+   614	            ].shape[0]
+   615	        )
+   616	        visible_count = visible_counts.get(side, 0)
+   617	        if eligible_count < 2:
+   618	            notes.append(f"{side} has fewer than two high-quality eligible zones")
+   619	        elif visible_count < 2:
+   620	            notes.append(f"{side} has fewer than two visible zones because score-gap replacement criteria were not met")
+   621	    return "; ".join(notes) if notes else "both sides preserved when high-quality eligible zones were available"
+   622	
+   623	
+   624	def _add_source_scores(
+   625	    zone: pd.Series,
+   626	    sources: set[str],
+   627	    score: dict[str, float],
+   628	    evidence: set[str],
+   629	    reasons: list[str],
+   630	) -> None:
+   631	    if "H4" in sources or _truth(zone.get("has_h4_source")):
+   632	        score["h4_source"] = 40
+   633	        evidence.add("has_h4_source")
+   634	        reasons.append("H4 structural source")
+   635	    if "H1" in sources or _truth(zone.get("has_h1_source")):
+   636	        score["h1_source"] = 24
+   637	        evidence.add("has_h1_source")
+   638	        reasons.append("H1 structural source")
+   639	    if _truth(zone.get("has_pdh_pdl_source")) or _contains_any(zone.get("zone_type"), ["PDH", "PDL"]):
+   640	        score["pdh_pdl_source"] = 32
+   641	        evidence.add("has_pdh_pdl_source")
+   642	        reasons.append("previous day reference")
+   643	    if "M15" in sources:
+   644	        score["m15_source"] = 12
+   645	        evidence.add("m15_source")
+   646	        reasons.append("M15 structure")
+   647	    if "SESSION" in sources or _truth(zone.get("has_session_source")):
+   648	        score["session_context"] = 6
+   649	        evidence.add("has_session_source")
+   650	        reasons.append("session/local context")
+   651	    if _truth(zone.get("has_equal_level_source")):
+   652	        score["equal_level_source"] = 8
+   653	        evidence.add("has_equal_level_source")
+   654	        reasons.append("equal high/low liquidity pool")
+   655	    cluster_count = _int(zone.get("cluster_member_count"))
+   656	    if "CLUSTER" in sources or cluster_count > 1:
+   657	        score["source_cluster"] = min(16, 4 * max(cluster_count, 2))
+   658	        evidence.add("cluster_member_count")
+   659	        reasons.append(f"clustered sources={cluster_count}")
+   660	
+   661	
+   662	def _add_lifecycle_scores(
+   663	    status: str,
+   664	    lifecycle_status: str,
+   665	    score: dict[str, float],
+   666	    penalty: dict[str, float],
+   667	    reasons: list[str],
+   668	) -> None:
+   669	    if status == "ACTIVE" or lifecycle_status == "ACTIVE":
+   670	        score["active_lifecycle"] = 15
+   671	        reasons.append("active lifecycle")
+   672	    if status in {"EXPIRED", "INVALIDATED"}:
+   673	        penalty["expired_or_invalidated"] = -35
+   674	        reasons.append(f"hidden lifecycle={status}")
+   675	    elif status in {"CONSUMED", "CHOPPED_THROUGH", "MERGED"}:
+   676	        penalty["consumed_or_chopped_or_merged"] = -24
+   677	        reasons.append(f"penalty lifecycle={status}")
+   678	    elif status == "CROSSED_UNCLASSIFIED":
+   679	        penalty["crossed_unclassified"] = -18
+   680	        reasons.append("crossed but unclassified")
+   681	
+   682	
+   683	def _add_confidence_scores(
+   684	    confidence: str,
+   685	    score: dict[str, float],
+   686	    penalty: dict[str, float],
+   687	    reasons: list[str],
+   688	) -> None:
+   689	    if confidence == "HIGH":
+   690	        score["high_confidence"] = 12
+   691	        reasons.append("high confidence")
+   692	    elif confidence == "MEDIUM":
+   693	        score["medium_confidence"] = 6
+   694	        reasons.append("medium confidence")
+   695	    else:
+   696	        penalty["low_or_unknown_confidence"] = -6
+   697	        reasons.append("low/unknown confidence")
+   698	
+   699	
+   700	def _add_distance_scores(
+   701	    distance: float,
+   702	    score: dict[str, float],
+   703	    penalty: dict[str, float],
+   704	    evidence: set[str],
+   705	    reasons: list[str],
+   706	) -> None:
+   707	    if not pd.isna(distance):
+   708	        evidence.add("distance_to_current_price_pct")
+   709	    absolute = abs(distance)
+   710	    if absolute <= 0.5:
+   711	        score["distance_within_0_5_pct"] = 18
+   712	        reasons.append("near current price <=0.5 pct")
+   713	    elif absolute <= 1.0:
+   714	        score["distance_within_1_pct"] = 12
+   715	        reasons.append("near current price <=1 pct")
+   716	    elif absolute <= 2.0:
+   717	        score["distance_within_2_pct"] = 6
+   718	        reasons.append("near current price <=2 pct")
+   719	    elif absolute > 5.0:
+   720	        penalty["far_from_current_price"] = -12
+   721	        reasons.append("far from current price >5 pct")
+   722	
+   723	
+   724	def _add_interaction_scores(
+   725	    zone: pd.Series,
+   726	    score: dict[str, float],
+   727	    evidence: set[str],
+   728	    reasons: list[str],
+   729	) -> None:
+   730	    touch_count = max(_int(zone.get("touch_count")), _int(zone.get("m1_interaction_count")))
+   731	    if touch_count > 0:
+   732	        score["touch_or_retest_history"] = min(8, touch_count * 2)
+   733	        evidence.add("touch_count")
+   734	        reasons.append(f"touch/retest count={touch_count}")
+   735	    sweep_count = max(_int(zone.get("sweep_count")), _int(zone.get("resweep_count")), _int(zone.get("htf_sweep_count")))
+   736	    if sweep_count > 0:
+   737	        score["sweep_history"] = min(30, sweep_count * 10)
+   738	        evidence.add("sweep_count")
+   739	        reasons.append(f"sweep history={sweep_count}")
+   740	    recent = _first_nonempty(
+   741	        zone.get("last_touch_at"),
+   742	        zone.get("last_clean_reaction_at"),
+   743	        zone.get("first_sweep_at"),
+   744	        zone.get("drift_away_confirmed_at"),
+   745	    )
+   746	    if recent:
+   747	        score["recent_interaction"] = 6
+   748	        evidence.add("recent_interaction_timestamp")
+   749	        reasons.append("recent interaction present")
+   750	
+   751	
+   752	def _add_precision_scores(
+   753	    zone: pd.Series,
+   754	    score: dict[str, float],
+   755	    penalty: dict[str, float],
+   756	    reasons: list[str],
+   757	) -> None:
+   758	    if _string(zone.get("precision_status")) == "PRECISE":
+   759	        score["precise_zone_width"] = 4
+   760	        reasons.append("precise width")
+   761	    else:
+   762	        penalty["imprecise_or_wide_zone"] = -8
+   763	        reasons.append("imprecise/wide zone")
+   764	    if _float(zone.get("zone_width_pct")) > 0.5:
+   765	        penalty["hard_wide_zone_width"] = -8
+   766	        reasons.append("wide zone width pct")
+   767	
+   768	
+   769	def _add_event_scores(
+   770	    events: pd.DataFrame,
+   771	    score: dict[str, float],
+   772	    penalty: dict[str, float],
+   773	    present: set[str],
+   774	    missing: set[str],
+   775	    reasons: list[str],
+   776	) -> None:
+   777	    if events.empty:
+   778	        missing.add("event_log")
+   779	        penalty["missing_event_evidence"] = -4
+   780	        return
+   781	    present.add("event_log")
+   782	    score["event_evidence"] = min(12, len(events) * 3)
+   783	    reasons.append(f"event evidence count={len(events)}")
+   784	    max_excursion = _column_abs_max(events, "excursion_abs")
+   785	    if max_excursion > 0:
+   786	        score["excursion_magnitude"] = min(8, max_excursion / 100)
+   787	        present.add("excursion_abs")
+   788	    max_volume = _column_abs_max(events, "volume_zscore")
+   789	    if max_volume >= 2:
+   790	        score["volume_anomaly"] = 8
+   791	        present.add("volume_zscore")
+   792	        reasons.append(f"volume anomaly z={max_volume:.2f}")
+   793	    else:
+   794	        missing.add("volume_anomaly")
+   795	    max_delta = _column_abs_max(events, "delta_zscore")
+   796	    if max_delta >= 2:
+   797	        score["delta_anomaly"] = 8
+   798	        present.add("delta_zscore")
+   799	        reasons.append(f"delta anomaly z={max_delta:.2f}")
+   800	    else:
+   801	        missing.add("delta_anomaly")
+   802	    if _column_abs_max(events, "oi_change") > 0:
+   803	        score["oi_context"] = 4
+   804	        present.add("oi_change")
+   805	    else:
+   806	        missing.add("oi_context")
+   807	
+   808	
+   809	def _add_observation_scores(
+   810	    observations: pd.DataFrame,
+   811	    score: dict[str, float],
+   812	    present: set[str],
+   813	    missing: set[str],
+   814	    reasons: list[str],
+   815	) -> None:
+   816	    if observations.empty:
+   817	        missing.add("post_sweep_observation")
+   818	        return
+   819	    present.add("post_sweep_observation")
+   820	    score["post_sweep_observation"] = min(10, len(observations) * 2)
+   821	    reasons.append(f"post-sweep observations={len(observations)}")
+   822	    if _column_abs_max(observations, "post_max_volume_zscore") >= 2:
+   823	        score["post_sweep_volume_context"] = 5
+   824	        present.add("post_max_volume_zscore")
+   825	    if _column_abs_max(observations, "post_max_abs_delta_zscore") >= 2:
+   826	        score["post_sweep_delta_context"] = 5
+   827	        present.add("post_max_abs_delta_zscore")
+   828	    if _column_abs_max(observations, "post_oi_change") > 0:
+   829	        score["post_sweep_oi_context"] = 4
+   830	        present.add("post_oi_change")
+   831	    verdicts = [_reaction_verdict(row.get("evidence_json")) for _, row in observations.iterrows()]
+   832	    if any(verdict not in {"", "NOT_CLASSIFIED", "UNCLASSIFIED", "NONE"} for verdict in verdicts):
+   833	        score["classified_post_sweep_reaction"] = 10
+   834	        present.add("reaction_verdict")
+   835	        reasons.append("classified post-sweep reaction")
+   836	    else:
+   837	        missing.add("classified_post_sweep_reaction")
+   838	
+   839	
+   840	def _add_context_penalties(
+   841	    sources: set[str],
+   842	    events: pd.DataFrame,
+   843	    observations: pd.DataFrame,
+   844	    penalty: dict[str, float],
+   845	    reasons: list[str],
+   846	) -> None:
+   847	    if sources and sources.issubset({"SESSION"}) and events.empty and observations.empty:
+   848	        penalty["session_only_without_event_evidence"] = -10
+   849	        reasons.append("session-only without event evidence")
+   850	    if "PATTERN" in sources:
+   851	        penalty["pattern_only_low_confidence_context"] = -6
+   852	        reasons.append("pattern source treated as context only")
+   853	
+   854	
+   855	def _bucket_for_zone(
+   856	    score: float,
+   857	    sources: set[str],
+   858	    zone: pd.Series,
+   859	    status: str,
+   860	    events: pd.DataFrame,
+   861	    observations: pd.DataFrame,
+   862	) -> str:
+   863	    if status in HIDDEN_STATUSES:
+   864	        return BUCKET_NOISE
+   865	    if sources.issubset({"SESSION"}) and events.empty and observations.empty:
+   866	        return BUCKET_LOCAL_CONTEXT if score >= 35 else BUCKET_NOISE
+   867	    has_major = "H4" in sources or _truth(zone.get("has_h4_source")) or _truth(zone.get("has_pdh_pdl_source"))
+   868	    if score >= 85 and has_major:
+   869	        return BUCKET_MAJOR
+   870	    if score >= 60 and ("H1" in sources or _truth(zone.get("has_h1_source")) or has_major):
+   871	        return BUCKET_PRIMARY
+   872	    if score >= 35 and "M15" in sources:
+   873	        return BUCKET_MINIMUM
+   874	    if score >= 35:
+   875	        return BUCKET_LOCAL_CONTEXT
+   876	    return BUCKET_NOISE
+   877	
+   878	
+   879	def _base_hidden_reason(
+   880	    *,
+   881	    bucket: str,
+   882	    status: str,
+   883	    lifecycle_status: str,
+   884	    events: pd.DataFrame,
+   885	    observations: pd.DataFrame,
+   886	    sources: set[str],
+   887	) -> str:
+   888	    if bucket == BUCKET_NOISE:
+   889	        return "noise or hide-by-default bucket"
+   890	    if status in HIDDEN_STATUSES or lifecycle_status in HIDDEN_STATUSES:
+   891	        return f"hidden lifecycle/status={status or lifecycle_status}"
+   892	    if status == "CROSSED_UNCLASSIFIED" and events.empty and observations.empty:
+   893	        return "crossed-unclassified without supporting event or observation evidence"
+   894	    if bucket == BUCKET_LOCAL_CONTEXT:
+   895	        return "local/session context, not dominant snapshot zone"
+   896	    if sources.issubset({"SESSION"}):
+   897	        return "session-only context"
+   898	    return ""
+   899	
+   900	
+   901	def _render_summary(
+   902	    *,
+   903	    selected: pd.DataFrame,
+   904	    row_counts: dict[str, int],
+   905	    input_root: Path,
+   906	    start_date: date,
+   907	    end_date: date,
+   908	    max_visible_zones: int,
+   909	    missing_flags: dict[str, str],
+   910	) -> str:
+   911	    visible = selected[selected["visible_on_snapshot"].astype(str) == "true"] if not selected.empty else selected
+   912	    hidden = selected[selected["visible_on_snapshot"].astype(str) != "true"] if not selected.empty else selected
+   913	    bucket_counts = selected["bucket"].value_counts().to_dict() if not selected.empty else {}
+   914	    side_counts = selected["side"].value_counts().to_dict() if not selected.empty else {}
+   915	    visible_side_counts = _visible_side_counts(selected)
+   916	
+   917	    lines = [
+   918	        "# Significant Zone Selector Summary",
+   919	        "",
+   920	        "Research monitor selection only. This is not trading advice.",
+   921	        "",
+   922	        "## Inputs",
+   923	        "",
+   924	        f"- Date range: {start_date.isoformat()} to {end_date.isoformat()}",
+   925	        f"- Input root: `{input_root}`",
+   926	        f"- Max visible zones: {max_visible_zones}",
+   927	        "",
+   928	        "## Row Counts",
+   929	        "",
+   930	    ]
+   931	    lines.extend(f"- `{name}`: {count}" for name, count in sorted(row_counts.items()))
+   932	    lines.extend(
+   933	        [
+   934	            "",
+   935	            "## Zone Inventory Counts",
+   936	            "",
+   937	            f"- Total candidate zones: {len(selected)}",
+   938	            f"- Visible zones: {len(visible)}",
+   939	            f"- Side counts: {json.dumps(side_counts, sort_keys=True)}",
+   940	            f"- Visible side counts: {json.dumps(visible_side_counts, sort_keys=True)}",
+   941	            f"- Bucket counts: {json.dumps(bucket_counts, sort_keys=True)}",
+   942	            f"- Side balance policy: {_side_balance_policy(max_visible_zones)}.",
+   943	            f"- Side balance note: {_side_balance_note(selected, max_visible_zones)}",
+   944	            "",
+   945	            "## Scoring Model Summary",
+   946	            "",
+   947	            "- Priority sequence: H4 major structure > H1 primary structure > M15 minimum structure > SESSION/local context.",
+   948	            "- Positive components: structural source weight, PDH/PDL, equal level source, clustering, lifecycle, confidence, proximity, touch/retest, sweep, event, flow, OI, post-sweep observation, reaction, and precision.",
+   949	            "- Negative components: expired/invalidated/consumed/chopped/merged lifecycle, crossed-unclassified without support, distance, old/no recent interaction, local-only clutter, pattern context, imprecision, and missing evidence.",
+   950	            "",
+   951	            "## Visible Selected Zones",
+   952	            "",
+   953	            _markdown_table(
+   954	                visible,
+   955	                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_selected"],
+   956	            ),
+   957	            "",
+   958	            "## Hidden Top-Ranked Zones",
+   959	            "",
+   960	            _markdown_table(
+   961	                hidden.head(10),
+   962	                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_hidden"],
+   963	            ),
+   964	            "",
+   965	            "## Missing Data Notes",
+   966	            "",
+   967	        ]
+   968	    )
+   969	    lines.extend(f"- {key}: {value}" for key, value in sorted(missing_flags.items()))
+   970	    lines.extend(
+   971	        [
+   972	            "",
+   973	            "## Limitations",
+   974	            "",
+   975	            "- Selector consumes existing Market Monitor outputs only; it does not create new market logic.",
+   976	            "- Compression boundaries are not faked when first-class compression zones are unavailable.",
+   977	            "- Liquidation and VWAP confirmations are marked unavailable when absent.",
+   978	            "- Scores are deterministic v0 selection weights, not strategy validation.",
+   979	        ]
+   980	    )
+   981	    return "\n".join(lines) + "\n"
+   982	
+   983	
+   984	def _markdown_table(frame: pd.DataFrame, columns: list[str]) -> str:
+   985	    if frame.empty:
+   986	        return "_None_"
+   987	    out = ["| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
+   988	    for _, row in frame.iterrows():
+   989	        values = [_escape_markdown(_string(row.get(column))) for column in columns]
+   990	        out.append("| " + " | ".join(values) + " |")
+   991	    return "\n".join(out)
+   992	
+   993	
+   994	def _missing_data_flags(loaded: dict[str, pd.DataFrame]) -> dict[str, str]:
+   995	    accumulation = loaded["accumulation_zones.csv"]
+   996	    return {
+   997	        "liquidations": "not_available",
+   998	        "vwap": "not_available",
+   999	        "compression": "not_available" if accumulation.empty else "partial",
+  1000	    }
+  1001	
+  1002	
+  1003	def _zone_missing_data_notes() -> set[str]:
+  1004	    return {"liquidations=not_available", "vwap=not_available", "compression=not_available_or_partial"}
+  1005	
+  1006	
+  1007	def _flow_summary(events: pd.DataFrame, observations: pd.DataFrame) -> str:
+  1008	    event_count = 0 if events.empty else len(events)
+  1009	    observation_count = 0 if observations.empty else len(observations)
+  1010	    max_volume = max(_column_abs_max(events, "volume_zscore"), _column_abs_max(observations, "post_max_volume_zscore"))
+  1011	    max_delta = max(_column_abs_max(events, "delta_zscore"), _column_abs_max(observations, "post_max_abs_delta_zscore"))
+  1012	    max_oi = max(_column_abs_max(events, "oi_change"), _column_abs_max(observations, "post_oi_change"))
+  1013	    return (
+  1014	        f"events={event_count}; post_sweep_observations={observation_count}; "
+  1015	        f"max_volume_zscore={max_volume:.3f}; max_abs_delta_zscore={max_delta:.3f}; "
+  1016	        f"max_abs_oi_change={max_oi:.3f}; liquidations=not_available; vwap=not_available"
+  1017	    )
+  1018	
+  1019	
+  1020	def _group_by_day_zone(frame: pd.DataFrame) -> dict[tuple[str, str], pd.DataFrame]:
+  1021	    if frame.empty or "zone_id" not in frame.columns:
+  1022	        return {}
+  1023	    grouped = {}
+  1024	    for key, group in frame.groupby(["_source_day", "zone_id"], dropna=False, sort=False):
+  1025	        grouped[(str(key[0]), str(key[1]))] = group.copy()
+  1026	    return grouped
+  1027	
+  1028	
+  1029	def _source_family(source_timeframe: str) -> str:
+  1030	    sources = _split_sources(source_timeframe)
+  1031	    if "H4" in sources:
+  1032	        return "H4_MAJOR_STRUCTURE"
+  1033	    if "H1" in sources:
+  1034	        return "H1_PRIMARY_STRUCTURE"
+  1035	    if "M15" in sources:
+  1036	        return "M15_MINIMUM_STRUCTURE"
+  1037	    if "SESSION" in sources:
+  1038	        return "SESSION_LOCAL_CONTEXT"
+  1039	    if "PATTERN" in sources:
+  1040	        return "PATTERN_CONTEXT"
+  1041	    return "UNKNOWN_CONTEXT"
+  1042	
+  1043	
+  1044	def _split_sources(value: object) -> set[str]:
+  1045	    text = _string(value).replace(",", "|")
+  1046	    return {part.strip() for part in text.split("|") if part.strip()} or {"UNKNOWN"}
+  1047	
+  1048	
+  1049	def _score_level_types(raw_json: object) -> str:
+  1050	    try:
+  1051	        data = json.loads(_string(raw_json) or "{}")
+  1052	    except json.JSONDecodeError:
+  1053	        return ""
+  1054	    return _string(data.get("level_types"))
+  1055	
+  1056	
+  1057	def _reaction_verdict(raw_json: object) -> str:
+  1058	    try:
+  1059	        data = json.loads(_string(raw_json) or "{}")
+  1060	    except json.JSONDecodeError:
+  1061	        return ""
+  1062	    return _string(data.get("reaction_verdict"))
+  1063	
+  1064	
+  1065	def _column_abs_max(frame: pd.DataFrame, column: str) -> float:
+  1066	    if frame.empty or column not in frame.columns:
+  1067	        return 0.0
+  1068	    values = pd.to_numeric(frame[column], errors="coerce").abs().fillna(0)
+  1069	    return float(values.max()) if not values.empty else 0.0
+  1070	
+  1071	
+  1072	def _current_price(representative_price: float, distance_pct: float) -> float:
+  1073	    if pd.isna(representative_price) or pd.isna(distance_pct):
+  1074	        return representative_price
+  1075	    denominator = 1.0 + (distance_pct / 100.0)
+  1076	    if denominator == 0:
+  1077	        return representative_price
+  1078	    return representative_price / denominator
+  1079	
+  1080	
+  1081	def _parse_date(value: str | date, field_name: str) -> date:
+  1082	    if isinstance(value, date):
+  1083	        return value
+  1084	    try:
+  1085	        return date.fromisoformat(str(value))
+  1086	    except ValueError as exc:
+  1087	        raise SignificantZoneSelectorError(f"{field_name} must be YYYY-MM-DD") from exc
+  1088	
+  1089	
+  1090	def _date_range(start_date: date, end_date: date) -> Iterable[date]:
+  1091	    days = (end_date - start_date).days
+  1092	    for offset in range(days + 1):
+  1093	        yield start_date + timedelta(days=offset)
+  1094	
+  1095	
+  1096	def _repo_commit() -> str:
+  1097	    try:
+  1098	        result = subprocess.run(
+  1099	            ["git", "rev-parse", "HEAD"],
+  1100	            check=True,
+  1101	            capture_output=True,
+  1102	            text=True,
+  1103	        )
+  1104	    except (OSError, subprocess.CalledProcessError):
+  1105	        return ""
+  1106	    return result.stdout.strip()
+  1107	
+  1108	
+  1109	def _float(value: object, default: float = float("nan")) -> float:
+  1110	    try:
+  1111	        if value is None or value == "":
+  1112	            return default
+  1113	        return float(value)
+  1114	    except (TypeError, ValueError):
+  1115	        return default
+  1116	
+  1117	
+  1118	def _int(value: object, default: int = 0) -> int:
+  1119	    try:
+  1120	        if value is None or value == "":
+  1121	            return default
+  1122	        return int(float(value))
+  1123	    except (TypeError, ValueError):
+  1124	        return default
+  1125	
+  1126	
+  1127	def _truth(value: object) -> bool:
+  1128	    return _string(value).lower() == "true"
+  1129	
+  1130	
+  1131	def _contains_any(value: object, candidates: list[str]) -> bool:
+  1132	    text = _string(value).upper()
+  1133	    return any(candidate in text for candidate in candidates)
+  1134	
+  1135	
+  1136	def _first_nonempty(*values: object) -> str:
+  1137	    for value in values:
+  1138	        text = _string(value)
+  1139	        if text:
+  1140	            return text
+  1141	    return ""
+  1142	
+  1143	
+  1144	def _string(value: object) -> str:
+  1145	    if value is None:
+  1146	        return ""
+  1147	    if isinstance(value, float) and pd.isna(value):
+  1148	        return ""
+  1149	    return str(value)
+  1150	
+  1151	
+  1152	def _escape_markdown(value: str) -> str:
+  1153	    return value.replace("|", "/").replace("\n", " ")

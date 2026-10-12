@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "primary": 262,
+  "complete_pairs": 262,
+  "portfolio_blocked_included": 112,
+  "s0_unique": 262,
+  "s1_unique": 262,
+  "one_to_one_join": true,
+  "cutoff": "signal not fill",
+  "gross": 155.00423700000204,
+  "net": -1152.29539465337,
+  "snapshot_feed_rows": 224906,
+  "zone_reconstruction": false
+}

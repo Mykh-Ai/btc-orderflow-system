@@ -1,0 +1,31 @@
+$ git log --oneline -n 30
+652fb5b Merge all Peak Ai research into isolated consolidated branch
+c680216 Index complete Peak Ai research and corrected SHORT evidence
+c5176d5 Record corrected both-sign SHORT scope and negative replay evidence
+2f19574 Record negative delta H1 research campaign evidence
+fbcdce2 Add causal H1/H4 research adapter for delta-triggered reclaim
+064247c Consolidate 39A histories into canonical Market Monitor base
+1c18766 Record 39a monitor alignment audit and current handoff
+1169a94 Add persistent v39a market monitor snapshots
+22636d5 Reject target zones on the wrong side of entry
+519acc0 Document v39a monitor runtime promotion
+0a67575 Replace next task with 39A review gate
+a4e43d1 Update current project state for 39A
+2b8b139 Add 39A active docs references
+b93a74f Mark 39A as current agent source of truth
+1cf14c6 Mark 39A as current source of truth in README
+91896c5 Create project log for 39A audit
+e89af8c Record 39A master research to monitor alignment audit
+8dff72d Expand 39A known gaps document
+8db6e5f Add 39A known gaps document
+c334db1 Document market monitor event lifecycle terminology
+00de5d2 Record 39A research to code decision matrix
+881cd7c Record 39A control case ledger
+f87cf33 Align market monitor docs after 38S QC review
+434f10f Record full feed discovery quality control audit
+c06ad73 Record full feed live-like discovery scan
+3c35a71 Record sequence-linked candidate evidence pack
+31ba79f Add stage gate replay and fix sequence stop anchoring
+a39077b Record exact-anchor qualified H1 replay audit
+4601d11 Document qualified H1 sweep reclaim contract
+2917603 Add wider research window classification
