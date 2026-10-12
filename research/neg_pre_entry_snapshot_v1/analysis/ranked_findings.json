@@ -1,0 +1,17 @@
+{
+  "ranking": "post-hoc gross rank-biserial; correlated copies suppressed at abs Spearman >= .9 for display only",
+  "top": [
+    "s1_trailing_60m_delta",
+    "s1_trailing_60m_imbalance",
+    "interval_delta",
+    "interval_signed_imbalance",
+    "AggTrades_change"
+  ],
+  "little": [
+    "s1_trailing_15m_imbalance",
+    "s1_Volume",
+    "flow_delta_1m",
+    "maximum_upward_excursion_bps",
+    "downward_progress_15m_bps"
+  ]
+}

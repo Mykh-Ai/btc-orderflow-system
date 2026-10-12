@@ -1,0 +1,754 @@
+$ rg -n significance_score|distance_from_close_pct|price_lower|price_upper|touch_count|sweep_count|delta_zscore|volume_zscore|post_sweep|oi_change|reaction_verdict|selected_zones|liquidity_map|market_state market_monitor
+market_monitor/run_significant_zone_selector.py:51:        f"selected_zones={result.selected_zones_path} "
+market_monitor/score_instrumentation.py:38:    price_lower,
+market_monitor/score_instrumentation.py:39:    price_upper,
+market_monitor/score_instrumentation.py:55:    lower = float(price_lower)
+market_monitor/score_instrumentation.py:56:    upper = float(price_upper)
+market_monitor/trader_snapshot_builder.py:43:    "price_lower",
+market_monitor/trader_snapshot_builder.py:44:    "price_upper",
+market_monitor/trader_snapshot_builder.py:48:    "significance_score",
+market_monitor/trader_snapshot_builder.py:73:    selected_zones_path: str | Path,
+market_monitor/trader_snapshot_builder.py:83:    selected_path = Path(selected_zones_path)
+market_monitor/trader_snapshot_builder.py:88:        raise TraderSnapshotBuilderError(f"selected_zones.csv not found: {selected_path}")
+market_monitor/trader_snapshot_builder.py:96:    _validate_selected_zones(selected, selected_path)
+market_monitor/trader_snapshot_builder.py:128:        "input_selected_zones": str(selected_path),
+market_monitor/trader_snapshot_builder.py:156:def _validate_selected_zones(frame: pd.DataFrame, path: Path) -> None:
+market_monitor/trader_snapshot_builder.py:168:        raise TraderSnapshotBuilderError("selected_zones.csv has no visible_on_snapshot=true rows")
+market_monitor/trader_snapshot_builder.py:169:    for column in ["price_lower", "price_upper", "representative_price", "significance_score"]:
+market_monitor/trader_snapshot_builder.py:171:    if visible[["price_lower", "price_upper", "representative_price"]].isna().any().any():
+market_monitor/trader_snapshot_builder.py:225:        "above_price": nearest_above or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:226:        "below_price": nearest_below or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:235:        "nearest_buy_side_zone": nearest_buy or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:236:        "nearest_sell_side_zone": nearest_sell or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:237:        "nearest_above_price_zone": nearest_above or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:238:        "nearest_below_price_zone": nearest_below or "not_available_from_selected_zones",
+market_monitor/trader_snapshot_builder.py:254:    above = frame[frame["price_lower"].astype(float) > current_price]
+market_monitor/trader_snapshot_builder.py:257:    row = above.sort_values(["price_lower", "rank"], kind="mergesort").iloc[0]
+market_monitor/trader_snapshot_builder.py:262:    below = frame[frame["price_upper"].astype(float) < current_price]
+market_monitor/trader_snapshot_builder.py:265:    row = below.sort_values(["price_upper", "rank"], ascending=[False, True], kind="mergesort").iloc[0]
+market_monitor/trader_snapshot_builder.py:276:        "price_lower": round(float(row["price_lower"]), 4),
+market_monitor/trader_snapshot_builder.py:277:        "price_upper": round(float(row["price_upper"]), 4),
+market_monitor/trader_snapshot_builder.py:327:            "<p>Research monitor snapshot, not trading advice. Hidden selector rows are retained in selected_zones.csv but are not drawn on the main chart.</p>",
+market_monitor/trader_snapshot_builder.py:348:        y1 = scale(float(zone.price_upper))
+market_monitor/trader_snapshot_builder.py:349:        y2 = scale(float(zone.price_lower))
+market_monitor/trader_snapshot_builder.py:387:        y_top = scale(float(row.price_upper))
+market_monitor/trader_snapshot_builder.py:388:        y_bottom = scale(float(row.price_lower))
+market_monitor/trader_snapshot_builder.py:401:        y = scale(float(row.price_upper)) + 4
+market_monitor/trader_snapshot_builder.py:465:        price_range = f"{float(row.price_lower):.1f}-{float(row.price_upper):.1f}"
+market_monitor/trader_snapshot_builder.py:470:            f"{float(row.significance_score):.1f} | {reason}"
+market_monitor/trader_snapshot_builder.py:482:    lows = [float(price_path["Low"].min()), *zones["price_lower"].astype(float).tolist()]
+market_monitor/trader_snapshot_builder.py:483:    highs = [float(price_path["High"].max()), *zones["price_upper"].astype(float).tolist()]
+market_monitor/run_research_summary.py:8:from market_monitor.research_summary import build_post_sweep_research_summary
+market_monitor/run_research_summary.py:29:        result = build_post_sweep_research_summary(
+market_monitor/setup_builder.py:31:    "market_state",
+market_monitor/setup_builder.py:105:    selected_zones_path: str | Path,
+market_monitor/setup_builder.py:111:    zones_path = Path(selected_zones_path)
+market_monitor/setup_builder.py:207:    market_state = str(state.get("market_state", ""))
+market_monitor/setup_builder.py:211:    resistance_upper = _float_value(state.get("active_resistance_price_upper"))
+market_monitor/setup_builder.py:214:    if market_state not in SELLER_DOMINANT_STATES and dominant_side != "SELLER":
+market_monitor/setup_builder.py:225:    if market_state == "FAILED_BREAKOUT_SELLER_RECLAIM":
+market_monitor/setup_builder.py:251:    resistance_lower = _float_value(state.get("active_resistance_price_lower"))
+market_monitor/setup_builder.py:252:    resistance_upper = _float_value(state.get("active_resistance_price_upper"))
+market_monitor/setup_builder.py:262:    status = "TRIGGERED" if str(state.get("market_state", "")) == "FAILED_BREAKOUT_SELLER_RECLAIM" else "ARMED"
+market_monitor/setup_builder.py:287:    support_lower = _float_value(state.get("active_support_price_lower"))
+market_monitor/setup_builder.py:288:    support_upper = _float_value(state.get("active_support_price_upper"))
+market_monitor/setup_builder.py:324:    resistance_lower = _float_value(state.get("active_resistance_price_lower"))
+market_monitor/setup_builder.py:325:    resistance_upper = _float_value(state.get("active_resistance_price_upper"))
+market_monitor/setup_builder.py:388:        "market_state": _cell(state.get("market_state")),
+market_monitor/setup_builder.py:543:    frame["_lower"] = pd.to_numeric(frame.get("price_lower"), errors="coerce")
+market_monitor/setup_builder.py:544:    frame["_upper"] = pd.to_numeric(frame.get("price_upper"), errors="coerce")
+market_monitor/setup_builder.py:589:        f"market_state={_cell(state.get('market_state'))}",
+market_monitor/setup_builder.py:630:        "selected_zones_path": str(zones_path),
+market_monitor/research_summary.py:37:    "zone_price_lower",
+market_monitor/research_summary.py:38:    "zone_price_upper",
+market_monitor/research_summary.py:66:    "post_oi_change",
+market_monitor/research_summary.py:67:    "post_max_volume_zscore",
+market_monitor/research_summary.py:68:    "post_max_abs_delta_zscore",
+market_monitor/research_summary.py:87:    "avg_post_oi_change",
+market_monitor/research_summary.py:88:    "avg_post_max_volume_zscore",
+market_monitor/research_summary.py:89:    "avg_post_max_abs_delta_zscore",
+market_monitor/research_summary.py:115:def build_post_sweep_research_summary(
+market_monitor/research_summary.py:133:    row_path = output_path / "post_sweep_research_summary.csv"
+market_monitor/research_summary.py:134:    group_path = output_path / "post_sweep_group_summary.csv"
+market_monitor/research_summary.py:135:    markdown_path = output_path / "post_sweep_research_summary.md"
+market_monitor/research_summary.py:172:    observation_path = path / "post_sweep_observation.csv"
+market_monitor/research_summary.py:177:        warnings.append(f"Missing post_sweep_observation.csv in {path}")
+market_monitor/research_summary.py:396:        "avg_post_oi_change": _mean(group, "post_oi_change"),
+market_monitor/research_summary.py:397:        "avg_post_max_volume_zscore": _mean(group, "post_max_volume_zscore"),
+market_monitor/research_summary.py:398:        "avg_post_max_abs_delta_zscore": _mean(group, "post_max_abs_delta_zscore"),
+market_monitor/research_summary.py:473:        f"- average post_oi_change: {_fmt(_mean(observations, 'post_oi_change'))}",
+market_monitor/research_summary.py:514:        "zone_price_lower",
+market_monitor/research_summary.py:515:        "zone_price_upper",
+market_monitor/research_summary.py:535:        "post_oi_change",
+market_monitor/research_summary.py:536:        "post_max_volume_zscore",
+market_monitor/research_summary.py:537:        "post_max_abs_delta_zscore",
+market_monitor/run_batch_research.py:61:        f"unresolved_sweeps={result.unresolved_sweep_count} "
+market_monitor/run_batch_research.py:62:        f"post_sweep_observations={result.post_sweep_observation_count} "
+market_monitor/outputs.py:20:from market_monitor.liquidity_zones import LIQUIDITY_MAP_COLUMNS, build_liquidity_map
+market_monitor/outputs.py:25:from market_monitor.post_sweep_observation import (
+market_monitor/outputs.py:27:    build_post_sweep_observations,
+market_monitor/outputs.py:59:    "volume_zscore",
+market_monitor/outputs.py:60:    "delta_zscore",
+market_monitor/outputs.py:62:    "oi_change",
+market_monitor/outputs.py:72:    "price_lower",
+market_monitor/outputs.py:73:    "price_upper",
+market_monitor/outputs.py:83:    "market_state_timeline.csv": MARKET_STATE_TIMELINE_COLUMNS,
+market_monitor/outputs.py:84:    "liquidity_map.csv": LIQUIDITY_MAP_COLUMNS,
+market_monitor/outputs.py:91:    "post_sweep_observation.csv": POST_SWEEP_OBSERVATION_COLUMNS,
+market_monitor/outputs.py:112:    liquidity_map = build_liquidity_map(structure_levels, latest_close)
+market_monitor/outputs.py:116:        liquidity_map=liquidity_map,
+market_monitor/outputs.py:124:    forward_liquidity_map = forward_liquidity_from_registry(liquidity_zone_registry, latest_close)
+market_monitor/outputs.py:132:    post_sweep_observation = build_post_sweep_observations(
+market_monitor/outputs.py:138:        observations=post_sweep_observation,
+market_monitor/outputs.py:141:    market_state_timeline = build_market_state_timeline(feed)
+market_monitor/outputs.py:145:        "market_state_timeline.csv": market_state_timeline,
+market_monitor/outputs.py:146:        "liquidity_map.csv": forward_liquidity_map,
+market_monitor/outputs.py:153:        "post_sweep_observation.csv": post_sweep_observation,
+market_monitor/outputs.py:169:        liquidity_map=forward_liquidity_map,
+market_monitor/outputs.py:179:        observation_stats=observation_stats(post_sweep_observation),
+market_monitor/outputs.py:193:    volume_zscore = _rolling_zscore(total_qty)
+market_monitor/outputs.py:194:    delta_zscore = _rolling_zscore(delta)
+market_monitor/outputs.py:203:            "volume_zscore": volume_zscore,
+market_monitor/outputs.py:204:            "delta_zscore": delta_zscore,
+market_monitor/outputs.py:206:            "oi_change": frame["OpenInterest"].diff().fillna(0).astype(float),
+market_monitor/outputs.py:214:def build_market_state_timeline(feed: pd.DataFrame) -> pd.DataFrame:
+market_monitor/run_setup_builder.py:15:    parser.add_argument("--selected-zones", required=True, help="Path to selected_zones.csv.")
+market_monitor/run_setup_builder.py:27:        selected_zones_path=Path(args.selected_zones),
+market_monitor/zone_registry.py:26:    "price_lower",
+market_monitor/zone_registry.py:27:    "price_upper",
+market_monitor/zone_registry.py:54:    "resweep_count",
+market_monitor/zone_registry.py:56:    "rejection_without_sweep_count",
+market_monitor/zone_registry.py:65:    "htf_sweep_count",
+market_monitor/zone_registry.py:75:    "touch_count",
+market_monitor/zone_registry.py:149:    liquidity_map: pd.DataFrame,
+market_monitor/zone_registry.py:154:    current_zones = _current_zones_to_registry(liquidity_map, previous)
+market_monitor/zone_registry.py:201:            ((active["side"] == "BUY_SIDE") & (active["price_lower"].astype(float) > close))
+market_monitor/zone_registry.py:202:            | ((active["side"] == "SELL_SIDE") & (active["price_upper"].astype(float) < close))
+market_monitor/zone_registry.py:213:                "price_lower": float(row["price_lower"]),
+market_monitor/zone_registry.py:214:                "price_upper": float(row["price_upper"]),
+market_monitor/zone_registry.py:241:                "resweep_count": int(float(row["resweep_count"])),
+market_monitor/zone_registry.py:243:                "rejection_without_sweep_count": int(float(row["rejection_without_sweep_count"])),
+market_monitor/zone_registry.py:252:                "htf_sweep_count": int(float(row["htf_sweep_count"])),
+market_monitor/zone_registry.py:260:                "touch_count": int(float(row["touch_count"])),
+market_monitor/zone_registry.py:261:                "sweep_count": 0,
+market_monitor/zone_registry.py:262:                "distance_from_close_pct": _distance_from_close(
+market_monitor/zone_registry.py:274:    liquidity_map: pd.DataFrame, previous: pd.DataFrame
+market_monitor/zone_registry.py:278:    for _, zone in liquidity_map.iterrows():
+market_monitor/zone_registry.py:290:                "price_lower": float(zone["price_lower"]),
+market_monitor/zone_registry.py:291:                "price_upper": float(zone["price_upper"]),
+market_monitor/zone_registry.py:314:                "zone_outer_lower": float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"]),
+market_monitor/zone_registry.py:315:                "zone_outer_upper": float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"]),
+market_monitor/zone_registry.py:316:                "zone_core_lower": float(zone.get("zone_core_lower", zone["price_lower"]) or zone["price_lower"]),
+market_monitor/zone_registry.py:317:                "zone_core_upper": float(zone.get("zone_core_upper", zone["price_upper"]) or zone["price_upper"]),
+market_monitor/zone_registry.py:321:                "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+market_monitor/zone_registry.py:323:                "rejection_without_sweep_count": int(float(zone.get("rejection_without_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:339:                        htf_sweep_count=int(float(zone.get("htf_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:348:                "htf_sweep_count": int(float(zone.get("htf_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:361:                "touch_count": 0,
+market_monitor/zone_registry.py:385:            ["price_lower", "first_seen_at", "zone_id"], kind="mergesort"
+market_monitor/zone_registry.py:393:            current_upper = max(float(item["price_upper"]) for item in cluster)
+market_monitor/zone_registry.py:395:                float(row["price_lower"]) <= current_upper + tolerance
+market_monitor/zone_registry.py:424:    lower = min(float(row["price_lower"]) for row in cluster)
+market_monitor/zone_registry.py:425:    upper = max(float(row["price_upper"]) for row in cluster)
+market_monitor/zone_registry.py:438:        price_lower=lower,
+market_monitor/zone_registry.py:439:        price_upper=upper,
+market_monitor/zone_registry.py:452:            "price_lower": lower,
+market_monitor/zone_registry.py:453:            "price_upper": upper,
+market_monitor/zone_registry.py:473:            "zone_outer_lower": min(float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"]) for row in cluster),
+market_monitor/zone_registry.py:474:            "zone_outer_upper": max(float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"]) for row in cluster),
+market_monitor/zone_registry.py:475:            "zone_core_lower": min(float(row.get("zone_core_lower", row["price_lower"]) or row["price_lower"]) for row in cluster),
+market_monitor/zone_registry.py:476:            "zone_core_upper": max(float(row.get("zone_core_upper", row["price_upper"]) or row["price_upper"]) for row in cluster),
+market_monitor/zone_registry.py:480:            "resweep_count": max(int(float(row.get("resweep_count", 0) or 0)) for row in cluster),
+market_monitor/zone_registry.py:482:            "rejection_without_sweep_count": max(int(float(row.get("rejection_without_sweep_count", 0) or 0)) for row in cluster),
+market_monitor/zone_registry.py:491:            "htf_sweep_count": max(int(float(row.get("htf_sweep_count", 0) or 0)) for row in cluster),
+market_monitor/zone_registry.py:503:            "touch_count": sum(int(float(row["touch_count"])) for row in cluster),
+market_monitor/zone_registry.py:528:    lower = min(float(row["price_lower"]) for row in rows)
+market_monitor/zone_registry.py:529:    upper = max(float(row["price_upper"]) for row in rows)
+market_monitor/zone_registry.py:566:            row["touch_count"] = int(float(row["touch_count"])) + 1
+market_monitor/zone_registry.py:585:    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+market_monitor/zone_registry.py:586:    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+market_monitor/zone_registry.py:624:            "zone_outer_lower": float(row.get("zone_outer_lower", row.get("price_lower", 0)) or 0),
+market_monitor/zone_registry.py:625:            "zone_outer_upper": float(row.get("zone_outer_upper", row.get("price_upper", 0)) or 0),
+market_monitor/zone_registry.py:626:            "zone_core_lower": float(row.get("zone_core_lower", row.get("price_lower", 0)) or 0),
+market_monitor/zone_registry.py:627:            "zone_core_upper": float(row.get("zone_core_upper", row.get("price_upper", 0)) or 0),
+market_monitor/zone_registry.py:631:            "resweep_count": int(float(row.get("resweep_count", 0) or 0)),
+market_monitor/zone_registry.py:633:            "rejection_without_sweep_count": int(float(row.get("rejection_without_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:641:            "htf_sweep_count": int(float(row.get("htf_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:649:    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+market_monitor/zone_registry.py:650:    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+market_monitor/zone_registry.py:651:    core_lower = float(row.get("zone_core_lower", row["price_lower"]) or row["price_lower"])
+market_monitor/zone_registry.py:652:    core_upper = float(row.get("zone_core_upper", row["price_upper"]) or row["price_upper"])
+market_monitor/zone_registry.py:673:    resweep_count = max(0, len(sweep_timestamps) - 1)
+market_monitor/zone_registry.py:684:    rejection_without_sweep_count = _rejection_without_sweep_count(
+market_monitor/zone_registry.py:707:    htf_sweep_count = htf_metrics["htf_sweep_count"]
+market_monitor/zone_registry.py:739:    elif has_htf and htf_sweep_count > 0:
+market_monitor/zone_registry.py:783:    elif current_status == "TOUCHED" or int(float(row.get("touch_count", 0) or 0)) > 0 or bars_inside > 0:
+market_monitor/zone_registry.py:793:        rejection_without_sweep_count=rejection_without_sweep_count,
+market_monitor/zone_registry.py:795:        resweep_count=resweep_count,
+market_monitor/zone_registry.py:816:        "resweep_count": resweep_count,
+market_monitor/zone_registry.py:818:        "rejection_without_sweep_count": rejection_without_sweep_count,
+market_monitor/zone_registry.py:827:            htf_sweep_count=htf_sweep_count,
+market_monitor/zone_registry.py:838:        "htf_sweep_count": htf_sweep_count,
+market_monitor/zone_registry.py:846:            htf_sweep_count=htf_sweep_count,
+market_monitor/zone_registry.py:929:    previous_sweeps = int(float(row.get("htf_sweep_count", 0) or 0))
+market_monitor/zone_registry.py:935:            "htf_sweep_count": previous_sweeps,
+market_monitor/zone_registry.py:963:            "htf_sweep_count": previous_sweeps,
+market_monitor/zone_registry.py:975:            "htf_sweep_count": previous_sweeps,
+market_monitor/zone_registry.py:992:        "htf_sweep_count": max(previous_sweeps, htf_sweeps),
+market_monitor/zone_registry.py:1069:def _rejection_without_sweep_count(
+market_monitor/zone_registry.py:1128:    rejection_without_sweep_count: int,
+market_monitor/zone_registry.py:1130:    resweep_count: int,
+market_monitor/zone_registry.py:1145:    if rejection_without_sweep_count >= 1 or clean_reaction_at:
+market_monitor/zone_registry.py:1147:    if resweep_count >= 1:
+market_monitor/zone_registry.py:1158:    lower = float(row.get("zone_outer_lower", row["price_lower"]) or row["price_lower"])
+market_monitor/zone_registry.py:1159:    upper = float(row.get("zone_outer_upper", row["price_upper"]) or row["price_upper"])
+market_monitor/zone_registry.py:1264:        "price_lower",
+market_monitor/zone_registry.py:1265:        "price_upper",
+market_monitor/zone_registry.py:1271:        "touch_count",
+market_monitor/zone_registry.py:1282:        "resweep_count",
+market_monitor/zone_registry.py:1284:        "rejection_without_sweep_count",
+market_monitor/zone_registry.py:1286:        "htf_sweep_count",
+market_monitor/zone_registry.py:1303:        ("zone_outer_lower", "price_lower"),
+market_monitor/zone_registry.py:1304:        ("zone_outer_upper", "price_upper"),
+market_monitor/zone_registry.py:1305:        ("zone_core_lower", "price_lower"),
+market_monitor/zone_registry.py:1306:        ("zone_core_upper", "price_upper"),
+market_monitor/zone_registry.py:1357:                    float(row["price_lower"]),
+market_monitor/zone_registry.py:1358:                    float(row["price_upper"]),
+market_monitor/zone_registry.py:1449:            min(float(row["price_lower"]) for row in rows),
+market_monitor/zone_registry.py:1450:            max(float(row["price_upper"]) for row in rows),
+market_monitor/zone_registry.py:1452:                min(float(row["price_lower"]) for row in rows)
+market_monitor/zone_registry.py:1453:                + max(float(row["price_upper"]) for row in rows)
+market_monitor/zone_registry.py:1557:            float(row.get("price_lower", 0) or 0),
+market_monitor/zone_registry.py:1558:            float(row.get("price_upper", 0) or 0),
+market_monitor/zone_registry.py:1564:def _zone_width_pct(price_lower: float, price_upper: float, price_mid: float) -> float:
+market_monitor/zone_registry.py:1567:    return (price_upper - price_lower) / price_mid * 100.0
+market_monitor/zone_registry.py:1745:    resweep_count = int(float(row.get("resweep_count", 0) or 0))
+market_monitor/zone_registry.py:1748:    if resweep_count > 0 or failed_acceptance_count > 0:
+market_monitor/zone_registry.py:1863:    htf_sweep_count: int,
+market_monitor/zone_registry.py:1876:    if htf_sweep_count > 0:
+market_monitor/zone_registry.py:1885:        htf_sweep_count=int(float(row.get("htf_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:1901:    htf_sweep_count: int,
+market_monitor/zone_registry.py:1922:        htf_sweep_count=htf_sweep_count,
+market_monitor/zone_registry.py:1979:        htf_sweep_count=int(float(row.get("htf_sweep_count", 0) or 0)),
+market_monitor/zone_registry.py:1989:    htf_sweep_count: int,
+market_monitor/zone_registry.py:1994:    swept = bool(first_sweep_at) or htf_sweep_count > 0
+market_monitor/label_quality.py:202:    research_csv = path / "research_summary" / "post_sweep_research_summary.csv"
+market_monitor/label_quality.py:221:    observations_path = path / "post_sweep_observation.csv"
+market_monitor/label_quality.py:284:        "post_oi_change",
+market_monitor/label_quality.py:285:        "post_max_volume_zscore",
+market_monitor/label_quality.py:286:        "post_max_abs_delta_zscore",
+market_monitor/label_quality.py:304:        "post_oi_change",
+market_monitor/label_quality.py:305:        "post_max_volume_zscore",
+market_monitor/label_quality.py:306:        "post_max_abs_delta_zscore",
+market_monitor/label_quality.py:444:        "post_oi_change",
+market_monitor/label_quality.py:445:        "post_max_volume_zscore",
+market_monitor/label_quality.py:446:        "post_max_abs_delta_zscore",
+market_monitor/label_quality.py:868:        "post_oi_change",
+market_monitor/liquidity_zones.py:21:    "price_lower",
+market_monitor/liquidity_zones.py:22:    "price_upper",
+market_monitor/liquidity_zones.py:49:    "resweep_count",
+market_monitor/liquidity_zones.py:51:    "rejection_without_sweep_count",
+market_monitor/liquidity_zones.py:60:    "htf_sweep_count",
+market_monitor/liquidity_zones.py:68:    "touch_count",
+market_monitor/liquidity_zones.py:69:    "sweep_count",
+market_monitor/liquidity_zones.py:70:    "distance_from_close_pct",
+market_monitor/liquidity_zones.py:118:    touch_count: int
+market_monitor/liquidity_zones.py:128:def build_liquidity_map(levels: pd.DataFrame, latest_close: float | None) -> pd.DataFrame:
+market_monitor/liquidity_zones.py:171:            touch_count=int(level["touch_count"]),
+market_monitor/liquidity_zones.py:187:                "price_lower": price_mid - band,
+market_monitor/liquidity_zones.py:188:                "price_upper": price_mid + band,
+market_monitor/liquidity_zones.py:204:            key=lambda zone: (float(zone["price_lower"]), str(zone["created_at"])),
+market_monitor/liquidity_zones.py:211:            current_upper = max(float(item["price_upper"]) for item in cluster)
+market_monitor/liquidity_zones.py:213:                float(zone["price_lower"]) <= current_upper + merge_tolerance
+market_monitor/liquidity_zones.py:227:    lower = min(float(zone["price_lower"]) for zone in cluster)
+market_monitor/liquidity_zones.py:228:    upper = max(float(zone["price_upper"]) for zone in cluster)
+market_monitor/liquidity_zones.py:243:        "price_lower": lower,
+market_monitor/liquidity_zones.py:244:        "price_upper": upper,
+market_monitor/liquidity_zones.py:251:            touch_count=sum(evidence.touch_count for evidence in evidence_items),
+market_monitor/liquidity_zones.py:283:    lower = min(float(zone["price_lower"]) for zone in cluster)
+market_monitor/liquidity_zones.py:284:    upper = max(float(zone["price_upper"]) for zone in cluster)
+market_monitor/liquidity_zones.py:326:        float(zone["price_lower"]), float(zone["price_upper"]), float(zone["price_mid"])
+market_monitor/liquidity_zones.py:340:        price_lower=zone["price_lower"],
+market_monitor/liquidity_zones.py:341:        price_upper=zone["price_upper"],
+market_monitor/liquidity_zones.py:353:        "price_lower": zone["price_lower"],
+market_monitor/liquidity_zones.py:354:        "price_upper": zone["price_upper"],
+market_monitor/liquidity_zones.py:374:        "zone_outer_lower": zone["price_lower"],
+market_monitor/liquidity_zones.py:375:        "zone_outer_upper": zone["price_upper"],
+market_monitor/liquidity_zones.py:376:        "zone_core_lower": zone["price_lower"],
+market_monitor/liquidity_zones.py:377:        "zone_core_upper": zone["price_upper"],
+market_monitor/liquidity_zones.py:381:        "resweep_count": 0,
+market_monitor/liquidity_zones.py:383:        "rejection_without_sweep_count": 0,
+market_monitor/liquidity_zones.py:396:        "htf_sweep_count": 0,
+market_monitor/liquidity_zones.py:404:            htf_sweep_count=0,
+market_monitor/liquidity_zones.py:412:        "touch_count": evidence.touch_count,
+market_monitor/liquidity_zones.py:413:        "sweep_count": 0,
+market_monitor/liquidity_zones.py:414:        "distance_from_close_pct": _distance_from_close(float(zone["price_mid"]), latest_close),
+market_monitor/liquidity_zones.py:424:        price_lower=float(row["price_lower"]),
+market_monitor/liquidity_zones.py:425:        price_upper=float(row["price_upper"]),
+market_monitor/liquidity_zones.py:485:    htf_sweep_count: int,
+market_monitor/liquidity_zones.py:489:    swept = bool(first_sweep_at) or htf_sweep_count > 0
+market_monitor/liquidity_zones.py:531:    touch_bonus = min(evidence.touch_count, 3)
+market_monitor/liquidity_zones.py:627:def _zone_width_pct(price_lower: float, price_upper: float, price_mid: float) -> float:
+market_monitor/liquidity_zones.py:630:    return (price_upper - price_lower) / price_mid * 100.0
+market_monitor/liquidity_zones.py:644:    price_lower: float,
+market_monitor/liquidity_zones.py:645:    price_upper: float,
+market_monitor/liquidity_zones.py:652:    if price_lower <= close <= price_upper:
+market_monitor/liquidity_zones.py:655:    if side == "BUY_SIDE" and close > price_upper:
+market_monitor/liquidity_zones.py:657:    if side == "SELL_SIDE" and close < price_lower:
+market_monitor/snapshot_builder_v39a.py:90:    market_state = _market_state_summary(base_snapshot, windows)
+market_monitor/snapshot_builder_v39a.py:97:        market_state=market_state,
+market_monitor/snapshot_builder_v39a.py:121:        "market_state": market_state,
+market_monitor/snapshot_builder_v39a.py:306:def _market_state_summary(base_snapshot: Mapping[str, Any] | None, windows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+market_monitor/snapshot_builder_v39a.py:311:        market_state = base_snapshot.get("market_state")
+market_monitor/snapshot_builder_v39a.py:312:        if isinstance(market_state, Mapping) and market_state:
+market_monitor/snapshot_builder_v39a.py:313:            return {"source": "base_monitor_snapshot_v1", "value": _json_safe(market_state)}
+market_monitor/snapshot_builder_v39a.py:336:def _advance_state(*, previous_state, state_load, cutoff, structure, zones, market_state, quality):
+market_monitor/snapshot_builder_v39a.py:375:        "market_state": market_state,
+market_monitor/run_trader_snapshot.py:15:        description="Render a static research snapshot from SHI_RESET_36B selected_zones.csv."
+market_monitor/run_trader_snapshot.py:19:    parser.add_argument("--selected-zones", required=True, help="Path to SHI_RESET_36B selected_zones.csv.")
+market_monitor/run_trader_snapshot.py:33:            selected_zones_path=Path(args.selected_zones),
+market_monitor/pattern_structures.py:16:    "price_lower",
+market_monitor/pattern_structures.py:17:    "price_upper",
+market_monitor/pattern_structures.py:94:        "price_lower": price_mid - band,
+market_monitor/pattern_structures.py:95:        "price_upper": price_mid + band,
+market_monitor/label_taxonomy.py:53:    "zone_price_lower",
+market_monitor/label_taxonomy.py:54:    "zone_price_upper",
+market_monitor/label_taxonomy.py:109:    observations = _read_csv(run_dir / "post_sweep_observation.csv")
+market_monitor/label_taxonomy.py:236:        return "missing_post_sweep_observation_row"
+market_monitor/label_taxonomy.py:249:        "zone_price_lower",
+market_monitor/label_taxonomy.py:250:        "zone_price_upper",
+market_monitor/label_taxonomy.py:266:    lower = _float(primary.get("zone_price_lower"))
+market_monitor/label_taxonomy.py:267:    upper = _float(primary.get("zone_price_upper"))
+market_monitor/label_taxonomy.py:272:        return "zone_price_upper_not_above_lower"
+market_monitor/label_taxonomy.py:326:    lower = _float(primary.get("zone_price_lower"))
+market_monitor/label_taxonomy.py:327:    upper = _float(primary.get("zone_price_upper"))
+market_monitor/label_taxonomy.py:355:    lower = _float(primary.get("zone_price_lower"))
+market_monitor/label_taxonomy.py:356:    upper = _float(primary.get("zone_price_upper"))
+market_monitor/label_taxonomy.py:393:        "zone_price_lower": _value(primary, group, "zone_price_lower", group_key="min_zone_price_lower"),
+market_monitor/label_taxonomy.py:394:        "zone_price_upper": _value(primary, group, "zone_price_upper", group_key="max_zone_price_upper"),
+market_monitor/label_taxonomy.py:562:        "zone_price_lower",
+market_monitor/label_taxonomy.py:563:        "zone_price_upper",
+market_monitor/wider_research_window.py:46:    "market_state",
+market_monitor/wider_research_window.py:133:    selected_zones_path: str | Path,
+market_monitor/wider_research_window.py:144:    zones_path = Path(selected_zones_path)
+market_monitor/wider_research_window.py:194:        "selected_zones_path": str(zones_path),
+market_monitor/wider_research_window.py:258:                "market_state": _cell(enriched.get("market_state")),
+market_monitor/wider_research_window.py:685:        return {"stop": stop, "type": "original_invalidation_stop", "context": "selected_zones_unavailable"}
+market_monitor/wider_research_window.py:691:    frame["_lower"] = pd.to_numeric(frame.get("price_lower"), errors="coerce")
+market_monitor/wider_research_window.py:692:    frame["_upper"] = pd.to_numeric(frame.get("price_upper"), errors="coerce")
+market_monitor/market_structure_state.py:26:    "price_lower",
+market_monitor/market_structure_state.py:27:    "price_upper",
+market_monitor/market_structure_state.py:38:    "touch_count",
+market_monitor/market_structure_state.py:52:    "price_lower",
+market_monitor/market_structure_state.py:53:    "price_upper",
+market_monitor/market_structure_state.py:64:    "market_state",
+market_monitor/market_structure_state.py:67:    "active_support_price_lower",
+market_monitor/market_structure_state.py:68:    "active_support_price_upper",
+market_monitor/market_structure_state.py:70:    "active_resistance_price_lower",
+market_monitor/market_structure_state.py:71:    "active_resistance_price_upper",
+market_monitor/market_structure_state.py:144:        post_sweep=loaded["post_sweep_observation.csv"],
+market_monitor/market_structure_state.py:219:        "post_sweep_observation.csv",
+market_monitor/market_structure_state.py:309:        "price_lower",
+market_monitor/market_structure_state.py:310:        "price_upper",
+market_monitor/market_structure_state.py:313:        "touch_count",
+market_monitor/market_structure_state.py:321:    frame = frame[frame["price_upper"] > 0]
+market_monitor/market_structure_state.py:333:                ["price_lower", "price_upper", "zone_id"], kind="mergesort"
+market_monitor/market_structure_state.py:340:                current_upper = max(float(item["price_upper"]) for item in cluster)
+market_monitor/market_structure_state.py:341:                gap = float(row["price_lower"]) - current_upper
+market_monitor/market_structure_state.py:342:                tolerance = max(50.0, ((current_upper + float(row["price_lower"])) / 2.0) * merge_gap_bps / 10000.0)
+market_monitor/market_structure_state.py:359:    lower = min(float(row["price_lower"]) for row in cluster)
+market_monitor/market_structure_state.py:360:    upper = max(float(row["price_upper"]) for row in cluster)
+market_monitor/market_structure_state.py:364:    touch_count = sum(int(float(row.get("touch_count", 0) or 0)) for row in cluster)
+market_monitor/market_structure_state.py:366:    strength = min(100.0, confidence_score + min(active_days, 10) * 1.5 + min(touch_count, 8) * 2.0 + min(cross_count, 8) * 2.0)
+market_monitor/market_structure_state.py:383:        "price_lower": round(lower, 6),
+market_monitor/market_structure_state.py:384:        "price_upper": round(upper, 6),
+market_monitor/market_structure_state.py:395:        "touch_count": touch_count,
+market_monitor/market_structure_state.py:402:            f"timeframes={'|'.join(source_timeframes)}; touch_count={touch_count}; "
+market_monitor/market_structure_state.py:408:def _build_structure_events(post_sweep: pd.DataFrame, levels: pd.DataFrame) -> pd.DataFrame:
+market_monitor/market_structure_state.py:410:    if not post_sweep.empty:
+market_monitor/market_structure_state.py:411:        frame = post_sweep.copy()
+market_monitor/market_structure_state.py:413:            "zone_price_lower",
+market_monitor/market_structure_state.py:414:            "zone_price_upper",
+market_monitor/market_structure_state.py:443:                    "price_lower": float(row["zone_price_lower"]),
+market_monitor/market_structure_state.py:444:                    "price_upper": float(row["zone_price_upper"]),
+market_monitor/market_structure_state.py:452:                    "source": "post_sweep_observation",
+market_monitor/market_structure_state.py:483:        market_state, confidence, bias, candidate_strength, evidence = _classify_state(
+market_monitor/market_structure_state.py:489:        previous_states.append(market_state)
+market_monitor/market_structure_state.py:495:                "market_state": market_state,
+market_monitor/market_structure_state.py:498:                "active_support_price_lower": support.get("price_lower", ""),
+market_monitor/market_structure_state.py:499:                "active_support_price_upper": support.get("price_upper", ""),
+market_monitor/market_structure_state.py:501:                "active_resistance_price_lower": resistance.get("price_lower", ""),
+market_monitor/market_structure_state.py:502:                "active_resistance_price_upper": resistance.get("price_upper", ""),
+market_monitor/market_structure_state.py:537:    resistance_lower = _series_float(resistance, "price_lower")
+market_monitor/market_structure_state.py:538:    resistance_upper = _series_float(resistance, "price_upper")
+market_monitor/market_structure_state.py:539:    support_upper = _series_float(support, "price_upper")
+market_monitor/market_structure_state.py:688:    support_upper = _series_float(support, "price_upper")
+market_monitor/market_structure_state.py:690:    resistance_lower = _series_float(resistance, "price_lower")
+market_monitor/market_structure_state.py:768:    lower = float(row["price_lower"])
+market_monitor/market_structure_state.py:769:    upper = float(row["price_upper"])
+market_monitor/market_structure_state.py:784:        frame = frame[pd.to_numeric(frame["price_upper"], errors="coerce") <= price]
+market_monitor/market_structure_state.py:787:        return frame.sort_values("price_upper", ascending=False, kind="mergesort").iloc[0]
+market_monitor/market_structure_state.py:788:    ahead = frame[pd.to_numeric(frame["price_lower"], errors="coerce") >= price]
+market_monitor/market_structure_state.py:790:        return ahead.sort_values("price_lower", ascending=True, kind="mergesort").iloc[0]
+market_monitor/market_structure_state.py:791:    containing = frame[pd.to_numeric(frame["price_upper"], errors="coerce") >= price]
+market_monitor/market_structure_state.py:794:    return containing.sort_values("price_upper", ascending=True, kind="mergesort").iloc[0]
+market_monitor/market_structure_state.py:801:    frame["price_lower"] = pd.to_numeric(frame["price_lower"], errors="coerce")
+market_monitor/market_structure_state.py:802:    frame["price_upper"] = pd.to_numeric(frame["price_upper"], errors="coerce")
+market_monitor/market_structure_state.py:803:    frame = frame.dropna(subset=["price_lower", "price_upper"])
+market_monitor/market_structure_state.py:805:        below = frame[frame["price_upper"] <= price]
+market_monitor/market_structure_state.py:808:        return below.sort_values("price_upper", ascending=False, kind="mergesort").iloc[0]
+market_monitor/market_structure_state.py:809:    containing = frame[(frame["price_lower"] <= price) & (frame["price_upper"] >= price)]
+market_monitor/market_structure_state.py:812:    above = frame[frame["price_lower"] >= price]
+market_monitor/market_structure_state.py:815:    return above.sort_values("price_lower", ascending=True, kind="mergesort").iloc[0]
+market_monitor/market_structure_state.py:822:    frame["price_lower"] = pd.to_numeric(frame["price_lower"], errors="coerce")
+market_monitor/market_structure_state.py:823:    frame["price_upper"] = pd.to_numeric(frame["price_upper"], errors="coerce")
+market_monitor/market_structure_state.py:824:    covering = frame[(frame["price_lower"] <= price) & (frame["price_upper"] >= price)].copy()
+market_monitor/market_structure_state.py:826:        covering["_width"] = covering["price_upper"] - covering["price_lower"]
+market_monitor/market_structure_state.py:838:    oi_change = metrics["open_interest_change"]
+market_monitor/market_structure_state.py:839:    if price_change > 0 and oi_change < 0:
+market_monitor/market_structure_state.py:841:    if price_change < 0 and oi_change < 0:
+market_monitor/market_structure_state.py:843:    if price_change > 0 and oi_change > 0:
+market_monitor/market_structure_state.py:845:    if price_change < 0 and oi_change > 0:
+market_monitor/market_structure_state.py:872:        f"{row.get('price_lower')}-{row.get('price_upper')} "
+market_monitor/market_structure_state.py:979:                f"- Market state: {last['market_state']}",
+market_monitor/market_structure_state.py:981:                f"- Active support: {last['active_support_price_lower']} -> {last['active_support_price_upper']}",
+market_monitor/market_structure_state.py:982:                f"- Active resistance: {last['active_resistance_price_lower']} -> {last['active_resistance_price_upper']}",
+market_monitor/market_structure_state.py:993:        for state, count in states["market_state"].value_counts().sort_index().items():
+market_monitor/post_sweep_observation.py:26:    "zone_price_lower",
+market_monitor/post_sweep_observation.py:27:    "zone_price_upper",
+market_monitor/post_sweep_observation.py:57:    "post_oi_change",
+market_monitor/post_sweep_observation.py:58:    "post_max_volume_zscore",
+market_monitor/post_sweep_observation.py:59:    "post_max_abs_delta_zscore",
+market_monitor/post_sweep_observation.py:65:def build_post_sweep_observations(
+market_monitor/post_sweep_observation.py:132:    lower = float(evidence["price_lower"])
+market_monitor/post_sweep_observation.py:133:    upper = float(evidence["price_upper"])
+market_monitor/post_sweep_observation.py:171:        "zone_price_lower": lower,
+market_monitor/post_sweep_observation.py:172:        "zone_price_upper": upper,
+market_monitor/post_sweep_observation.py:209:            "reaction_verdict": "NOT_CLASSIFIED",
+market_monitor/post_sweep_observation.py:214:            "zone_price_lower": lower,
+market_monitor/post_sweep_observation.py:216:            "zone_price_upper": upper,
+market_monitor/post_sweep_observation.py:254:        max_volume_zscore = 0.0
+market_monitor/post_sweep_observation.py:255:        max_abs_delta_zscore = 0.0
+market_monitor/post_sweep_observation.py:257:        max_volume_zscore = float(matched_context["volume_zscore"].max())
+market_monitor/post_sweep_observation.py:258:        max_abs_delta_zscore = float(matched_context["delta_zscore"].abs().max())
+market_monitor/post_sweep_observation.py:280:        "post_oi_change": _post_oi_change(observed, event_feed),
+market_monitor/post_sweep_observation.py:281:        "post_max_volume_zscore": max_volume_zscore,
+market_monitor/post_sweep_observation.py:282:        "post_max_abs_delta_zscore": max_abs_delta_zscore,
+market_monitor/post_sweep_observation.py:307:        "post_oi_change": _post_oi_change(pd.DataFrame(), event_feed),
+market_monitor/post_sweep_observation.py:308:        "post_max_volume_zscore": 0.0,
+market_monitor/post_sweep_observation.py:309:        "post_max_abs_delta_zscore": 0.0,
+market_monitor/post_sweep_observation.py:329:def _post_oi_change(observed: pd.DataFrame, event_feed: pd.DataFrame) -> float:
+market_monitor/post_sweep_observation.py:344:        return pd.DataFrame(columns=["timestamp", "volume_zscore", "delta_zscore"])
+market_monitor/significant_zone_selector.py:14:SELECTED_ZONES_CSV = "selected_zones.csv"
+market_monitor/significant_zone_selector.py:39:    "price_lower",
+market_monitor/significant_zone_selector.py:40:    "price_upper",
+market_monitor/significant_zone_selector.py:48:    "significance_score",
+market_monitor/significant_zone_selector.py:61:    "liquidity_map.csv",
+market_monitor/significant_zone_selector.py:64:    "post_sweep_observation.csv",
+market_monitor/significant_zone_selector.py:66:    "market_state_timeline.csv",
+market_monitor/significant_zone_selector.py:87:    selected_zones_path: Path
+market_monitor/significant_zone_selector.py:118:    liquidity_map = loaded["liquidity_map.csv"]
+market_monitor/significant_zone_selector.py:119:    if liquidity_map.empty:
+market_monitor/significant_zone_selector.py:125:            ["visible_on_snapshot", "significance_score", "source_day", "zone_id"],
+market_monitor/significant_zone_selector.py:157:            "selected_zones_csv": str(selected_path),
+market_monitor/significant_zone_selector.py:175:        selected_zones_path=selected_path,
+market_monitor/significant_zone_selector.py:210:    liquidity_map = loaded["liquidity_map.csv"].copy()
+market_monitor/significant_zone_selector.py:212:    observations = loaded["post_sweep_observation.csv"]
+market_monitor/significant_zone_selector.py:217:    for _, zone in liquidity_map.iterrows():
+market_monitor/significant_zone_selector.py:225:        ["significance_score", "source_day", "zone_id"],
+market_monitor/significant_zone_selector.py:253:    distance = _float(zone.get("distance_from_close_pct"))
+market_monitor/significant_zone_selector.py:297:        "price_lower": zone.get("price_lower", ""),
+market_monitor/significant_zone_selector.py:298:        "price_upper": zone.get("price_upper", ""),
+market_monitor/significant_zone_selector.py:306:        "significance_score": round(float(raw_score), 3),
+market_monitor/significant_zone_selector.py:449:    candidate_score = _float(candidate.get("significance_score"))
+market_monitor/significant_zone_selector.py:469:        replacement_score = _float(replacement.get("significance_score"))
+market_monitor/significant_zone_selector.py:499:    lower = _float(row.get("price_lower"))
+market_monitor/significant_zone_selector.py:500:    upper = _float(row.get("price_upper"))
+market_monitor/significant_zone_selector.py:506:    return bool({"has_h4_source", "has_h1_source", "event_log", "post_sweep_observation"} & present)
+market_monitor/significant_zone_selector.py:523:        -_float(row.get("significance_score")),
+market_monitor/significant_zone_selector.py:577:    return bool({"event_log", "post_sweep_observation", "sweep_count", "touch_count"} & present)
+market_monitor/significant_zone_selector.py:730:    touch_count = max(_int(zone.get("touch_count")), _int(zone.get("m1_interaction_count")))
+market_monitor/significant_zone_selector.py:731:    if touch_count > 0:
+market_monitor/significant_zone_selector.py:732:        score["touch_or_retest_history"] = min(8, touch_count * 2)
+market_monitor/significant_zone_selector.py:733:        evidence.add("touch_count")
+market_monitor/significant_zone_selector.py:734:        reasons.append(f"touch/retest count={touch_count}")
+market_monitor/significant_zone_selector.py:735:    sweep_count = max(_int(zone.get("sweep_count")), _int(zone.get("resweep_count")), _int(zone.get("htf_sweep_count")))
+market_monitor/significant_zone_selector.py:736:    if sweep_count > 0:
+market_monitor/significant_zone_selector.py:737:        score["sweep_history"] = min(30, sweep_count * 10)
+market_monitor/significant_zone_selector.py:738:        evidence.add("sweep_count")
+market_monitor/significant_zone_selector.py:739:        reasons.append(f"sweep history={sweep_count}")
+market_monitor/significant_zone_selector.py:788:    max_volume = _column_abs_max(events, "volume_zscore")
+market_monitor/significant_zone_selector.py:791:        present.add("volume_zscore")
+market_monitor/significant_zone_selector.py:795:    max_delta = _column_abs_max(events, "delta_zscore")
+market_monitor/significant_zone_selector.py:798:        present.add("delta_zscore")
+market_monitor/significant_zone_selector.py:802:    if _column_abs_max(events, "oi_change") > 0:
+market_monitor/significant_zone_selector.py:804:        present.add("oi_change")
+market_monitor/significant_zone_selector.py:817:        missing.add("post_sweep_observation")
+market_monitor/significant_zone_selector.py:819:    present.add("post_sweep_observation")
+market_monitor/significant_zone_selector.py:820:    score["post_sweep_observation"] = min(10, len(observations) * 2)
+market_monitor/significant_zone_selector.py:822:    if _column_abs_max(observations, "post_max_volume_zscore") >= 2:
+market_monitor/significant_zone_selector.py:823:        score["post_sweep_volume_context"] = 5
+market_monitor/significant_zone_selector.py:824:        present.add("post_max_volume_zscore")
+market_monitor/significant_zone_selector.py:825:    if _column_abs_max(observations, "post_max_abs_delta_zscore") >= 2:
+market_monitor/significant_zone_selector.py:826:        score["post_sweep_delta_context"] = 5
+market_monitor/significant_zone_selector.py:827:        present.add("post_max_abs_delta_zscore")
+market_monitor/significant_zone_selector.py:828:    if _column_abs_max(observations, "post_oi_change") > 0:
+market_monitor/significant_zone_selector.py:829:        score["post_sweep_oi_context"] = 4
+market_monitor/significant_zone_selector.py:830:        present.add("post_oi_change")
+market_monitor/significant_zone_selector.py:831:    verdicts = [_reaction_verdict(row.get("evidence_json")) for _, row in observations.iterrows()]
+market_monitor/significant_zone_selector.py:833:        score["classified_post_sweep_reaction"] = 10
+market_monitor/significant_zone_selector.py:834:        present.add("reaction_verdict")
+market_monitor/significant_zone_selector.py:837:        missing.add("classified_post_sweep_reaction")
+market_monitor/significant_zone_selector.py:955:                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_selected"],
+market_monitor/significant_zone_selector.py:962:                ["rank", "source_day", "zone_id", "side", "bucket", "significance_score", "reason_hidden"],
+market_monitor/significant_zone_selector.py:1010:    max_volume = max(_column_abs_max(events, "volume_zscore"), _column_abs_max(observations, "post_max_volume_zscore"))
+market_monitor/significant_zone_selector.py:1011:    max_delta = max(_column_abs_max(events, "delta_zscore"), _column_abs_max(observations, "post_max_abs_delta_zscore"))
+market_monitor/significant_zone_selector.py:1012:    max_oi = max(_column_abs_max(events, "oi_change"), _column_abs_max(observations, "post_oi_change"))
+market_monitor/significant_zone_selector.py:1014:        f"events={event_count}; post_sweep_observations={observation_count}; "
+market_monitor/significant_zone_selector.py:1015:        f"max_volume_zscore={max_volume:.3f}; max_abs_delta_zscore={max_delta:.3f}; "
+market_monitor/significant_zone_selector.py:1016:        f"max_abs_oi_change={max_oi:.3f}; liquidations=not_available; vwap=not_available"
+market_monitor/significant_zone_selector.py:1057:def _reaction_verdict(raw_json: object) -> str:
+market_monitor/significant_zone_selector.py:1062:    return _string(data.get("reaction_verdict"))
+market_monitor/events.py:34:    "volume_zscore",
+market_monitor/events.py:35:    "delta_zscore",
+market_monitor/events.py:36:    "oi_change",
+market_monitor/events.py:65:    "min_zone_price_lower",
+market_monitor/events.py:66:    "max_zone_price_upper",
+market_monitor/events.py:69:    "max_volume_zscore",
+market_monitor/events.py:70:    "max_abs_delta_zscore",
+market_monitor/events.py:71:    "total_oi_change",
+market_monitor/events.py:377:        {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0},
+market_monitor/events.py:391:        "delta_zscore": float(ctx["delta_zscore"]),
+market_monitor/events.py:401:        "oi_change": float(ctx["oi_change"]),
+market_monitor/events.py:403:        "price_lower": float(zone["price_lower"]),
+market_monitor/events.py:405:        "price_upper": float(zone["price_upper"]),
+market_monitor/events.py:416:        "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+market_monitor/events.py:419:        "volume_zscore": float(ctx["volume_zscore"]),
+market_monitor/events.py:422:        "zone_outer_lower": float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"]),
+market_monitor/events.py:423:        "zone_outer_upper": float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"]),
+market_monitor/events.py:424:        "zone_core_lower": float(zone.get("zone_core_lower", zone["price_lower"]) or zone["price_lower"]),
+market_monitor/events.py:425:        "zone_core_upper": float(zone.get("zone_core_upper", zone["price_upper"]) or zone["price_upper"]),
+market_monitor/events.py:441:        "volume_zscore": ctx["volume_zscore"],
+market_monitor/events.py:442:        "delta_zscore": ctx["delta_zscore"],
+market_monitor/events.py:443:        "oi_change": ctx["oi_change"],
+market_monitor/events.py:480:        context={"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0},
+market_monitor/events.py:501:        "volume_zscore": 0,
+market_monitor/events.py:502:        "delta_zscore": 0,
+market_monitor/events.py:503:        "oi_change": 0,
+market_monitor/events.py:523:    ctx = context.get(event_ts, {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0})
+market_monitor/events.py:547:        "volume_zscore": ctx["volume_zscore"],
+market_monitor/events.py:548:        "delta_zscore": ctx["delta_zscore"],
+market_monitor/events.py:549:        "oi_change": ctx["oi_change"],
+market_monitor/events.py:576:        "delta_zscore": float(context["delta_zscore"]),
+market_monitor/events.py:578:        "oi_change": float(context["oi_change"]),
+market_monitor/events.py:580:        "price_lower": float(zone["price_lower"]),
+market_monitor/events.py:582:        "price_upper": float(zone["price_upper"]),
+market_monitor/events.py:596:        "htf_sweep_count": int(float(zone.get("htf_sweep_count", 0) or 0)),
+market_monitor/events.py:600:        "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+market_monitor/events.py:606:        "volume_zscore": float(context["volume_zscore"]),
+market_monitor/events.py:615:    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+market_monitor/events.py:616:    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+market_monitor/events.py:627:    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+market_monitor/events.py:628:    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+market_monitor/events.py:641:    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+market_monitor/events.py:642:    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+market_monitor/events.py:653:    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+market_monitor/events.py:654:    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+market_monitor/events.py:668:    if float(ctx["volume_zscore"]) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD:
+market_monitor/events.py:669:        evidence.append("volume_zscore")
+market_monitor/events.py:670:    if abs(float(ctx["delta_zscore"])) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD:
+market_monitor/events.py:671:        evidence.append("delta_zscore")
+market_monitor/events.py:672:    if abs(float(ctx["oi_change"])) > 0:
+market_monitor/events.py:673:        evidence.append("oi_change")
+market_monitor/events.py:721:    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+market_monitor/events.py:722:    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+market_monitor/events.py:749:            "volume_zscore": float(row["volume_zscore"]),
+market_monitor/events.py:750:            "delta_zscore": float(row["delta_zscore"]),
+market_monitor/events.py:751:            "oi_change": float(row["oi_change"]),
+market_monitor/events.py:825:    lowers = [_float_or_none(item.get("price_lower", "")) for item in evidence]
+market_monitor/events.py:826:    uppers = [_float_or_none(item.get("price_upper", "")) for item in evidence]
+market_monitor/events.py:851:        "min_zone_price_lower": min((value for value in lowers if value is not None), default=0.0),
+market_monitor/events.py:852:        "max_zone_price_upper": max((value for value in uppers if value is not None), default=0.0),
+market_monitor/events.py:855:        "max_volume_zscore": _numeric_max(group, "volume_zscore"),
+market_monitor/events.py:856:        "max_abs_delta_zscore": _numeric_abs_max(group, "delta_zscore"),
+market_monitor/events.py:857:        "total_oi_change": _numeric_sum(group, "oi_change"),
+market_monitor/events.py:955:    lower = _float_or_none(evidence.get("price_lower", ""))
+market_monitor/events.py:956:    upper = _float_or_none(evidence.get("price_upper", ""))
+market_monitor/run_wider_research_window.py:13:    parser.add_argument("--selected-zones", required=True, help="Path to selected_zones.csv.")
+market_monitor/run_wider_research_window.py:23:            selected_zones_path=Path(args.selected_zones),
+market_monitor/run_armed_setup_review_pack.py:23:        help="Interval spec: interval_id|start_iso|end_iso|setup_research_timeline.csv|selected_zones.csv",
+market_monitor/run_armed_setup_review_pack.py:55:    selected_zones = Path(parts[4]) if len(parts) == 5 and parts[4] else None
+market_monitor/run_armed_setup_review_pack.py:61:        selected_zones_path=selected_zones,
+market_monitor/armed_setup_review_pack.py:36:    "market_state",
+market_monitor/armed_setup_review_pack.py:69:    selected_zones_path: Path | None = None
+market_monitor/armed_setup_review_pack.py:162:                        "selected_zones_path": str(item.selected_zones_path or ""),
+market_monitor/armed_setup_review_pack.py:213:        "market_state": _cell(setup.get("market_state")),
+market_monitor/hidden_flow_research.py:80:    "volume_zscore",
+market_monitor/hidden_flow_research.py:225:    selected_zones_path: str | Path,
+market_monitor/hidden_flow_research.py:239:    selected_path = Path(selected_zones_path)
+market_monitor/hidden_flow_research.py:245:        raise HiddenFlowResearchError(f"selected_zones.csv not found: {selected_path}")
+market_monitor/hidden_flow_research.py:252:    selected_zones = _load_visible_selected_zones(selected_path)
+market_monitor/hidden_flow_research.py:253:    missing_flags = _missing_flags(feed, selected_zones)
+market_monitor/hidden_flow_research.py:256:        selected_zones,
+market_monitor/hidden_flow_research.py:290:        "selected_zones": str(selected_path),
+market_monitor/hidden_flow_research.py:396:def _load_visible_selected_zones(path: Path) -> pd.DataFrame:
+market_monitor/hidden_flow_research.py:398:    required = {"zone_id", "side", "bucket", "representative_price", "price_lower", "price_upper", "visible_on_snapshot"}
+market_monitor/hidden_flow_research.py:404:        raise HiddenFlowResearchError("selected_zones.csv has no visible_on_snapshot=true rows")
+market_monitor/hidden_flow_research.py:405:    for column in ["representative_price", "price_lower", "price_upper"]:
+market_monitor/hidden_flow_research.py:407:    visible = visible.dropna(subset=["representative_price", "price_lower", "price_upper"])
+market_monitor/hidden_flow_research.py:415:    selected_zones: pd.DataFrame,
+market_monitor/hidden_flow_research.py:433:            rows.append(_score_window(window, selected_zones, minutes, window_id, missing_flags, prior_context))
+market_monitor/hidden_flow_research.py:445:    selected_zones: pd.DataFrame,
+market_monitor/hidden_flow_research.py:467:    oi_change = float(window["open_interest"].iloc[-1] - window["open_interest"].iloc[0])
+market_monitor/hidden_flow_research.py:469:    nearest = _nearest_zone(selected_zones, end_price)
+market_monitor/hidden_flow_research.py:475:    zone_position_context = _zone_position_context(selected_zones, end_price, nearest)
+market_monitor/hidden_flow_research.py:496:        "open_interest_change": round(oi_change, 6),
+market_monitor/hidden_flow_research.py:524:    lower = float(nearest["price_lower"])
+market_monitor/hidden_flow_research.py:525:    upper = float(nearest["price_upper"])
+market_monitor/hidden_flow_research.py:547:        ("total_qty", "relative_volume", "volume_zscore"),
+market_monitor/hidden_flow_research.py:563:    volume_z = float(row["volume_zscore"])
+market_monitor/hidden_flow_research.py:628:            "volume_zscore": round(volume_z, 6),
+market_monitor/hidden_flow_research.py:1216:    oi_change = float(window["open_interest"].iloc[-1] - window["open_interest"].iloc[0])
+market_monitor/hidden_flow_research.py:1237:        "open_interest_change": round(oi_change, 6),
+market_monitor/hidden_flow_research.py:1385:        "price_lower": float(row["price_lower"]),
+market_monitor/hidden_flow_research.py:1386:        "price_upper": float(row["price_upper"]),
+market_monitor/hidden_flow_research.py:1391:def _missing_flags(feed: pd.DataFrame, selected_zones: pd.DataFrame) -> dict[str, str]:
+market_monitor/hidden_flow_research.py:1392:    evidence_missing = "|".join(selected_zones.get("evidence_fields_missing", pd.Series(dtype=str)).fillna("").astype(str)).lower()
+market_monitor/closed_structure_adapter.py:18:from market_monitor.liquidity_zones import build_liquidity_map
+market_monitor/closed_structure_adapter.py:110:            zones = build_liquidity_map(pd.DataFrame([ref.level]), ref.price)
+market_monitor/closed_structure_adapter.py:159:            row["distance_from_close_pct"] = (ref.price-price)/price*100
+market_monitor/closed_structure_adapter.py:176:                    "market_state_reset": False, "structure_levels_reset": False,
+market_monitor/closed_structure_adapter.py:181:        eligible.sort(key=lambda r: (price-float(r["price_upper"]), -r["significance_score"], r["zone_id"]))
+market_monitor/run_hidden_flow_research.py:20:    parser.add_argument("--selected-zones", required=True, help="Path to SHI_RESET_36B selected_zones.csv.")
+market_monitor/run_hidden_flow_research.py:44:            selected_zones_path=Path(args.selected_zones),
+market_monitor/run_stage_gate_replay.py:468:            _cell(setup.get("market_state")),
+market_monitor/batch_runner.py:23:    build_post_sweep_research_summary,
+market_monitor/batch_runner.py:41:    "unresolved_sweep_count",
+market_monitor/batch_runner.py:48:    "post_sweep_observation_count",
+market_monitor/batch_runner.py:86:    unresolved_sweep_count: int
+market_monitor/batch_runner.py:87:    post_sweep_observation_count: int
+market_monitor/batch_runner.py:219:    research_result = build_post_sweep_research_summary(
+market_monitor/batch_runner.py:335:    observations = frames["post_sweep_observation.csv"]
+market_monitor/batch_runner.py:340:    unresolved_sweep_count = (
+market_monitor/batch_runner.py:357:        liquidity_zones_count=len(frames["liquidity_map.csv"]),
+market_monitor/batch_runner.py:360:        unresolved_sweep_count=unresolved_sweep_count,
+market_monitor/batch_runner.py:364:            f"{unresolved_sweep_count / grouped_move_count:.6g}"
+market_monitor/batch_runner.py:371:        post_sweep_observation_count=len(observations),
+market_monitor/batch_runner.py:399:    unresolved_sweep_count: int | str = "",
+market_monitor/batch_runner.py:406:    post_sweep_observation_count: int | str = "",
+market_monitor/batch_runner.py:431:        "unresolved_sweep_count": unresolved_sweep_count,
+market_monitor/batch_runner.py:438:        "post_sweep_observation_count": post_sweep_observation_count,
+market_monitor/batch_runner.py:466:    research_result = build_post_sweep_research_summary(
+market_monitor/batch_runner.py:509:    unresolved_total = _sum_column(processed_rows, "unresolved_sweep_count")
+market_monitor/batch_runner.py:569:        f"- Post-sweep observations: {_sum_column(processed_rows, 'post_sweep_observation_count')}",
+market_monitor/batch_runner.py:614:        unresolved_sweep_count=_sum_column(manifest, "unresolved_sweep_count"),
+market_monitor/batch_runner.py:615:        post_sweep_observation_count=_sum_column(manifest, "post_sweep_observation_count"),
+market_monitor/structure.py:31:    "touch_count",
+market_monitor/structure.py:133:                touch_count=1,
+market_monitor/structure.py:160:                touch_count=_touch_count(previous, high_row["HiPrice"], "HiPrice"),
+market_monitor/structure.py:175:                touch_count=_touch_count(previous, low_row["LowPrice"], "LowPrice"),
+market_monitor/structure.py:212:                    touch_count=_touch_count(session, high_row["HiPrice"], "HiPrice"),
+market_monitor/structure.py:227:                    touch_count=_touch_count(session, low_row["LowPrice"], "LowPrice"),
+market_monitor/structure.py:265:                    touch_count=1,
+market_monitor/structure.py:287:                    touch_count=1,
+market_monitor/structure.py:376:            touch_count=len(cluster),
+market_monitor/structure.py:401:                touch_count=int(level["touch_count"]),
+market_monitor/structure.py:438:    touch_count: int,
+market_monitor/structure.py:460:        "touch_count": int(touch_count),
+market_monitor/structure.py:468:def _touch_count(frame: pd.DataFrame, price: float, column: str) -> int:
+market_monitor/run_market_monitor.py:61:        f"liquidity_zones={len(frames['liquidity_map.csv'])} "
+market_monitor/live_like_state_replay.py:36:    "market_state",
+market_monitor/live_like_state_replay.py:279:            "market_state": state,
+market_monitor/live_like_state_replay.py:309:                    "previous_market_state": prev_state,
+market_monitor/live_like_state_replay.py:310:                    "new_market_state": state,
+market_monitor/live_like_state_replay.py:368:                "market_state",
+market_monitor/visual_overlay.py:21:    "liquidity_map.csv",
+market_monitor/visual_overlay.py:25:    "post_sweep_observation.csv",
+market_monitor/visual_overlay.py:118:    liquidity_map: pd.DataFrame
+market_monitor/visual_overlay.py:145:        liquidity_map=_read_csv(run_dir / "liquidity_map.csv"),
+market_monitor/visual_overlay.py:149:        observations=_read_csv(run_dir / "post_sweep_observation.csv"),
+market_monitor/visual_overlay.py:395:        _numeric_min(zones, "price_lower"),
+market_monitor/visual_overlay.py:401:        _numeric_max(zones, "price_upper"),
+market_monitor/visual_overlay.py:576:        "price_lower",
+market_monitor/visual_overlay.py:577:        "price_upper",
+market_monitor/visual_overlay.py:592:        "resweep_count",
+market_monitor/visual_overlay.py:594:        "rejection_without_sweep_count",
+market_monitor/visual_overlay.py:610:        "htf_sweep_count",
+market_monitor/visual_overlay.py:637:        "volume_zscore",
+market_monitor/visual_overlay.py:638:        "delta_zscore",
+market_monitor/visual_overlay.py:639:        "oi_change",
+market_monitor/visual_overlay.py:689:    columns = ["timestamp", "total_qty", "delta", "volume_zscore", "delta_zscore", "oi", "oi_change"]
+market_monitor/visual_overlay.py:722:        f"Zone bounds: {zone.get('price_lower', '')} - {zone.get('price_upper', '')}. "
+market_monitor/visual_overlay.py:734:        f"Volume z-score: {event.get('volume_zscore', '')}. "
+market_monitor/visual_overlay.py:735:        f"Delta z-score: {event.get('delta_zscore', '')}. "
+market_monitor/visual_overlay.py:736:        f"OI change: {event.get('oi_change', '')}. "
+market_monitor/visual_overlay.py:894:        "volume_zscore": str(ctx.get("volume_zscore", "")),
+market_monitor/visual_overlay.py:895:        "delta_zscore": str(ctx.get("delta_zscore", "")),
+market_monitor/visual_overlay.py:896:        "oi_change": str(ctx.get("oi_change", "")),
+market_monitor/visual_overlay.py:905:        "| zone_id | side | active_forward_role | zone_behavior_state | excursion_abs | min_excursion_abs | volume_zscore | delta_zscore | oi_change | reasons |",
+market_monitor/visual_overlay.py:912:            f"{row['volume_zscore']} | {row['delta_zscore']} | {row['oi_change']} | {row['reasons']} |"
+market_monitor/visual_overlay.py:1098:    htf_sweep_count = int(float(zone.get("htf_sweep_count", 0) or 0))
+market_monitor/visual_overlay.py:1103:    model_blind_spot = htf_sweep_count <= 0 and not sweep_times
+market_monitor/visual_overlay.py:1106:        if htf_sweep_count > 0 or sweep_times
+market_monitor/visual_overlay.py:1120:            f"zone_bounds: {_display(zone.get('price_lower', ''))}-{_display(zone.get('price_upper', ''))}",
+market_monitor/visual_overlay.py:1125:            f"htf_sweep_count: {htf_sweep_count}",
+market_monitor/visual_overlay.py:1192:    lower_col = "zone_outer_lower" if "zone_outer_lower" in zones.columns else "price_lower"
+market_monitor/visual_overlay.py:1193:    upper_col = "zone_outer_upper" if "zone_outer_upper" in zones.columns else "price_upper"
+market_monitor/visual_overlay.py:1221:        float(ctx.get("volume_zscore", 0.0) or 0.0) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD
+market_monitor/visual_overlay.py:1222:        or abs(float(ctx.get("delta_zscore", 0.0) or 0.0)) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD
+market_monitor/visual_overlay.py:1223:        or abs(float(ctx.get("oi_change", 0.0) or 0.0)) > 0
+market_monitor/visual_overlay.py:1229:        return {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0}
+market_monitor/visual_overlay.py:1232:        return {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0}
+market_monitor/visual_overlay.py:1235:        "volume_zscore": float(first.get("volume_zscore", 0.0) or 0.0),
+market_monitor/visual_overlay.py:1236:        "delta_zscore": float(first.get("delta_zscore", 0.0) or 0.0),
+market_monitor/visual_overlay.py:1237:        "oi_change": float(first.get("oi_change", 0.0) or 0.0),
+market_monitor/visual_overlay.py:1367:            f"- {value('zone_id')} {value('side')} {value('price_lower')}-{value('price_upper')} "
+market_monitor/visual_overlay.py:1372:            f"resweeps={value('resweep_count')} failed_acceptances={value('failed_acceptance_count')} "
+market_monitor/visual_overlay.py:1376:            f"htf_sweeps={value('htf_sweep_count')} htf_closes={value('htf_close_through_count')} "
+market_monitor/visual_overlay.py:1388:        f"{value('zone_id')} {value('side')} {value('price_lower')}-{value('price_upper')} "
+market_monitor/visual_overlay.py:1474:            f"htf_sweep_count={_display(zone.get('htf_sweep_count', ''))}; "
+market_monitor/visual_overlay.py:1485:            f"resweep_count={_display(zone.get('resweep_count', ''))}; "
+market_monitor/visual_overlay.py:1495:            f"resweep_count: {_display(zone.get('resweep_count', ''))}; "
+market_monitor/visual_overlay.py:1765:    return float(zone.get("zone_outer_lower", zone.get("price_lower", 0)) or zone.get("price_lower", 0))
+market_monitor/visual_overlay.py:1769:    return float(zone.get("zone_outer_upper", zone.get("price_upper", 0)) or zone.get("price_upper", 0))
+market_monitor/visual_overlay.py:1773:    return float(zone.get("zone_core_lower", zone.get("price_lower", 0)) or zone.get("price_lower", 0))
+market_monitor/visual_overlay.py:1777:    return float(zone.get("zone_core_upper", zone.get("price_upper", 0)) or zone.get("price_upper", 0))
+market_monitor/visual_overlay.py:1783:        f"bounds={zone.get('price_lower', '')}-{zone.get('price_upper', '')} "
+market_monitor/visual_overlay.py:1794:        f"htf_sweeps={zone.get('htf_sweep_count', '')} importance={zone.get('sweep_importance_class', '')}"
+market_monitor/visual_overlay.py:1802:        f"excursion_abs={event.get('excursion_abs', '')} volume_zscore={event.get('volume_zscore', '')} "
+market_monitor/visual_overlay.py:1803:        f"delta_zscore={event.get('delta_zscore', '')} oi_change={event.get('oi_change', '')}"
+market_monitor/summary.py:14:    liquidity_map: pd.DataFrame,
+market_monitor/summary.py:30:    buy_zones = _nearest_active_zones(liquidity_map, "BUY_SIDE", latest_close_value)
+market_monitor/summary.py:31:    sell_zones = _nearest_active_zones(liquidity_map, "SELL_SIDE", latest_close_value)
+market_monitor/summary.py:32:    touched_count = _status_count(liquidity_map, "TOUCHED")
+market_monitor/summary.py:33:    invalidated_count = _status_count(liquidity_map, "INVALIDATED")
+market_monitor/summary.py:34:    tier_counts = _column_counts(liquidity_map, "confidence_tier")
+market_monitor/summary.py:35:    precision_counts = _column_counts(liquidity_map, "precision_status")
+market_monitor/summary.py:36:    status_counts = _column_counts(liquidity_map, "status")
+market_monitor/summary.py:37:    clustered_count = _clustered_count(liquidity_map)
+market_monitor/summary.py:38:    top_source_types = _top_source_types(liquidity_map)
+market_monitor/summary.py:39:    score_stats = _score_instrumentation_stats(liquidity_map)
+market_monitor/summary.py:93:        f"- Number of liquidity zones: {len(liquidity_map)}",
+market_monitor/summary.py:170:    liquidity_map: pd.DataFrame, side: str, latest_close: float | None
+market_monitor/summary.py:172:    if liquidity_map.empty or latest_close is None:
+market_monitor/summary.py:174:    zones = liquidity_map[
+market_monitor/summary.py:175:        (liquidity_map["side"] == side) & (liquidity_map["status"] == "ACTIVE")
+market_monitor/summary.py:178:        zones = zones[zones["price_lower"] > latest_close]
+market_monitor/summary.py:180:        zones = zones[zones["price_upper"] < latest_close]
+market_monitor/summary.py:183:    zones["abs_distance"] = zones["distance_from_close_pct"].abs()
+market_monitor/summary.py:191:def _status_count(liquidity_map: pd.DataFrame, status: str) -> int:
+market_monitor/summary.py:192:    if liquidity_map.empty:
+market_monitor/summary.py:194:    return int((liquidity_map["status"] == status).sum())
+market_monitor/summary.py:210:def _clustered_count(liquidity_map: pd.DataFrame) -> int:
+market_monitor/summary.py:211:    if liquidity_map.empty:
+market_monitor/summary.py:213:    source_counts = liquidity_map["source_level_ids"].fillna("").map(
+market_monitor/summary.py:216:    explicit_cluster = liquidity_map["zone_type"].fillna("").str.startswith("CLUSTERED_")
+market_monitor/summary.py:220:def _top_source_types(liquidity_map: pd.DataFrame) -> str:
+market_monitor/summary.py:221:    if liquidity_map.empty:
+market_monitor/summary.py:223:    counts = liquidity_map["zone_type"].value_counts().sort_values(
+market_monitor/summary.py:229:def _score_instrumentation_stats(liquidity_map: pd.DataFrame) -> dict[str, object]:
+market_monitor/summary.py:230:    if liquidity_map.empty or "score_components_json" not in liquidity_map.columns:
+market_monitor/summary.py:241:            liquidity_map["score_components_json"].fillna("").astype(str).str.len().gt(0).sum()
+market_monitor/summary.py:243:        "with_h4": _truthy_count(liquidity_map, "has_h4_source"),
+market_monitor/summary.py:244:        "with_session": _truthy_count(liquidity_map, "has_session_source"),
+market_monitor/summary.py:245:        "with_equal": _truthy_count(liquidity_map, "has_equal_level_source"),

@@ -1,0 +1,169 @@
+     1	"""NEG-only frozen-zone confirmation; unchanged execution, canonical completed H4."""
+     2	from __future__ import annotations
+     3	
+     4	from datetime import timedelta, timezone
+     5	from copy import deepcopy
+     6	import pandas as pd
+     7	from market_monitor.structure import aggregate_timeframe
+     8	from market_monitor.closed_structure_adapter import minute_frame
+     9	import hashlib
+    10	import math
+    11	
+    12	from deltascout.research_bundle.scout_backtester.contracts import Candidate
+    13	
+    14	FAMILY = "NEG_H4_CLOSE_V1"
+    15	HORIZON = timedelta(hours=4)
+    16	
+    17	
+    18	def canonical_bucket(close_ts, timeframe="H4"):
+    19	    """Same UTC floor rule as native Monitor, adapted from CLOSE to OPEN labels."""
+    20	    return (pd.Timestamp(close_ts).tz_convert("UTC")-pd.Timedelta(minutes=1)).floor(
+    21	        "4h" if timeframe == "H4" else "h").to_pydatetime()
+    22	
+    23	
+    24	class NegCloseEngine:
+    25	    def __init__(self, monitor, timeframe="H4"):
+    26	        if timeframe not in {"H1", "H4"}:
+    27	            raise ValueError("Only H1 control or H4 experiment supported")
+    28	        self.timeframe = timeframe
+    29	        self.minutes = 240 if timeframe == "H4" else 60
+    30	        self.monitor = monitor
+    31	        self.pending = {}
+    32	        self.attempted = set()
+    33	        self.audit = []
+    34	        self.events = []
+    35	        self.zone_evidence = []
+    36	        self.candidates = []
+    37	        self.last_bar = None
+    38	        self.hour = []
+    39	        self.confirmed_keys = {}
+    40	
+    41	    def _event(self, row, ts, event, **fields):
+    42	        self.events.append({"seed_id": row["seed_id"], "ts": ts.isoformat(),
+    43	                            "event": event, "zone_id": row.get("zone_id", ""), **fields})
+    44	
+    45	    def _finish(self, row, ts, status):
+    46	        if status == "EXPIRED":
+    47	            row["expiry_reason"] = ("FIRST_CANONICAL_CLOSE_AFTER_DEADLINE"
+    48	                if row["_next_close"] > row["_deadline"] else "NO_QUALIFYING_COMPLETED_CLOSE_WITHIN_HORIZON")
+    49	        row["status"] = status
+    50	        row["finished_at"] = ts.isoformat()
+    51	        self._event(row, ts, status)
+    52	        self.pending.pop(row["zone_id"], None)
+    53	
+    54	    def step(self, bar, seeds=()):
+    55	        if self.last_bar is not None and bar.ts <= self.last_bar.ts:
+    56	            raise ValueError("feed must advance strictly")
+    57	        valid = (not bar.is_synthetic and bar.volume > 0
+    58	                 and all(math.isfinite(x) for x in (bar.open,bar.high,bar.low,bar.close,bar.volume))
+    59	                 and 0 < bar.low <= min(bar.open,bar.close) <= max(bar.open,bar.close) <= bar.high)
+    60	        gap = self.last_bar is not None and bar.ts-self.last_bar.ts != timedelta(minutes=1)
+    61	        if gap or not valid:
+    62	            for row in list(self.pending.values()):
+    63	                self._finish(row, bar.ts, "CANCELLED_FEED_GAP" if gap else "CANCELLED_INVALID_BAR")
+    64	            self.hour = []
+    65	        bucket = canonical_bucket(bar.ts, self.timeframe)
+    66	        if self.hour and canonical_bucket(self.hour[0].ts, self.timeframe) != bucket:
+    67	            self.hour = []
+    68	        if valid:
+    69	            self.hour.append(bar)
+    70	        completed = (valid and bar.ts == bucket+timedelta(minutes=self.minutes)
+    71	                     and len(self.hour) == self.minutes
+    72	                     and self.hour[0].ts == bar.ts-timedelta(minutes=self.minutes-1))
+    73	        close = None
+    74	        if completed:
+    75	            # Reuse the Monitor's actual aggregation; never use a partial or rolling bar.
+    76	            native = aggregate_timeframe(minute_frame(self.hour), self.timeframe)
+    77	            assert len(native) == 1 and native.iloc[0]["Timestamp"].to_pydatetime() == bucket
+    78	            close = float(native.iloc[0]["ClosePrice"])
+    79	            assert close == bar.close
+    80	        for row in list(self.pending.values()):
+    81	            if bar.ts > row["_deadline"]:
+    82	                self._finish(row, row["_deadline"], "EXPIRED")
+    83	                continue
+    84	            row["sweep_high"] = max(row["sweep_high"], bar.high)
+    85	            if completed and bar.ts > row["_seed"].ts:
+    86	                self._event(row, bar.ts, self.timeframe+"_CLOSE", close=close, lower=row["lower"],
+    87	                            deadline=row["deadline"], complete_minutes=self.minutes, bar_open=bucket.isoformat())
+    88	                if close < row["lower"]:
+    89	                    self._confirm(row, bar)
+    90	                    continue
+    91	            if bar.ts == row["_deadline"]:
+    92	                self._finish(row, bar.ts, "EXPIRED")
+    93	        for seed in seeds:
+    94	            if seed.ts != bar.ts:
+    95	                raise ValueError("seed must be evaluated at its exact minute")
+    96	            row = {"seed_id": seed.seed_id, "seed_ts": seed.ts.isoformat(), "event": seed.event,
+    97	                   "delta": seed.delta, "volume": seed.volume, "price": bar.close,
+    98	                   "source_path": seed.source_path, "source_line": seed.source_line}
+    99	            self.audit.append(row)
+   100	            if abs(seed.delta-(bar.buy_qty-bar.sell_qty)) > .011 or abs(seed.volume-bar.volume) > .011:
+   101	                raise ValueError(f"journal/feed mismatch {seed.seed_id}")
+   102	            if seed.event not in {"DELTA_MAX", "DELTA_MIN"}:
+   103	                row["status"] = "OUT_OF_SCOPE_NON_DELTA_EVENT"
+   104	                continue
+   105	            if seed.delta >= 0:
+   106	                row["status"] = "OUT_OF_SCOPE_NON_NEGATIVE"
+   107	                continue
+   108	            if not valid or gap:
+   109	                row["status"] = "INVALID_TRIGGER_CONTEXT"
+   110	                continue
+   111	            zones, counts, evidence = self.monitor.query(seed.ts)
+   112	            row.update(counts)
+   113	            self.zone_evidence.extend(dict(seed_id=seed.seed_id, **e) for e in evidence)
+   114	            if not zones:
+   115	                row["status"] = "NO_ELIGIBLE_ZONE"
+   116	                self._event(row, bar.ts, row["status"])
+   117	                continue
+   118	            zone = deepcopy(zones[0])
+   119	            zone_id = zone["zone_id"]
+   120	            episode = (zone_id, zone["crossed_at"])
+   121	            row.update(zone_id=zone_id, lower=float(zone["price_lower"]), upper=float(zone["price_upper"]),
+   122	                       bucket=zone["bucket"], significance_score=zone["significance_score"],
+   123	                       level_available_at=zone["available_at"], crossed_at=zone["crossed_at"],
+   124	                       sweep_start_ts=zone["sweep_start_ts"], sweep_high=zone["sweep_high"])
+   125	            row.update(price_lower=row["lower"], price_upper=row["upper"],
+   126	                       available_at=zone["available_at"], level_type=zone["level_type"],
+   127	                       source_timeframe=zone["source_timeframe"], frozen_zone=zone,
+   128	                       confirmation_timeframe=self.timeframe)
+   129	            if zone_id in self.pending:
+   130	                row.update(status="DUPLICATE_PENDING_ZONE", parent_seed_id=self.pending[zone_id]["seed_id"])
+   131	                self._event(row, bar.ts, row["status"], parent_seed_id=row["parent_seed_id"])
+   132	                continue
+   133	            if episode in self.attempted:
+   134	                row["status"] = "EPISODE_ALREADY_ATTEMPTED"
+   135	                continue
+   136	            self.attempted.add(episode)
+   137	            deadline = seed.ts+HORIZON
+   138	            next_close = pd.Timestamp(seed.ts).tz_convert("UTC").floor(
+   139	                "4h" if self.timeframe == "H4" else "h").to_pydatetime()+timedelta(minutes=self.minutes)
+   140	            row.update(next_canonical_close=next_close.isoformat(), _next_close=next_close)
+   141	            row.update(status="PENDING", deadline=deadline.isoformat(), _deadline=deadline, _seed=seed)
+   142	            self.pending[zone_id] = row
+   143	            self._event(row, bar.ts, "ARMED", lower=row["lower"], upper=row["upper"], deadline=row["deadline"])
+   144	        self.last_bar = bar
+   145	
+   146	    def _confirm(self, row, bar):
+   147	        seed = row["_seed"]
+   148	        key = (bar.ts, "SHORT")
+   149	        if key in self.confirmed_keys:
+   150	            row["parent_candidate_id"] = self.confirmed_keys[key]
+   151	            self._finish(row, bar.ts, "DUPLICATE_CONFIRMATION")
+   152	            return
+   153	        candidate_id = "NEG"+self.timeframe+"_"+hashlib.sha256(f"{seed.seed_id}|{row['zone_id']}|{bar.ts.isoformat()}".encode()).hexdigest()[:20]
+   154	        self.confirmed_keys[key] = candidate_id
+   155	        self._finish(row, bar.ts, "CONFIRMED")
+   156	        row.update(candidate_id=candidate_id, confirmation_price=bar.close,
+   157	                   stop_anchor=row["sweep_high"]*1.0001)
+   158	        flags = {k:v for k,v in row.items() if not k.startswith("_")}
+   159	        flags.update(sweep_stop_price=row["stop_anchor"], sweep_high=row["sweep_high"],
+   160	                     sweep_end_ts=bar.ts.isoformat(), stop_buffer_fraction=.0001)
+   161	        self.candidates.append(Candidate(candidate_id, seed.local_ts, bar.ts, "SHORT", FAMILY if self.timeframe == "H4" else "NEG_H1_CONTROL",
+   162	            FAMILY if self.timeframe == "H4" else "NEG_H1_CONTROL", None, bar.close, seed.delta, seed.volume, abs(seed.delta)/seed.volume,
+   163	            None,None,None,None,flags,seed.source_path,seed.row_hash))
+   164	
+   165	    def finish(self):
+   166	        if self.last_bar:
+   167	            for row in list(self.pending.values()):
+   168	                self._finish(row, self.last_bar.ts, "RIGHT_CENSORED_END_OF_DATA")
+   169	        return [{k:v for k,v in r.items() if not k.startswith("_")} for r in self.audit]

@@ -1,0 +1,40 @@
+{
+  "feed_fields": {
+    "OpenInterest": {
+      "rows": 224906,
+      "nonmissing": 0
+    },
+    "FundingRate": {
+      "rows": 224906,
+      "nonmissing": 0
+    },
+    "LiqBuyQty": {
+      "rows": 224906,
+      "nonmissing": 0
+    },
+    "LiqSellQty": {
+      "rows": 224906,
+      "nonmissing": 0
+    },
+    "VWAP": {
+      "rows": 224906,
+      "nonmissing": 224906
+    },
+    "AggTrades": {
+      "rows": 224906,
+      "nonmissing": 224906
+    }
+  },
+  "snapshot_missing_fields": [
+    "liquidations",
+    "open_interest",
+    "funding",
+    "poc",
+    "session_vwap",
+    "post_sweep_evidence"
+  ],
+  "vwap_column_provenance": "legacy AvgPrice -> normalized VWAP -> minute_average_price",
+  "journal_poc_vwap": "excluded by user feed-only scope",
+  "zones": "not reconstructed; user stopped this work",
+  "post_sweep": "not reconstructed; would require Monitor zone/event analysis"
+}

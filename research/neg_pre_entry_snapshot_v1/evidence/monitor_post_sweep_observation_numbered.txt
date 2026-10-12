@@ -1,0 +1,374 @@
+     1	from __future__ import annotations
+     2	
+     3	import json
+     4	
+     5	import pandas as pd
+     6	
+     7	from market_monitor.score_instrumentation import SCORE_INSTRUMENTATION_COLUMNS
+     8	
+     9	
+    10	POST_SWEEP_OBSERVATION_BARS = 30
+    11	
+    12	POST_SWEEP_OBSERVATION_COLUMNS = [
+    13	    "observation_id",
+    14	    "source_event_id",
+    15	    "source_event_timestamp",
+    16	    "market_move_id",
+    17	    "market_move_role",
+    18	    "market_move_event_count",
+    19	    "group_start_timestamp",
+    20	    "group_end_timestamp",
+    21	    "group_span_minutes",
+    22	    "grouping_window_mode",
+    23	    "zone_id",
+    24	    "side",
+    25	    "zone_type",
+    26	    "zone_price_lower",
+    27	    "zone_price_upper",
+    28	    "zone_price_mid",
+    29	    "confidence_score",
+    30	    "confidence_tier",
+    31	    "source_timeframes",
+    32	    *SCORE_INSTRUMENTATION_COLUMNS,
+    33	    "observation_start_timestamp",
+    34	    "observation_end_timestamp",
+    35	    "observation_bars_expected",
+    36	    "observation_bars_available",
+    37	    "observation_complete",
+    38	    "max_high_after_event",
+    39	    "min_low_after_event",
+    40	    "close_at_window_end",
+    41	    "max_excursion_beyond_zone",
+    42	    "max_return_inside_zone",
+    43	    "bars_inside_zone",
+    44	    "bars_above_zone",
+    45	    "bars_below_zone",
+    46	    "first_return_inside_at",
+    47	    "first_close_inside_at",
+    48	    "first_close_beyond_at",
+    49	    "net_close_change_abs",
+    50	    "net_close_change_pct",
+    51	    "post_volume_sum",
+    52	    "post_buy_qty_sum",
+    53	    "post_sell_qty_sum",
+    54	    "post_delta_sum",
+    55	    "post_delta_pct",
+    56	    "post_trades_sum",
+    57	    "post_oi_change",
+    58	    "post_max_volume_zscore",
+    59	    "post_max_abs_delta_zscore",
+    60	    "evidence_json",
+    61	    "data_quality",
+    62	]
+    63	
+    64	
+    65	def build_post_sweep_observations(
+    66	    *,
+    67	    event_log: pd.DataFrame,
+    68	    feed: pd.DataFrame,
+    69	    volume_delta_state: pd.DataFrame,
+    70	) -> pd.DataFrame:
+    71	    if event_log.empty or feed.empty:
+    72	        return pd.DataFrame(columns=POST_SWEEP_OBSERVATION_COLUMNS)
+    73	
+    74	    unresolved = event_log[
+    75	        event_log["event_type"] == "LIQUIDITY_SWEEP_UNRESOLVED"
+    76	    ].copy()
+    77	    if unresolved.empty:
+    78	        return pd.DataFrame(columns=POST_SWEEP_OBSERVATION_COLUMNS)
+    79	    for column, default in [
+    80	        ("market_move_id", ""),
+    81	        ("market_move_role", "NONE"),
+    82	        ("market_move_event_count", 0),
+    83	        ("group_start_timestamp", ""),
+    84	        ("group_end_timestamp", ""),
+    85	        ("group_span_minutes", ""),
+    86	        ("grouping_window_mode", ""),
+    87	    ]:
+    88	        if column not in unresolved.columns:
+    89	            unresolved[column] = default
+    90	
+    91	    unresolved = unresolved.sort_values(
+    92	        ["event_timestamp", "market_move_id", "zone_id", "event_id"], kind="mergesort"
+    93	    )
+    94	    frame = feed.sort_values("Timestamp", kind="mergesort").reset_index(drop=True)
+    95	    context = _context_frame(volume_delta_state)
+    96	    rows = []
+    97	    for _, event in unresolved.iterrows():
+    98	        rows.append(_observation_row(event, frame, context))
+    99	
+   100	    out = pd.DataFrame(rows, columns=POST_SWEEP_OBSERVATION_COLUMNS)
+   101	    out["observation_id"] = [f"observation_{idx + 1:06d}" for idx in range(len(out))]
+   102	    return out[POST_SWEEP_OBSERVATION_COLUMNS]
+   103	
+   104	
+   105	def observation_stats(observations: pd.DataFrame) -> dict[str, int]:
+   106	    if observations.empty:
+   107	        return {
+   108	            "total": 0,
+   109	            "complete": 0,
+   110	            "incomplete": 0,
+   111	            "window_bars": POST_SWEEP_OBSERVATION_BARS,
+   112	        }
+   113	    complete = observations["observation_complete"].astype(str).str.lower() == "true"
+   114	    return {
+   115	        "total": len(observations),
+   116	        "complete": int(complete.sum()),
+   117	        "incomplete": int((~complete).sum()),
+   118	        "window_bars": POST_SWEEP_OBSERVATION_BARS,
+   119	    }
+   120	
+   121	
+   122	def _observation_row(
+   123	    event: pd.Series,
+   124	    feed: pd.DataFrame,
+   125	    context: pd.DataFrame,
+   126	) -> dict[str, object]:
+   127	    evidence = json.loads(str(event["evidence_json"]))
+   128	    event_ts = pd.Timestamp(event["event_timestamp"])
+   129	    observed = feed[feed["Timestamp"] > event_ts].head(POST_SWEEP_OBSERVATION_BARS)
+   130	    event_feed = feed[feed["Timestamp"] == event_ts]
+   131	
+   132	    lower = float(evidence["price_lower"])
+   133	    upper = float(evidence["price_upper"])
+   134	    mid = float(evidence["price_mid"])
+   135	    side = str(event["side"])
+   136	    available = len(observed)
+   137	    complete = available >= POST_SWEEP_OBSERVATION_BARS
+   138	    quality = _quality(event, observed)
+   139	
+   140	    if observed.empty:
+   141	        metrics = _empty_metrics(event, event_feed)
+   142	        start_ts = ""
+   143	        end_ts = ""
+   144	    else:
+   145	        metrics = _window_metrics(
+   146	            observed=observed,
+   147	            context=context,
+   148	            event=event,
+   149	            event_feed=event_feed,
+   150	            side=side,
+   151	            lower=lower,
+   152	            upper=upper,
+   153	        )
+   154	        start_ts = _format_ts(observed.iloc[0]["Timestamp"])
+   155	        end_ts = _format_ts(observed.iloc[-1]["Timestamp"])
+   156	
+   157	    row = {
+   158	        "observation_id": "",
+   159	        "source_event_id": event["event_id"],
+   160	        "source_event_timestamp": event["event_timestamp"],
+   161	        "market_move_id": str(event.get("market_move_id", "")),
+   162	        "market_move_role": str(event.get("market_move_role", "NONE")),
+   163	        "market_move_event_count": int(float(event.get("market_move_event_count", 0) or 0)),
+   164	        "group_start_timestamp": str(event.get("group_start_timestamp", "")),
+   165	        "group_end_timestamp": str(event.get("group_end_timestamp", "")),
+   166	        "group_span_minutes": event.get("group_span_minutes", ""),
+   167	        "grouping_window_mode": str(event.get("grouping_window_mode", "")),
+   168	        "zone_id": event["zone_id"],
+   169	        "side": side,
+   170	        "zone_type": evidence["zone_type"],
+   171	        "zone_price_lower": lower,
+   172	        "zone_price_upper": upper,
+   173	        "zone_price_mid": mid,
+   174	        "confidence_score": evidence.get("confidence_score", ""),
+   175	        "confidence_tier": evidence.get("confidence_tier", ""),
+   176	        "source_timeframes": evidence.get("source_timeframes", ""),
+   177	        **_score_instrumentation_from_evidence(evidence),
+   178	        "observation_start_timestamp": start_ts,
+   179	        "observation_end_timestamp": end_ts,
+   180	        "observation_bars_expected": POST_SWEEP_OBSERVATION_BARS,
+   181	        "observation_bars_available": available,
+   182	        "observation_complete": bool(complete),
+   183	        "data_quality": quality,
+   184	        **metrics,
+   185	    }
+   186	    row["evidence_json"] = _json(
+   187	        {
+   188	            "bars_above_zone": int(row["bars_above_zone"]),
+   189	            "bars_below_zone": int(row["bars_below_zone"]),
+   190	            "bars_inside_zone": int(row["bars_inside_zone"]),
+   191	            "data_quality": quality,
+   192	            "first_close_beyond_at": row["first_close_beyond_at"],
+   193	            "first_close_inside_at": row["first_close_inside_at"],
+   194	            "first_return_inside_at": row["first_return_inside_at"],
+   195	            "max_excursion_beyond_zone": float(row["max_excursion_beyond_zone"]),
+   196	            "max_return_inside_zone": float(row["max_return_inside_zone"]),
+   197	            "group_end_timestamp": str(row["group_end_timestamp"]),
+   198	            "group_span_minutes": (
+   199	                float(row["group_span_minutes"]) if row["group_span_minutes"] != "" else ""
+   200	            ),
+   201	            "group_start_timestamp": str(row["group_start_timestamp"]),
+   202	            "market_move_event_count": int(row["market_move_event_count"]),
+   203	            "market_move_id": str(row["market_move_id"]),
+   204	            "market_move_role": str(row["market_move_role"]),
+   205	            "observation_bars_available": int(available),
+   206	            "observation_bars_expected": POST_SWEEP_OBSERVATION_BARS,
+   207	            "observation_class": "POST_SWEEP_OBSERVATION",
+   208	            "observation_complete": bool(complete),
+   209	            "reaction_verdict": "NOT_CLASSIFIED",
+   210	            "side": side,
+   211	            "source_event_id": str(event["event_id"]),
+   212	            "source_event_timestamp": str(event["event_timestamp"]),
+   213	            "zone_id": str(event["zone_id"]),
+   214	            "zone_price_lower": lower,
+   215	            "zone_price_mid": mid,
+   216	            "zone_price_upper": upper,
+   217	            "zone_type": str(evidence["zone_type"]),
+   218	            "confidence_score": evidence.get("confidence_score", ""),
+   219	            "confidence_tier": evidence.get("confidence_tier", ""),
+   220	            "source_timeframes": evidence.get("source_timeframes", ""),
+   221	            **_score_instrumentation_from_evidence(evidence),
+   222	        }
+   223	    )
+   224	    return row
+   225	
+   226	
+   227	def _window_metrics(
+   228	    *,
+   229	    observed: pd.DataFrame,
+   230	    context: pd.DataFrame,
+   231	    event: pd.Series,
+   232	    event_feed: pd.DataFrame,
+   233	    side: str,
+   234	    lower: float,
+   235	    upper: float,
+   236	) -> dict[str, object]:
+   237	    inside = (observed["LowPrice"] <= upper) & (observed["HiPrice"] >= lower)
+   238	    close_inside = (observed["ClosePrice"] >= lower) & (observed["ClosePrice"] <= upper)
+   239	    close_above = observed["ClosePrice"] > upper
+   240	    close_below = observed["ClosePrice"] < lower
+   241	    beyond_close = close_above if side == "BUY_SIDE" else close_below
+   242	
+   243	    max_high = float(observed["HiPrice"].max())
+   244	    min_low = float(observed["LowPrice"].min())
+   245	    close_end = float(observed.iloc[-1]["ClosePrice"])
+   246	    event_close = float(event["event_close"])
+   247	    total_qty = float(observed["TotalQty"].sum())
+   248	    buy_qty = float(observed["BuyQty"].sum())
+   249	    sell_qty = float(observed["SellQty"].sum())
+   250	    delta = buy_qty - sell_qty
+   251	
+   252	    matched_context = _matched_context(context, observed)
+   253	    if matched_context.empty:
+   254	        max_volume_zscore = 0.0
+   255	        max_abs_delta_zscore = 0.0
+   256	    else:
+   257	        max_volume_zscore = float(matched_context["volume_zscore"].max())
+   258	        max_abs_delta_zscore = float(matched_context["delta_zscore"].abs().max())
+   259	
+   260	    return {
+   261	        "max_high_after_event": max_high,
+   262	        "min_low_after_event": min_low,
+   263	        "close_at_window_end": close_end,
+   264	        "max_excursion_beyond_zone": _max_excursion(observed, side, lower, upper),
+   265	        "max_return_inside_zone": _max_return_inside(observed, side, lower, upper),
+   266	        "bars_inside_zone": int(inside.sum()),
+   267	        "bars_above_zone": int(close_above.sum()),
+   268	        "bars_below_zone": int(close_below.sum()),
+   269	        "first_return_inside_at": _first_ts(observed, inside),
+   270	        "first_close_inside_at": _first_ts(observed, close_inside),
+   271	        "first_close_beyond_at": _first_ts(observed, beyond_close),
+   272	        "net_close_change_abs": abs(close_end - event_close),
+   273	        "net_close_change_pct": abs(close_end - event_close) / event_close * 100 if event_close else 0.0,
+   274	        "post_volume_sum": total_qty,
+   275	        "post_buy_qty_sum": buy_qty,
+   276	        "post_sell_qty_sum": sell_qty,
+   277	        "post_delta_sum": delta,
+   278	        "post_delta_pct": delta / total_qty if total_qty else 0.0,
+   279	        "post_trades_sum": float(observed["Trades"].sum()),
+   280	        "post_oi_change": _post_oi_change(observed, event_feed),
+   281	        "post_max_volume_zscore": max_volume_zscore,
+   282	        "post_max_abs_delta_zscore": max_abs_delta_zscore,
+   283	    }
+   284	
+   285	
+   286	def _empty_metrics(event: pd.Series, event_feed: pd.DataFrame) -> dict[str, object]:
+   287	    return {
+   288	        "max_high_after_event": 0.0,
+   289	        "min_low_after_event": 0.0,
+   290	        "close_at_window_end": 0.0,
+   291	        "max_excursion_beyond_zone": 0.0,
+   292	        "max_return_inside_zone": 0.0,
+   293	        "bars_inside_zone": 0,
+   294	        "bars_above_zone": 0,
+   295	        "bars_below_zone": 0,
+   296	        "first_return_inside_at": "",
+   297	        "first_close_inside_at": "",
+   298	        "first_close_beyond_at": "",
+   299	        "net_close_change_abs": 0.0,
+   300	        "net_close_change_pct": 0.0,
+   301	        "post_volume_sum": 0.0,
+   302	        "post_buy_qty_sum": 0.0,
+   303	        "post_sell_qty_sum": 0.0,
+   304	        "post_delta_sum": 0.0,
+   305	        "post_delta_pct": 0.0,
+   306	        "post_trades_sum": 0.0,
+   307	        "post_oi_change": _post_oi_change(pd.DataFrame(), event_feed),
+   308	        "post_max_volume_zscore": 0.0,
+   309	        "post_max_abs_delta_zscore": 0.0,
+   310	    }
+   311	
+   312	
+   313	def _max_excursion(
+   314	    observed: pd.DataFrame, side: str, lower: float, upper: float
+   315	) -> float:
+   316	    if side == "BUY_SIDE":
+   317	        return max(0.0, float((observed["HiPrice"] - upper).max()))
+   318	    return max(0.0, float((lower - observed["LowPrice"]).max()))
+   319	
+   320	
+   321	def _max_return_inside(
+   322	    observed: pd.DataFrame, side: str, lower: float, upper: float
+   323	) -> float:
+   324	    if side == "BUY_SIDE":
+   325	        return max(0.0, float((upper - observed["LowPrice"]).max()))
+   326	    return max(0.0, float((observed["HiPrice"] - lower).max()))
+   327	
+   328	
+   329	def _post_oi_change(observed: pd.DataFrame, event_feed: pd.DataFrame) -> float:
+   330	    if observed.empty or event_feed.empty:
+   331	        return 0.0
+   332	    return float(observed.iloc[-1]["OpenInterest"]) - float(event_feed.iloc[0]["OpenInterest"])
+   333	
+   334	
+   335	def _matched_context(context: pd.DataFrame, observed: pd.DataFrame) -> pd.DataFrame:
+   336	    if context.empty or observed.empty:
+   337	        return pd.DataFrame()
+   338	    timestamps = set(observed["Timestamp"].map(_format_ts))
+   339	    return context[context["timestamp"].isin(timestamps)]
+   340	
+   341	
+   342	def _context_frame(volume_delta_state: pd.DataFrame) -> pd.DataFrame:
+   343	    if volume_delta_state.empty:
+   344	        return pd.DataFrame(columns=["timestamp", "volume_zscore", "delta_zscore"])
+   345	    return volume_delta_state.copy()
+   346	
+   347	
+   348	def _first_ts(frame: pd.DataFrame, mask: pd.Series) -> str:
+   349	    if not bool(mask.any()):
+   350	        return ""
+   351	    return _format_ts(frame.loc[mask].iloc[0]["Timestamp"])
+   352	
+   353	
+   354	def _quality(event: pd.Series, observed: pd.DataFrame) -> str:
+   355	    values = {str(event.get("data_quality", ""))}
+   356	    if not observed.empty:
+   357	        values.update(str(value) for value in observed["DataQuality"])
+   358	    if values == {"RAW"}:
+   359	        return "RAW"
+   360	    if "RECOVERED_DEGRADED" in values:
+   361	        return "RECOVERED_DEGRADED"
+   362	    return sorted(value for value in values if value)[0] if any(values) else "RAW"
+   363	
+   364	
+   365	def _format_ts(value) -> str:
+   366	    return pd.Timestamp(value).tz_convert("UTC").isoformat().replace("+00:00", "Z")
+   367	
+   368	
+   369	def _json(payload: dict[str, object]) -> str:
+   370	    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+   371	
+   372	
+   373	def _score_instrumentation_from_evidence(evidence: dict[str, object]) -> dict[str, object]:
+   374	    return {column: evidence.get(column, "") for column in SCORE_INSTRUMENTATION_COLUMNS}

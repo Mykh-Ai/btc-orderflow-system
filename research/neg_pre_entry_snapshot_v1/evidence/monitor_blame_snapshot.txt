@@ -1,0 +1,423 @@
+$ git blame market_monitor/snapshot_builder_v39a.py
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   1) """Additive 39A monitor snapshot contract.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   2) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   3) This module does not replace the existing monitor engine.  It adds the pieces
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   4) that were missing at the Executor boundary: exact closed minute windows,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   5) explicit data quality/lineage, and a small persisted state envelope that can
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   6) carry the descriptive monitor state across calls and UTC day boundaries.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   7) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   8) The state envelope is intentionally descriptive.  It is not a setup engine,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200   9) signal gate, order manager, or outcome recorder.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  10) """
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  11) from __future__ import annotations
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  12) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  13) import hashlib
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  14) import json
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  15) import os
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  16) import tempfile
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  17) from datetime import date, datetime, timezone
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  18) from pathlib import Path
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  19) from typing import Any, Mapping
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  20) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  21) import pandas as pd
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  22) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  23) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  24) SNAPSHOT_SCHEMA_VERSION = "market_monitor_snapshot_v39a"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  25) STATE_SCHEMA_VERSION = "SHI_RESET_39A_RUNTIME_STATE_CARRY_FORWARD_V1"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  26) BASE_CONTRACT_VERSION = "market_monitor_snapshot_v1"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  27) LOCAL_WINDOWS_MINUTES = (5, 15, 30, 60, 240, 1440)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  28) _ALIASES = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  29)     "Open": "OpenPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  30)     "High": "HiPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  31)     "Low": "LowPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  32)     "Close": "ClosePrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  33)     "Volume": "TotalQty",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  34)     "AggTrades": "Trades",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  35) }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  36) _REQUIRED_PRICE = ("OpenPrice", "HiPrice", "LowPrice", "ClosePrice")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  37) _NUMERIC = (
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  38)     "OpenPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  39)     "HiPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  40)     "LowPrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  41)     "ClosePrice",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  42)     "TotalQty",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  43)     "Trades",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  44)     "BuyQty",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  45)     "SellQty",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  46)     "OpenInterest",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  47)     "FundingRate",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  48) )
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  49) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  50) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  51) class MonitorSnapshotV39AError(ValueError):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  52)     """Raised when the v39A monitor input or state contract is invalid."""
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  53) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  54) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  55) def build_market_monitor_snapshot_v39a(
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  56)     feed: pd.DataFrame,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  57)     *,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  58)     context_feed: pd.DataFrame | None = None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  59)     cutoff_ts: Any | None = None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  60)     state_path: str | Path | None = None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  61)     symbol: str = "",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  62)     base_snapshot: Mapping[str, Any] | None = None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  63)     lineage: Mapping[str, Any] | None = None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  64)     persist_state: bool = True,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  65) ) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  66)     """Build an entry-time monitor snapshot from closed feed rows.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  67) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  68)     ``base_snapshot`` may contain the existing v1 structure/zone summaries.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  69)     When supplied, those summaries are carried under an explicit v1 lineage
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  70)     field; they are never silently presented as new 39A logic.
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  71)     """
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  72)     frame = _normalise_feed(feed)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  73)     if frame.empty:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  74)         raise MonitorSnapshotV39AError("feed is empty")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  75)     cutoff = _resolve_cutoff(frame, cutoff_ts)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  76)     current = frame[frame["Timestamp"] <= cutoff].copy()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  77)     if current.empty:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  78)         raise MonitorSnapshotV39AError("no feed rows at or before cutoff")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  79)     context = _normalise_feed(context_feed) if context_feed is not None else current.copy()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  80)     context = context[context["Timestamp"] <= cutoff].copy()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  81)     previous_state, state_load = _load_state(state_path)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  82)     windows = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  83)         str(minutes): _window_metrics(current, minutes=minutes, cutoff=cutoff)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  84)         for minutes in LOCAL_WINDOWS_MINUTES
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  85)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  86)     quality = _quality_summary(frame, current, context, windows, cutoff)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  87)     current_price = float(current.iloc[-1]["ClosePrice"])
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  88)     structure = _structure_summary(windows, current_price)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  89)     zones = _zone_summary(base_snapshot)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  90)     market_state = _market_state_summary(base_snapshot, windows)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  91)     state_memory, next_state = _advance_state(
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  92)         previous_state=previous_state,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  93)         state_load=state_load,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  94)         cutoff=cutoff,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  95)         structure=structure,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  96)         zones=zones,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  97)         market_state=market_state,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  98)         quality=quality,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200  99)     )
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 100)     effective_zones = zones if zones.get("available") else next_state.get("liquidity_zones", zones)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 101)     if state_path is not None and persist_state:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 102)         _write_state(Path(state_path), next_state)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 103) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 104)     source_files = sorted({str(x) for x in current["SourceFile"].dropna().tolist()})
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 105)     snapshot = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 106)         "schema_version": SNAPSHOT_SCHEMA_VERSION,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 107)         "cutoff_ts": _format_ts(cutoff),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 108)         "symbol": symbol,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 109)         "bar_contract": {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 110)             "timestamp_semantics": "UTC_minute_close_label",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 111)             "closed_rows_only": True,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 112)             "cutoff_inclusive": True,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 113)             "windows_minutes": list(LOCAL_WINDOWS_MINUTES),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 114)         },
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 115)         "current": {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 116)             "price": round(current_price, 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 117)             "rows_used": int(len(current)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 118)             "last_timestamp": _format_ts(current["Timestamp"].iloc[-1]),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 119)         },
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 120)         "windows": windows,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 121)         "market_state": market_state,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 122)         "structure": structure,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 123)         "liquidity_zones": effective_zones,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 124)         "state_memory": state_memory,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 125)         "quality": quality,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 126)         "lineage": {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 127)             "source_files": source_files,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 128)             "source_file_count": len(source_files),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 129)             "source_hashes": dict((lineage or {}).get("source_hashes", {})),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 130)             "feed_identity": (lineage or {}).get("feed_identity", "") or "",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 131)             "base_snapshot_schema": (
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 132)                 str((base_snapshot or {}).get("schema_version", ""))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 133)                 if base_snapshot is not None
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 134)                 else ""
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 135)             ),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 136)             "base_monitor_contract": BASE_CONTRACT_VERSION if base_snapshot is not None else "not_supplied",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 137)             "state_file": str(state_path) if state_path is not None else "",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 138)             "state_schema_version": STATE_SCHEMA_VERSION,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 139)         },
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 140)         "boundary": "descriptive monitor state only; no orders, outcomes, PnL, or trailing",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 141)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 142)     return _json_safe(snapshot)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 143) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 144) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 145) def _normalise_feed(feed: pd.DataFrame | None) -> pd.DataFrame:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 146)     if feed is None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 147)         return pd.DataFrame()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 148)     frame = feed.copy()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 149)     frame = frame.rename(columns={key: value for key, value in _ALIASES.items() if key in frame.columns})
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 150)     if "Timestamp" not in frame.columns:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 151)         raise MonitorSnapshotV39AError("feed missing Timestamp")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 152)     missing = [column for column in _REQUIRED_PRICE if column not in frame.columns]
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 153)     if missing:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 154)         raise MonitorSnapshotV39AError("feed missing price columns: " + ", ".join(missing))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 155)     for column in _NUMERIC:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 156)         if column not in frame.columns:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 157)             frame[column] = 0.0
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 158)         frame[column] = pd.to_numeric(frame[column], errors="coerce")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 159)         if frame[column].isna().any():
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 160)             raise MonitorSnapshotV39AError(f"invalid numeric values in {column}")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 161)     frame["Timestamp"] = pd.to_datetime(frame["Timestamp"], utc=True, errors="coerce")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 162)     if frame["Timestamp"].isna().any():
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 163)         raise MonitorSnapshotV39AError("invalid Timestamp values")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 164)     if "DataQuality" not in frame.columns:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 165)         if "IsSynthetic" in frame.columns:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 166)             synthetic = pd.to_numeric(frame["IsSynthetic"], errors="coerce").fillna(0)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 167)             frame["DataQuality"] = synthetic.ne(0).map({True: "RECOVERED_DEGRADED", False: "RAW"})
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 168)         else:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 169)             frame["DataQuality"] = "RAW"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 170)     frame["DataQuality"] = frame["DataQuality"].fillna("UNKNOWN").astype(str)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 171)     if "SourceFile" not in frame.columns:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 172)         frame["SourceFile"] = "in_memory_feed"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 173)     return frame.sort_values("Timestamp", kind="mergesort").reset_index(drop=True)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 174) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 175) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 176) def _resolve_cutoff(frame: pd.DataFrame, cutoff_ts: Any | None) -> pd.Timestamp:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 177)     cutoff = pd.Timestamp(cutoff_ts) if cutoff_ts is not None else pd.Timestamp(frame["Timestamp"].max())
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 178)     if cutoff.tzinfo is None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 179)         cutoff = cutoff.tz_localize("UTC")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 180)     else:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 181)         cutoff = cutoff.tz_convert("UTC")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 182)     cutoff = cutoff.floor("min")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 183)     if cutoff > frame["Timestamp"].max():
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 184)         raise MonitorSnapshotV39AError("cutoff is later than the available feed")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 185)     return cutoff
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 186) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 187) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 188) def _window_metrics(frame: pd.DataFrame, *, minutes: int, cutoff: pd.Timestamp) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 189)     start = cutoff - pd.Timedelta(minutes=minutes - 1)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 190)     window = frame[(frame["Timestamp"] >= start) & (frame["Timestamp"] <= cutoff)].copy()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 191)     expected = pd.date_range(start, cutoff, freq="min", tz="UTC")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 192)     actual = pd.DatetimeIndex(window["Timestamp"])
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 193)     missing = expected.difference(actual)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 194)     duplicate_count = int(actual.duplicated().sum())
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 195)     complete = len(missing) == 0 and len(window) == len(expected) and duplicate_count == 0
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 196)     quality_counts = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 197)         str(key): int(value)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 198)         for key, value in window["DataQuality"].value_counts().sort_index().items()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 199)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 200)     recovered = any(key == "RECOVERED_DEGRADED" for key in quality_counts)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 201)     status = "COMPLETE_RECOVERED_DEGRADED" if complete and recovered else "COMPLETE_RAW" if complete else "PARTIAL"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 202)     if window.empty:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 203)         return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 204)             "start_timestamp": _format_ts(start),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 205)             "end_timestamp": _format_ts(cutoff),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 206)             "expected_rows": int(len(expected)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 207)             "rows_used": 0,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 208)             "complete": False,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 209)             "status": "EMPTY",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 210)             "missing_timestamps": [_format_ts(ts) for ts in expected[:10]],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 211)             "duplicate_rows": 0,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 212)             "data_quality_counts": {},
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 213)         }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 214)     total_qty = float(window["TotalQty"].sum())
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 215)     open_price = float(window.iloc[0]["OpenPrice"])
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 216)     close_price = float(window.iloc[-1]["ClosePrice"])
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 217)     return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 218)         "start_timestamp": _format_ts(start),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 219)         "end_timestamp": _format_ts(cutoff),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 220)         "expected_rows": int(len(expected)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 221)         "rows_used": int(len(window)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 222)         "complete": bool(complete),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 223)         "status": status,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 224)         "missing_timestamps": [_format_ts(ts) for ts in missing[:10]],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 225)         "duplicate_rows": duplicate_count,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 226)         "data_quality_counts": quality_counts,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 227)         "recovered_degraded": bool(recovered),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 228)         "open": round(open_price, 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 229)         "close": round(close_price, 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 230)         "high": round(float(window["HiPrice"].max()), 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 231)         "low": round(float(window["LowPrice"].min()), 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 232)         "price_change_pct": round((close_price / open_price - 1.0) * 100.0, 8) if open_price else None,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 233)         "total_qty": round(total_qty, 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 234)         "delta": round(float((window["BuyQty"] - window["SellQty"]).sum()), 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 235)         "delta_pct": round(float((window["BuyQty"] - window["SellQty"]).sum()) / total_qty, 10) if total_qty else 0.0,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 236)         "open_interest_change": round(float(window.iloc[-1]["OpenInterest"] - window.iloc[0]["OpenInterest"]), 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 237)         "funding_last": round(float(window.iloc[-1]["FundingRate"]), 12),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 238)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 239) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 240) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 241) def _quality_summary(
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 242)     input_frame: pd.DataFrame,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 243)     current: pd.DataFrame,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 244)     context: pd.DataFrame,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 245)     windows: Mapping[str, Mapping[str, Any]],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 246)     cutoff: pd.Timestamp,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 247) ) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 248)     future_rows = int((input_frame["Timestamp"] > cutoff).sum())
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 249)     missing_windows = [key for key, value in windows.items() if not value.get("complete")]
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 250)     counts = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 251)         str(key): int(value)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 252)         for key, value in current["DataQuality"].value_counts().sort_index().items()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 253)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 254)     return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 255)         "cutoff_is_latest_used_row": bool(current["Timestamp"].max() == cutoff),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 256)         "future_rows_excluded": future_rows,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 257)         "current_rows": int(len(current)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 258)         "context_rows": int(len(context)),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 259)         "current_data_quality_counts": counts,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 260)         "recovered_degraded_present": "RECOVERED_DEGRADED" in counts,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 261)         "incomplete_windows": missing_windows,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 262)         "readiness": "READY_WITH_RECOVERED_DATA" if "RECOVERED_DEGRADED" in counts else "READY",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 263)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 264) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 265) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 266) def _structure_summary(windows: Mapping[str, Mapping[str, Any]], current_price: float) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 267)     levels: list[dict[str, Any]] = []
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 268)     for key in ("240", "1440"):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 269)         metrics = windows.get(key, {})
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 270)         if not metrics.get("rows_used"):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 271)             continue
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 272)         for role, field in (("SUPPORT_OBSERVED_LOW", "low"), ("RESISTANCE_OBSERVED_HIGH", "high")):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 273)             levels.append(
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 274)                 {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 275)                     "level_id": f"{key}m_{field}",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 276)                     "role": role,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 277)                     "price": metrics.get(field),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 278)                     "source_window_minutes": int(key),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 279)                     "observed_at": metrics.get("end_timestamp", ""),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 280)                     "lifecycle_status": "OBSERVED_EXTREME",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 281)                 }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 282)             )
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 283)     return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 284)         "current_price": round(current_price, 8),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 285)         "levels": levels,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 286)         "contract": "observed_window_extremes_only; no promoted setup lifecycle",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 287)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 288) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 289) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 290) def _zone_summary(base_snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 291)     if not base_snapshot:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 292)         return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 293)             "available": False,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 294)             "source": "not_supplied",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 295)             "significant_market_zones": [],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 296)             "liquidity_zones": [],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 297)         }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 298)     return {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 299)         "available": True,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 300)         "source": "base_monitor_snapshot_v1",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 301)         "significant_market_zones": base_snapshot.get("significant_market_zones", {}),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 302)         "liquidity_zones": base_snapshot.get("liquidity_zones", {}),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 303)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 304) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 305) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 306) def _market_state_summary(base_snapshot: Mapping[str, Any] | None, windows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 307)     if base_snapshot:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 308)         structure_state = base_snapshot.get("market_structure_state")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 309)         if isinstance(structure_state, Mapping) and structure_state:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 310)             return {"source": "base_monitor_snapshot_v1", "value": _json_safe(structure_state)}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 311)         market_state = base_snapshot.get("market_state")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 312)         if isinstance(market_state, Mapping) and market_state:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 313)             return {"source": "base_monitor_snapshot_v1", "value": _json_safe(market_state)}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 314)     m = windows.get("1440", {})
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 315)     delta = float(m.get("delta", 0.0) or 0.0)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 316)     change = float(m.get("price_change_pct", 0.0) or 0.0)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 317)     bias = "BULLISH_FLOW" if delta > 0 and change >= 0 else "BEARISH_FLOW" if delta < 0 and change <= 0 else "MIXED_FLOW"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 318)     return {"source": "v39a_descriptive_fallback", "value": {"bias": bias}}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 319) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 320) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 321) def _load_state(state_path: str | Path | None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 322)     if state_path is None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 323)         return None, {"status": "DISABLED", "path": ""}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 324)     path = Path(state_path)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 325)     if not path.exists():
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 326)         return None, {"status": "INITIALIZED", "path": str(path)}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 327)     try:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 328)         raw = json.loads(path.read_text(encoding="utf-8"))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 329)     except (OSError, json.JSONDecodeError) as exc:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 330)         return None, {"status": "INVALID", "path": str(path), "error": type(exc).__name__}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 331)     if not isinstance(raw, dict) or raw.get("state_schema_version") != STATE_SCHEMA_VERSION:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 332)         return None, {"status": "INCOMPATIBLE", "path": str(path)}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 333)     return raw, {"status": "LOADED", "path": str(path)}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 334) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 335) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 336) def _advance_state(*, previous_state, state_load, cutoff, structure, zones, market_state, quality):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 337)     previous_cutoff = _parse_ts((previous_state or {}).get("last_cutoff_ts"))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 338)     invalid_future = previous_cutoff is not None and previous_cutoff > cutoff
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 339)     prior = None if invalid_future else previous_state
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 340)     prior_date = _parse_ts((prior or {}).get("market_day_utc"))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 341)     day_changed = prior_date is not None and prior_date.date() != cutoff.date()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 342)     gap_minutes = None
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 343)     if prior_date is not None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 344)         gap_minutes = int((cutoff - previous_cutoff).total_seconds() // 60) if previous_cutoff else None
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 345)     prior_zones = (prior or {}).get("liquidity_zones") or {}
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 346)     current_zones = zones if zones.get("available") else prior_zones
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 347)     carried = prior is not None
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 348)     rollover_count = int((prior or {}).get("daily_boundary", {}).get("rollover_count", 0)) + (1 if day_changed else 0)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 349)     continuity = "INVALID_FUTURE_STATE" if invalid_future else "CONTINUOUS_CARRY_FORWARD" if carried else "INITIALIZED"
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 350)     state_memory = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 351)         "state_schema_version": STATE_SCHEMA_VERSION,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 352)         "load_status": state_load.get("status"),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 353)         "previous_cutoff_ts": _format_ts(previous_cutoff) if previous_cutoff is not None else "",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 354)         "carried_forward": bool(carried),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 355)         "continuity": continuity,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 356)         "gap_minutes": gap_minutes,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 357)         "daily_boundary": {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 358)             "utc_day": cutoff.date().isoformat(),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 359)             "changed": bool(day_changed),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 360)             "previous_utc_day": prior_date.date().isoformat() if prior_date is not None else "",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 361)             "rollover_count": rollover_count,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 362)             "state_carried_across_boundary": bool(day_changed and carried),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 363)         },
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 364)         "state_source": "persisted_monitor_state" if carried else "initial_snapshot",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 365)         "invalid_future_state_discarded": bool(invalid_future),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 366)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 367)     next_state = {
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 368)         "state_schema_version": STATE_SCHEMA_VERSION,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 369)         "last_cutoff_ts": _format_ts(cutoff),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 370)         "market_day_utc": cutoff.date().isoformat(),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 371)         "carry_forward_count": int((prior or {}).get("carry_forward_count", 0)) + (1 if carried else 0),
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 372)         "daily_boundary": state_memory["daily_boundary"],
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 373)         "structure": structure,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 374)         "liquidity_zones": current_zones,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 375)         "market_state": market_state,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 376)         "quality": quality,
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 377)     }
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 378)     return state_memory, next_state
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 379) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 380) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 381) def _write_state(path: Path, state: Mapping[str, Any]) -> None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 382)     path.parent.mkdir(parents=True, exist_ok=True)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 383)     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 384)     try:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 385)         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 386)             json.dump(_json_safe(dict(state)), handle, indent=2, sort_keys=True)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 387)             handle.write("\n")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 388)             handle.flush()
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 389)             os.fsync(handle.fileno())
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 390)         os.replace(tmp_name, path)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 391)     finally:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 392)         if os.path.exists(tmp_name):
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 393)             os.unlink(tmp_name)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 394) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 395) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 396) def _parse_ts(value: Any) -> pd.Timestamp | None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 397)     if not value:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 398)         return None
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 399)     ts = pd.Timestamp(value)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 400)     if ts.tzinfo is None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 401)         return ts.tz_localize("UTC")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 402)     return ts.tz_convert("UTC")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 403) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 404) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 405) def _format_ts(value: Any) -> str:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 406)     ts = _parse_ts(value)
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 407)     if ts is None:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 408)         raise MonitorSnapshotV39AError("timestamp is required")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 409)     return ts.isoformat().replace("+00:00", "Z")
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 410) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 411) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 412) def _json_safe(value: Any) -> Any:
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 413)     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 414) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 415) 
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 416) __all__ = [
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 417)     "LOCAL_WINDOWS_MINUTES",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 418)     "MonitorSnapshotV39AError",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 419)     "SNAPSHOT_SCHEMA_VERSION",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 420)     "STATE_SCHEMA_VERSION",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 421)     "build_market_monitor_snapshot_v39a",
+1169a949 (Mykh-Ai 2026-09-11 19:48:00 +0200 422) ]

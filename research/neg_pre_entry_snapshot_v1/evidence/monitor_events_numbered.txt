@@ -1,0 +1,1027 @@
+     1	from __future__ import annotations
+     2	
+     3	import json
+     4	
+     5	import pandas as pd
+     6	
+     7	from market_monitor.score_instrumentation import PRECISION_TOO_WIDE, SCORE_INSTRUMENTATION_COLUMNS
+     8	from market_monitor.zone_registry import (
+     9	    LOCAL_CONTEXT_ACTIVE_FORWARD_ROLES,
+    10	    local_session_context_role,
+    11	)
+    12	
+    13	
+    14	APPROACH_THRESHOLD_FRACTION = 0.001
+    15	APPROACH_THRESHOLD_MIN_USD = 20.0
+    16	SWEEP_MIN_EXCURSION_FRACTION = 0.0002
+    17	SWEEP_MIN_EXCURSION_USD = 10.0
+    18	SWEEP_ACTIVITY_ZSCORE_THRESHOLD = 1.5
+    19	MARKET_MOVE_GROUP_WINDOW_MINUTES = 2
+    20	GROUPING_WINDOW_MODE = "ANCHORED_FIXED_WINDOW"
+    21	
+    22	EVENT_LOG_COLUMNS = [
+    23	    "event_id",
+    24	    "event_timestamp",
+    25	    "event_type",
+    26	    "zone_id",
+    27	    "side",
+    28	    "price_before",
+    29	    "event_high",
+    30	    "event_low",
+    31	    "event_close",
+    32	    "excursion_abs",
+    33	    "excursion_atr",
+    34	    "volume_zscore",
+    35	    "delta_zscore",
+    36	    "oi_change",
+    37	    "reaction_status",
+    38	    "market_move_id",
+    39	    "market_move_role",
+    40	    "market_move_event_count",
+    41	    "group_start_timestamp",
+    42	    "group_end_timestamp",
+    43	    "group_span_minutes",
+    44	    "grouping_window_mode",
+    45	    "evidence_json",
+    46	    "data_quality",
+    47	]
+    48	
+    49	MARKET_MOVE_GROUP_COLUMNS = [
+    50	    "market_move_id",
+    51	    "group_start_timestamp",
+    52	    "group_end_timestamp",
+    53	    "group_span_minutes",
+    54	    "grouping_window_minutes",
+    55	    "grouping_window_mode",
+    56	    "event_timestamp",
+    57	    "side",
+    58	    "primary_event_id",
+    59	    "primary_zone_id",
+    60	    "primary_selection_reason",
+    61	    "primary_selection_components_json",
+    62	    "event_count",
+    63	    "zone_ids",
+    64	    "event_ids",
+    65	    "min_zone_price_lower",
+    66	    "max_zone_price_upper",
+    67	    "representative_zone_price_mid",
+    68	    "max_excursion_abs",
+    69	    "max_volume_zscore",
+    70	    "max_abs_delta_zscore",
+    71	    "total_oi_change",
+    72	    "precision_statuses",
+    73	    "confidence_tiers",
+    74	    "data_quality",
+    75	    "evidence_json",
+    76	]
+    77	
+    78	LIFECYCLE_EVENT_TYPES = {
+    79	    "LIQUIDITY_ZONE_APPROACHED",
+    80	    "LIQUIDITY_ZONE_TOUCHED",
+    81	    "LIQUIDITY_ZONE_CROSSED_UNCLASSIFIED",
+    82	    "LIQUIDITY_ZONE_MERGED",
+    83	    "LIQUIDITY_ZONE_EXPIRED",
+    84	}
+    85	INTERPRETIVE_EVENT_TYPES = {
+    86	    "LIQUIDITY_SWEEP_UNRESOLVED",
+    87	}
+    88	ALLOWED_EVENT_TYPES = LIFECYCLE_EVENT_TYPES | INTERPRETIVE_EVENT_TYPES
+    89	EVENT_TYPE_ORDER = {
+    90	    "LIQUIDITY_ZONE_APPROACHED": 10,
+    91	    "LIQUIDITY_ZONE_TOUCHED": 20,
+    92	    "LIQUIDITY_ZONE_CROSSED_UNCLASSIFIED": 30,
+    93	    "LIQUIDITY_SWEEP_UNRESOLVED": 31,
+    94	    "LIQUIDITY_ZONE_MERGED": 40,
+    95	    "LIQUIDITY_ZONE_EXPIRED": 50,
+    96	}
+    97	
+    98	
+    99	def build_event_log(
+   100	    *,
+   101	    registry: pd.DataFrame,
+   102	    feed: pd.DataFrame,
+   103	    volume_delta_state: pd.DataFrame,
+   104	    previous_registry: pd.DataFrame | None = None,
+   105	) -> pd.DataFrame:
+   106	    if registry.empty or feed.empty:
+   107	        return pd.DataFrame(columns=EVENT_LOG_COLUMNS)
+   108	
+   109	    frame = feed.sort_values("Timestamp", kind="mergesort").reset_index(drop=True)
+   110	    run_start = frame["Timestamp"].min()
+   111	    run_end = frame["Timestamp"].max()
+   112	    previous_status = _previous_status_map(previous_registry)
+   113	    context = _context_map(volume_delta_state)
+   114	    events: list[dict[str, object]] = []
+   115	
+   116	    for _, row in registry.iterrows():
+   117	        zone = row.to_dict()
+   118	        events.extend(_interaction_events(zone, frame, previous_status, context))
+   119	        lifecycle_event = _registry_lifecycle_event(
+   120	            zone, run_start, run_end, previous_status, context
+   121	        )
+   122	        if lifecycle_event is not None:
+   123	            events.append(lifecycle_event)
+   124	
+   125	    if not events:
+   126	        return pd.DataFrame(columns=EVENT_LOG_COLUMNS)
+   127	    out = pd.DataFrame(events, columns=EVENT_LOG_COLUMNS)
+   128	    out = out[out["event_type"].isin(ALLOWED_EVENT_TYPES)].copy()
+   129	    out["_event_type_order"] = out["event_type"].map(EVENT_TYPE_ORDER).fillna(999)
+   130	    out = out.sort_values(
+   131	        ["event_timestamp", "zone_id", "_event_type_order", "event_type"],
+   132	        kind="mergesort",
+   133	    ).reset_index(drop=True)
+   134	    out["event_id"] = [f"event_{idx + 1:06d}" for idx in range(len(out))]
+   135	    out = assign_market_move_groups(out)
+   136	    return out[EVENT_LOG_COLUMNS]
+   137	
+   138	
+   139	def assign_market_move_groups(event_log: pd.DataFrame) -> pd.DataFrame:
+   140	    out = event_log.copy()
+   141	    if out.empty:
+   142	        return pd.DataFrame(columns=EVENT_LOG_COLUMNS)
+   143	    out["market_move_id"] = ""
+   144	    out["market_move_role"] = "NONE"
+   145	    out["market_move_event_count"] = 0
+   146	    out["group_start_timestamp"] = ""
+   147	    out["group_end_timestamp"] = ""
+   148	    out["group_span_minutes"] = ""
+   149	    out["grouping_window_mode"] = ""
+   150	    unresolved = out[out["event_type"] == "LIQUIDITY_SWEEP_UNRESOLVED"].copy()
+   151	    if unresolved.empty:
+   152	        return out[EVENT_LOG_COLUMNS]
+   153	
+   154	    groups: list[list[int]] = []
+   155	    for _, side_frame in unresolved.sort_values(
+   156	        ["side", "event_timestamp", "zone_id", "event_id"], kind="mergesort"
+   157	    ).groupby("side", sort=True):
+   158	        current: list[int] = []
+   159	        group_start_ts: pd.Timestamp | None = None
+   160	        for idx, row in side_frame.iterrows():
+   161	            event_ts = pd.Timestamp(row["event_timestamp"])
+   162	            if (
+   163	                current
+   164	                and group_start_ts is not None
+   165	                and event_ts - group_start_ts > pd.Timedelta(minutes=MARKET_MOVE_GROUP_WINDOW_MINUTES)
+   166	            ):
+   167	                groups.append(current)
+   168	                current = []
+   169	                group_start_ts = None
+   170	            if not current:
+   171	                group_start_ts = event_ts
+   172	            current.append(idx)
+   173	        if current:
+   174	            groups.append(current)
+   175	
+   176	    groups.sort(
+   177	        key=lambda idxs: (
+   178	            pd.Timestamp(out.loc[idxs[0], "event_timestamp"]),
+   179	            str(out.loc[idxs[0], "side"]),
+   180	            str(out.loc[idxs[0], "event_id"]),
+   181	        )
+   182	    )
+   183	    for group_number, idxs in enumerate(groups, start=1):
+   184	        group = out.loc[idxs].copy()
+   185	        first_ts = pd.Timestamp(group["event_timestamp"].map(pd.Timestamp).min())
+   186	        last_ts = pd.Timestamp(group["event_timestamp"].map(pd.Timestamp).max())
+   187	        span_minutes = _span_minutes(first_ts, last_ts)
+   188	        side = str(group.iloc[0]["side"])
+   189	        move_id = _market_move_id(first_ts, side, group_number)
+   190	        primary_idx = _primary_event_index(group)
+   191	        out.loc[idxs, "market_move_id"] = move_id
+   192	        out.loc[idxs, "market_move_event_count"] = len(idxs)
+   193	        out.loc[idxs, "market_move_role"] = "SECONDARY"
+   194	        out.loc[idxs, "group_start_timestamp"] = _format_ts(first_ts)
+   195	        out.loc[idxs, "group_end_timestamp"] = _format_ts(last_ts)
+   196	        out.loc[idxs, "group_span_minutes"] = span_minutes
+   197	        out.loc[idxs, "grouping_window_mode"] = GROUPING_WINDOW_MODE
+   198	        out.loc[primary_idx, "market_move_role"] = "PRIMARY"
+   199	    return out[EVENT_LOG_COLUMNS]
+   200	
+   201	
+   202	def build_market_move_groups(event_log: pd.DataFrame) -> pd.DataFrame:
+   203	    if event_log.empty or "market_move_id" not in event_log.columns:
+   204	        return pd.DataFrame(columns=MARKET_MOVE_GROUP_COLUMNS)
+   205	    grouped = event_log[
+   206	        (event_log["event_type"] == "LIQUIDITY_SWEEP_UNRESOLVED")
+   207	        & (event_log["market_move_id"].fillna("").astype(str) != "")
+   208	    ].copy()
+   209	    if grouped.empty:
+   210	        return pd.DataFrame(columns=MARKET_MOVE_GROUP_COLUMNS)
+   211	
+   212	    rows = []
+   213	    for _, group in grouped.groupby("market_move_id", sort=True):
+   214	        rows.append(_market_move_group_row(group))
+   215	    rows = sorted(
+   216	        rows,
+   217	        key=lambda row: (pd.Timestamp(row["event_timestamp"]), str(row["side"]), str(row["market_move_id"])),
+   218	    )
+   219	    return pd.DataFrame(rows, columns=MARKET_MOVE_GROUP_COLUMNS)
+   220	
+   221	
+   222	def event_stats(event_log: pd.DataFrame) -> dict[str, object]:
+   223	    if event_log.empty:
+   224	        return {
+   225	            "total": 0,
+   226	            "by_type": "none",
+   227	            "approached": 0,
+   228	            "touched": 0,
+   229	            "crossed_unclassified": 0,
+   230	            "merged": 0,
+   231	            "expired": 0,
+   232	            "unresolved_sweep": 0,
+   233	            "unresolved_sweep_by_side": "BUY_SIDE=0, SELL_SIDE=0",
+   234	            "unresolved_sweep_by_data_quality": "RAW=0, RECOVERED_DEGRADED=0",
+   235	            "crossed_without_sweep_evidence": 0,
+   236	            "grouped_market_move_count": 0,
+   237	            "multi_event_market_move_count": 0,
+   238	            "avg_unresolved_events_per_market_move": "0",
+   239	            "max_unresolved_events_per_market_move": 0,
+   240	            "max_group_span_minutes": "0",
+   241	            "groups_over_configured_window": 0,
+   242	            "grouping_window_mode": GROUPING_WINDOW_MODE,
+   243	        }
+   244	    counts = event_log["event_type"].value_counts().sort_index()
+   245	    unresolved = event_log[event_log["event_type"] == "LIQUIDITY_SWEEP_UNRESOLVED"]
+   246	    lifecycle = event_log[event_log["event_type"].isin(LIFECYCLE_EVENT_TYPES)]
+   247	    move_stats = _market_move_stats(unresolved)
+   248	    return {
+   249	        "total": len(lifecycle),
+   250	        "by_type": ", ".join(f"{name}={count}" for name, count in counts.items()),
+   251	        "approached": int((event_log["event_type"] == "LIQUIDITY_ZONE_APPROACHED").sum()),
+   252	        "touched": int((event_log["event_type"] == "LIQUIDITY_ZONE_TOUCHED").sum()),
+   253	        "crossed_unclassified": int(
+   254	            (event_log["event_type"] == "LIQUIDITY_ZONE_CROSSED_UNCLASSIFIED").sum()
+   255	        ),
+   256	        "merged": int((event_log["event_type"] == "LIQUIDITY_ZONE_MERGED").sum()),
+   257	        "expired": int((event_log["event_type"] == "LIQUIDITY_ZONE_EXPIRED").sum()),
+   258	        "unresolved_sweep": len(unresolved),
+   259	        "unresolved_sweep_by_side": _fixed_counts(unresolved, "side", ["BUY_SIDE", "SELL_SIDE"]),
+   260	        "unresolved_sweep_by_data_quality": _fixed_counts(
+   261	            unresolved, "data_quality", ["RAW", "RECOVERED_DEGRADED"]
+   262	        ),
+   263	        "crossed_without_sweep_evidence": _crossed_without_sweep_evidence(event_log),
+   264	        **move_stats,
+   265	    }
+   266	
+   267	
+   268	def _interaction_events(
+   269	    zone: dict[str, object],
+   270	    feed: pd.DataFrame,
+   271	    previous_status: dict[str, str],
+   272	    context: dict[str, dict[str, float]],
+   273	) -> list[dict[str, object]]:
+   274	    if str(zone.get("status", "")) in {"MERGED", "EXPIRED"}:
+   275	        return []
+   276	    first_seen = pd.Timestamp(zone["first_seen_at"])
+   277	    run_slice = feed[feed["Timestamp"] >= first_seen].copy()
+   278	    if run_slice.empty:
+   279	        return []
+   280	    if _consumed_before_or_at(zone, run_slice["Timestamp"].min()):
+   281	        return []
+   282	
+   283	    cross_row = _first_cross(zone, run_slice)
+   284	    touch_row = _first_touch(zone, run_slice)
+   285	    if cross_row is not None:
+   286	        cross_event = _market_event(
+   287	            zone=zone,
+   288	            event_type="LIQUIDITY_ZONE_CROSSED_UNCLASSIFIED",
+   289	            candle=cross_row,
+   290	            feed=feed,
+   291	            previous_status=previous_status,
+   292	            context=context,
+   293	            trigger="price_crossed_zone_far_side",
+   294	            excursion_abs=_cross_excursion(zone, cross_row),
+   295	            new_status="CROSSED_UNCLASSIFIED",
+   296	        )
+   297	        events = [cross_event]
+   298	        unresolved_event = _unresolved_sweep_event(
+   299	            zone=zone,
+   300	            candle=cross_row,
+   301	            feed=feed,
+   302	            previous_status=previous_status,
+   303	            context=context,
+   304	        )
+   305	        if unresolved_event is not None:
+   306	            events.append(unresolved_event)
+   307	        return events
+   308	
+   309	    if touch_row is not None:
+   310	        return [
+   311	            _market_event(
+   312	                zone=zone,
+   313	                event_type="LIQUIDITY_ZONE_TOUCHED",
+   314	                candle=touch_row,
+   315	                feed=feed,
+   316	                previous_status=previous_status,
+   317	                context=context,
+   318	                trigger="price_entered_zone_range",
+   319	                excursion_abs=0,
+   320	                new_status="TOUCHED",
+   321	            )
+   322	        ]
+   323	
+   324	    approach_row = _first_approach(zone, run_slice)
+   325	    if approach_row is not None:
+   326	        return [
+   327	            _market_event(
+   328	                zone=zone,
+   329	                event_type="LIQUIDITY_ZONE_APPROACHED",
+   330	                candle=approach_row,
+   331	                feed=feed,
+   332	                previous_status=previous_status,
+   333	                context=context,
+   334	                trigger="price_reached_approach_threshold_without_touch",
+   335	                excursion_abs=0,
+   336	                new_status="APPROACHED",
+   337	            )
+   338	        ]
+   339	    return []
+   340	
+   341	
+   342	def _unresolved_sweep_event(
+   343	    *,
+   344	    zone: dict[str, object],
+   345	    candle: pd.Series,
+   346	    feed: pd.DataFrame,
+   347	    previous_status: dict[str, str],
+   348	    context: dict[str, dict[str, float]],
+   349	) -> dict[str, object] | None:
+   350	    event_timestamp = pd.Timestamp(candle["Timestamp"])
+   351	    first_seen_at = pd.Timestamp(zone["first_seen_at"])
+   352	    if first_seen_at >= event_timestamp:
+   353	        return None
+   354	    if _consumed_before_or_at(zone, event_timestamp):
+   355	        return None
+   356	    if str(zone.get("precision_status", "")) == PRECISION_TOO_WIDE:
+   357	        return None
+   358	    if _non_fresh_role_before_or_at(zone, event_timestamp):
+   359	        return None
+   360	
+   361	    if _is_repeated_prior_cross_without_new_transition(
+   362	        zone=zone,
+   363	        candle=candle,
+   364	        feed=feed,
+   365	        previous_status=previous_status,
+   366	    ):
+   367	        return None
+   368	
+   369	    excursion_abs = _cross_excursion(zone, candle)
+   370	    min_excursion_abs = _min_sweep_excursion(zone)
+   371	    if excursion_abs <= 0 or excursion_abs < min_excursion_abs:
+   372	        return None
+   373	
+   374	    event_ts = _format_ts(event_timestamp)
+   375	    ctx = context.get(
+   376	        event_ts,
+   377	        {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0},
+   378	    )
+   379	    data_quality = _event_data_quality(zone, candle)
+   380	    activity_evidence = _activity_evidence(ctx, data_quality)
+   381	    if not activity_evidence:
+   382	        return None
+   383	
+   384	    evidence = {
+   385	        "activity_evidence": activity_evidence,
+   386	        "activity_passed": True,
+   387	        "candidate_evidence_status": "SUFFICIENT_UNRESOLVED",
+   388	        "confidence_score": int(float(zone.get("confidence_score", 0) or 0)),
+   389	        "confidence_tier": str(zone.get("confidence_tier", "")),
+   390	        "data_quality": data_quality,
+   391	        "delta_zscore": float(ctx["delta_zscore"]),
+   392	        "event_class": "LIQUIDITY_SWEEP_UNRESOLVED",
+   393	        "event_close": float(candle["ClosePrice"]),
+   394	        "event_high": float(candle["HiPrice"]),
+   395	        "event_low": float(candle["LowPrice"]),
+   396	        "event_timestamp": event_ts,
+   397	        "excursion_abs": float(excursion_abs),
+   398	        "excursion_passed": True,
+   399	        "first_seen_at": _format_ts(first_seen_at),
+   400	        "min_excursion_abs": float(min_excursion_abs),
+   401	        "oi_change": float(ctx["oi_change"]),
+   402	        "pre_existing_zone": True,
+   403	        "price_lower": float(zone["price_lower"]),
+   404	        "price_mid": float(zone["price_mid"]),
+   405	        "price_upper": float(zone["price_upper"]),
+   406	        "reaction_status": "UNRESOLVED",
+   407	        "side": str(zone["side"]),
+   408	        "active_forward": str(zone.get("active_forward", "")),
+   409	        "active_forward_role": str(zone.get("active_forward_role", "")),
+   410	        "accepted_above_at": str(zone.get("accepted_above_at", "")),
+   411	        "accepted_below_at": str(zone.get("accepted_below_at", "")),
+   412	        "consumption_status": str(zone.get("consumption_status", "")),
+   413	        "consumed_at": str(zone.get("consumed_at", "")),
+   414	        "failed_acceptance_count": int(float(zone.get("failed_acceptance_count", 0) or 0)),
+   415	        "first_sweep_at": str(zone.get("first_sweep_at", "")),
+   416	        "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+   417	        "source_timeframes": str(zone.get("source_timeframes", "")),
+   418	        "structural_zone_mode": str(zone.get("structural_zone_mode", "")),
+   419	        "volume_zscore": float(ctx["volume_zscore"]),
+   420	        "zone_behavior_state": str(zone.get("zone_behavior_state", "")),
+   421	        "zone_id": str(zone["zone_id"]),
+   422	        "zone_outer_lower": float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"]),
+   423	        "zone_outer_upper": float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"]),
+   424	        "zone_core_lower": float(zone.get("zone_core_lower", zone["price_lower"]) or zone["price_lower"]),
+   425	        "zone_core_upper": float(zone.get("zone_core_upper", zone["price_upper"]) or zone["price_upper"]),
+   426	        "zone_type": str(zone["zone_type"]),
+   427	        **_score_instrumentation_evidence(zone),
+   428	    }
+   429	    return {
+   430	        "event_id": "",
+   431	        "event_timestamp": event_ts,
+   432	        "event_type": "LIQUIDITY_SWEEP_UNRESOLVED",
+   433	        "zone_id": zone["zone_id"],
+   434	        "side": zone["side"],
+   435	        "price_before": _price_before(feed, event_timestamp),
+   436	        "event_high": float(candle["HiPrice"]),
+   437	        "event_low": float(candle["LowPrice"]),
+   438	        "event_close": float(candle["ClosePrice"]),
+   439	        "excursion_abs": float(excursion_abs),
+   440	        "excursion_atr": 0,
+   441	        "volume_zscore": ctx["volume_zscore"],
+   442	        "delta_zscore": ctx["delta_zscore"],
+   443	        "oi_change": ctx["oi_change"],
+   444	        "reaction_status": "UNRESOLVED",
+   445	        "evidence_json": _json(evidence),
+   446	        "data_quality": data_quality,
+   447	    }
+   448	
+   449	
+   450	def _registry_lifecycle_event(
+   451	    zone: dict[str, object],
+   452	    run_start: pd.Timestamp,
+   453	    run_end: pd.Timestamp,
+   454	    previous_status: dict[str, str],
+   455	    context: dict[str, dict[str, float]],
+   456	) -> dict[str, object] | None:
+   457	    status = str(zone.get("status", ""))
+   458	    if status not in {"MERGED", "EXPIRED"}:
+   459	        return None
+   460	    prior_status = previous_status.get(str(zone["zone_id"]), "")
+   461	    if prior_status == status:
+   462	        return None
+   463	    event_ts = pd.Timestamp(zone.get("last_updated_at") or zone.get("last_seen_at"))
+   464	    if event_ts < run_start or event_ts > run_end + pd.Timedelta(days=1):
+   465	        return None
+   466	    event_type = (
+   467	        "LIQUIDITY_ZONE_MERGED"
+   468	        if status == "MERGED"
+   469	        else "LIQUIDITY_ZONE_EXPIRED"
+   470	    )
+   471	    evidence = _base_evidence(
+   472	        zone=zone,
+   473	        previous_status=prior_status,
+   474	        new_status=status,
+   475	        trigger="registry_lifecycle_update",
+   476	        candle_timestamp=_format_ts(event_ts),
+   477	        candle_high=0,
+   478	        candle_low=0,
+   479	        candle_close=0,
+   480	        context={"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0},
+   481	    )
+   482	    if status == "MERGED":
+   483	        evidence["merged_from_zone_id"] = str(zone["zone_id"])
+   484	        evidence["merged_into_zone_id"] = str(zone.get("merged_into_zone_id", ""))
+   485	    else:
+   486	        evidence["age_days"] = int(float(zone.get("age_days", 0) or 0))
+   487	        evidence["max_zone_age_days"] = 7
+   488	        evidence["invalidation_reason"] = str(zone.get("invalidation_reason", ""))
+   489	    return {
+   490	        "event_id": "",
+   491	        "event_timestamp": _format_ts(event_ts),
+   492	        "event_type": event_type,
+   493	        "zone_id": zone["zone_id"],
+   494	        "side": zone["side"],
+   495	        "price_before": "",
+   496	        "event_high": "",
+   497	        "event_low": "",
+   498	        "event_close": "",
+   499	        "excursion_abs": 0,
+   500	        "excursion_atr": 0,
+   501	        "volume_zscore": 0,
+   502	        "delta_zscore": 0,
+   503	        "oi_change": 0,
+   504	        "reaction_status": "UNCLASSIFIED",
+   505	        "evidence_json": _json(evidence),
+   506	        "data_quality": zone["data_quality"],
+   507	    }
+   508	
+   509	
+   510	def _market_event(
+   511	    *,
+   512	    zone: dict[str, object],
+   513	    event_type: str,
+   514	    candle: pd.Series,
+   515	    feed: pd.DataFrame,
+   516	    previous_status: dict[str, str],
+   517	    context: dict[str, dict[str, float]],
+   518	    trigger: str,
+   519	    excursion_abs: float,
+   520	    new_status: str,
+   521	) -> dict[str, object]:
+   522	    event_ts = _format_ts(candle["Timestamp"])
+   523	    ctx = context.get(event_ts, {"volume_zscore": 0.0, "delta_zscore": 0.0, "oi_change": 0.0})
+   524	    evidence = _base_evidence(
+   525	        zone=zone,
+   526	        previous_status=previous_status.get(str(zone["zone_id"]), ""),
+   527	        new_status=new_status,
+   528	        trigger=trigger,
+   529	        candle_timestamp=event_ts,
+   530	        candle_high=float(candle["HiPrice"]),
+   531	        candle_low=float(candle["LowPrice"]),
+   532	        candle_close=float(candle["ClosePrice"]),
+   533	        context=ctx,
+   534	    )
+   535	    return {
+   536	        "event_id": "",
+   537	        "event_timestamp": event_ts,
+   538	        "event_type": event_type,
+   539	        "zone_id": zone["zone_id"],
+   540	        "side": zone["side"],
+   541	        "price_before": _price_before(feed, candle["Timestamp"]),
+   542	        "event_high": float(candle["HiPrice"]),
+   543	        "event_low": float(candle["LowPrice"]),
+   544	        "event_close": float(candle["ClosePrice"]),
+   545	        "excursion_abs": float(excursion_abs),
+   546	        "excursion_atr": 0,
+   547	        "volume_zscore": ctx["volume_zscore"],
+   548	        "delta_zscore": ctx["delta_zscore"],
+   549	        "oi_change": ctx["oi_change"],
+   550	        "reaction_status": "UNCLASSIFIED",
+   551	        "evidence_json": _json(evidence),
+   552	        "data_quality": zone["data_quality"],
+   553	    }
+   554	
+   555	
+   556	def _base_evidence(
+   557	    *,
+   558	    zone: dict[str, object],
+   559	    previous_status: str,
+   560	    new_status: str,
+   561	    trigger: str,
+   562	    candle_timestamp: str,
+   563	    candle_high: float,
+   564	    candle_low: float,
+   565	    candle_close: float,
+   566	    context: dict[str, float],
+   567	) -> dict[str, object]:
+   568	    return {
+   569	        "candle_close": candle_close,
+   570	        "candle_high": candle_high,
+   571	        "candle_low": candle_low,
+   572	        "candle_timestamp": candle_timestamp,
+   573	        "confidence_score": int(float(zone.get("confidence_score", 0) or 0)),
+   574	        "confidence_tier": str(zone.get("confidence_tier", "")),
+   575	        "data_quality": str(zone.get("data_quality", "")),
+   576	        "delta_zscore": float(context["delta_zscore"]),
+   577	        "new_status": new_status,
+   578	        "oi_change": float(context["oi_change"]),
+   579	        "previous_status": previous_status,
+   580	        "price_lower": float(zone["price_lower"]),
+   581	        "price_mid": float(zone["price_mid"]),
+   582	        "price_upper": float(zone["price_upper"]),
+   583	        "side": str(zone["side"]),
+   584	        "active_forward": str(zone.get("active_forward", "")),
+   585	        "active_forward_role": str(zone.get("active_forward_role", "")),
+   586	        "consumption_status": str(zone.get("consumption_status", "")),
+   587	        "consumed_at": str(zone.get("consumed_at", "")),
+   588	        "first_sweep_at": str(zone.get("first_sweep_at", "")),
+   589	        "htf_acceptance_count": int(float(zone.get("htf_acceptance_count", 0) or 0)),
+   590	        "htf_close_through_count": int(float(zone.get("htf_close_through_count", 0) or 0)),
+   591	        "htf_confirmation_timestamp": str(zone.get("htf_confirmation_timestamp", "")),
+   592	        "htf_level_type": str(zone.get("htf_level_type", "")),
+   593	        "htf_lifecycle_status": str(zone.get("htf_lifecycle_status", "")),
+   594	        "htf_origin_price": float(zone.get("htf_origin_price", 0) or 0),
+   595	        "htf_origin_timestamp": str(zone.get("htf_origin_timestamp", "")),
+   596	        "htf_sweep_count": int(float(zone.get("htf_sweep_count", 0) or 0)),
+   597	        "history_context_incomplete": str(zone.get("history_context_incomplete", "")),
+   598	        "history_context_start": str(zone.get("history_context_start", "")),
+   599	        "m1_interaction_count": int(float(zone.get("m1_interaction_count", 0) or 0)),
+   600	        "resweep_count": int(float(zone.get("resweep_count", 0) or 0)),
+   601	        "source_timeframe_primary": str(zone.get("source_timeframe_primary", "")),
+   602	        "source_timeframes": str(zone.get("source_timeframes", "")),
+   603	        "structural_zone_mode": str(zone.get("structural_zone_mode", "")),
+   604	        "sweep_importance_class": str(zone.get("sweep_importance_class", "")),
+   605	        "trigger": trigger,
+   606	        "volume_zscore": float(context["volume_zscore"]),
+   607	        "zone_behavior_state": str(zone.get("zone_behavior_state", "")),
+   608	        "zone_id": str(zone["zone_id"]),
+   609	        "zone_type": str(zone["zone_type"]),
+   610	        **_score_instrumentation_evidence(zone),
+   611	    }
+   612	
+   613	
+   614	def _first_cross(zone: dict[str, object], feed: pd.DataFrame) -> pd.Series | None:
+   615	    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+   616	    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+   617	    if zone["side"] == "BUY_SIDE":
+   618	        crossed = feed[feed["HiPrice"] > upper]
+   619	    else:
+   620	        crossed = feed[feed["LowPrice"] < lower]
+   621	    if crossed.empty:
+   622	        return None
+   623	    return crossed.iloc[0]
+   624	
+   625	
+   626	def _first_touch(zone: dict[str, object], feed: pd.DataFrame) -> pd.Series | None:
+   627	    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+   628	    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+   629	    if zone["side"] == "BUY_SIDE":
+   630	        touched = feed[(feed["HiPrice"] >= lower) & (feed["HiPrice"] <= upper)]
+   631	    else:
+   632	        touched = feed[(feed["LowPrice"] <= upper) & (feed["LowPrice"] >= lower)]
+   633	    if touched.empty:
+   634	        return None
+   635	    return touched.iloc[0]
+   636	
+   637	
+   638	def _first_approach(zone: dict[str, object], feed: pd.DataFrame) -> pd.Series | None:
+   639	    latest_close = float(feed.iloc[-1]["ClosePrice"])
+   640	    threshold = max(APPROACH_THRESHOLD_MIN_USD, latest_close * APPROACH_THRESHOLD_FRACTION)
+   641	    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+   642	    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+   643	    if zone["side"] == "BUY_SIDE":
+   644	        approached = feed[(feed["HiPrice"] >= lower - threshold) & (feed["HiPrice"] < lower)]
+   645	    else:
+   646	        approached = feed[(feed["LowPrice"] <= upper + threshold) & (feed["LowPrice"] > upper)]
+   647	    if approached.empty:
+   648	        return None
+   649	    return approached.iloc[0]
+   650	
+   651	
+   652	def _cross_excursion(zone: dict[str, object], candle: pd.Series) -> float:
+   653	    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+   654	    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+   655	    if zone["side"] == "BUY_SIDE":
+   656	        return max(0.0, float(candle["HiPrice"]) - upper)
+   657	    return max(0.0, lower - float(candle["LowPrice"]))
+   658	
+   659	
+   660	def _min_sweep_excursion(zone: dict[str, object]) -> float:
+   661	    return max(SWEEP_MIN_EXCURSION_USD, float(zone["price_mid"]) * SWEEP_MIN_EXCURSION_FRACTION)
+   662	
+   663	
+   664	def _activity_evidence(ctx: dict[str, float], data_quality: str) -> list[str]:
+   665	    if data_quality != "RAW":
+   666	        return []
+   667	    evidence = []
+   668	    if float(ctx["volume_zscore"]) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD:
+   669	        evidence.append("volume_zscore")
+   670	    if abs(float(ctx["delta_zscore"])) >= SWEEP_ACTIVITY_ZSCORE_THRESHOLD:
+   671	        evidence.append("delta_zscore")
+   672	    if abs(float(ctx["oi_change"])) > 0:
+   673	        evidence.append("oi_change")
+   674	    return evidence
+   675	
+   676	
+   677	def _event_data_quality(zone: dict[str, object], candle: pd.Series) -> str:
+   678	    values = {str(zone.get("data_quality", "")), str(candle.get("DataQuality", ""))}
+   679	    if values == {"RAW"}:
+   680	        return "RAW"
+   681	    if "RECOVERED_DEGRADED" in values:
+   682	        return "RECOVERED_DEGRADED"
+   683	    return sorted(value for value in values if value)[0] if any(values) else "RAW"
+   684	
+   685	
+   686	def _consumed_before_or_at(zone: dict[str, object], timestamp) -> bool:
+   687	    if str(zone.get("consumption_status", "")) not in {"CONSUMED", "CHOPPED_THROUGH", "EXPIRED"}:
+   688	        return False
+   689	    consumed_at = str(zone.get("consumed_at", "") or "")
+   690	    if not consumed_at:
+   691	        return True
+   692	    return pd.Timestamp(consumed_at) <= pd.Timestamp(timestamp)
+   693	
+   694	
+   695	def _non_fresh_role_before_or_at(zone: dict[str, object], timestamp) -> bool:
+   696	    role = str(zone.get("active_forward_role", "") or "FRESH_LIQUIDITY")
+   697	    if role in LOCAL_CONTEXT_ACTIVE_FORWARD_ROLES:
+   698	        return True
+   699	    if role == "FRESH_LIQUIDITY" and local_session_context_role(zone):
+   700	        return True
+   701	    if role not in {"AUDIT_ONLY", "INACTIVE"}:
+   702	        return False
+   703	    first_sweep_at = str(zone.get("first_sweep_at", "") or "")
+   704	    if not first_sweep_at:
+   705	        return True
+   706	    return pd.Timestamp(first_sweep_at) < pd.Timestamp(timestamp)
+   707	
+   708	
+   709	def _is_repeated_prior_cross_without_new_transition(
+   710	    *,
+   711	    zone: dict[str, object],
+   712	    candle: pd.Series,
+   713	    feed: pd.DataFrame,
+   714	    previous_status: dict[str, str],
+   715	) -> bool:
+   716	    if previous_status.get(str(zone["zone_id"])) != "CROSSED_UNCLASSIFIED":
+   717	        return False
+   718	    previous_rows = feed[feed["Timestamp"] < pd.Timestamp(candle["Timestamp"])]
+   719	    if previous_rows.empty:
+   720	        return True
+   721	    lower = float(zone.get("zone_outer_lower", zone["price_lower"]) or zone["price_lower"])
+   722	    upper = float(zone.get("zone_outer_upper", zone["price_upper"]) or zone["price_upper"])
+   723	    if zone["side"] == "BUY_SIDE":
+   724	        return bool((previous_rows["HiPrice"] > upper).all())
+   725	    return bool((previous_rows["LowPrice"] < lower).all())
+   726	
+   727	
+   728	def _price_before(feed: pd.DataFrame, timestamp) -> float | str:
+   729	    previous = feed[feed["Timestamp"] < pd.Timestamp(timestamp)]
+   730	    if previous.empty:
+   731	        return ""
+   732	    return float(previous.iloc[-1]["ClosePrice"])
+   733	
+   734	
+   735	def _previous_status_map(previous_registry: pd.DataFrame | None) -> dict[str, str]:
+   736	    if previous_registry is None or previous_registry.empty:
+   737	        return {}
+   738	    return {
+   739	        str(row["zone_id"]): str(row["status"])
+   740	        for _, row in previous_registry.iterrows()
+   741	    }
+   742	
+   743	
+   744	def _context_map(volume_delta_state: pd.DataFrame) -> dict[str, dict[str, float]]:
+   745	    if volume_delta_state.empty:
+   746	        return {}
+   747	    return {
+   748	        str(row["timestamp"]): {
+   749	            "volume_zscore": float(row["volume_zscore"]),
+   750	            "delta_zscore": float(row["delta_zscore"]),
+   751	            "oi_change": float(row["oi_change"]),
+   752	        }
+   753	        for _, row in volume_delta_state.iterrows()
+   754	    }
+   755	
+   756	
+   757	def _fixed_counts(frame: pd.DataFrame, column: str, values: list[str]) -> str:
+   758	    counts = frame[column].value_counts() if not frame.empty else {}
+   759	    return ", ".join(f"{value}={int(counts.get(value, 0))}" for value in values)
+   760	
+   761	
+   762	def _crossed_without_sweep_evidence(event_log: pd.DataFrame) -> int:
+   763	    crossed = event_log[event_log["event_type"] == "LIQUIDITY_ZONE_CROSSED_UNCLASSIFIED"]
+   764	    unresolved = event_log[event_log["event_type"] == "LIQUIDITY_SWEEP_UNRESOLVED"]
+   765	    unresolved_keys = {
+   766	        (str(row["event_timestamp"]), str(row["zone_id"]))
+   767	        for _, row in unresolved.iterrows()
+   768	    }
+   769	    return int(
+   770	        sum(
+   771	            (str(row["event_timestamp"]), str(row["zone_id"])) not in unresolved_keys
+   772	            for _, row in crossed.iterrows()
+   773	        )
+   774	    )
+   775	
+   776	
+   777	def _market_move_stats(unresolved: pd.DataFrame) -> dict[str, object]:
+   778	    if unresolved.empty or "market_move_id" not in unresolved.columns:
+   779	        return {
+   780	            "grouped_market_move_count": 0,
+   781	            "multi_event_market_move_count": 0,
+   782	            "avg_unresolved_events_per_market_move": "0",
+   783	            "max_unresolved_events_per_market_move": 0,
+   784	            "max_group_span_minutes": "0",
+   785	            "groups_over_configured_window": 0,
+   786	            "grouping_window_mode": GROUPING_WINDOW_MODE,
+   787	        }
+   788	    moves = unresolved[unresolved["market_move_id"].fillna("").astype(str) != ""]
+   789	    if moves.empty:
+   790	        return {
+   791	            "grouped_market_move_count": 0,
+   792	            "multi_event_market_move_count": 0,
+   793	            "avg_unresolved_events_per_market_move": "0",
+   794	            "max_unresolved_events_per_market_move": 0,
+   795	            "max_group_span_minutes": "0",
+   796	            "groups_over_configured_window": 0,
+   797	            "grouping_window_mode": GROUPING_WINDOW_MODE,
+   798	        }
+   799	    counts = moves.groupby("market_move_id", sort=True).size()
+   800	    spans = (
+   801	        pd.to_numeric(moves.get("group_span_minutes", ""), errors="coerce")
+   802	        .groupby(moves["market_move_id"])
+   803	        .max()
+   804	    )
+   805	    max_span = 0.0 if spans.empty else float(spans.max())
+   806	    return {
+   807	        "grouped_market_move_count": int(len(counts)),
+   808	        "multi_event_market_move_count": int((counts > 1).sum()),
+   809	        "avg_unresolved_events_per_market_move": f"{float(counts.mean()):.6g}",
+   810	        "max_unresolved_events_per_market_move": int(counts.max()),
+   811	        "max_group_span_minutes": f"{max_span:.6g}",
+   812	        "groups_over_configured_window": int((spans > MARKET_MOVE_GROUP_WINDOW_MINUTES).sum()),
+   813	        "grouping_window_mode": GROUPING_WINDOW_MODE,
+   814	    }
+   815	
+   816	
+   817	def _market_move_group_row(group: pd.DataFrame) -> dict[str, object]:
+   818	    group = group.sort_values(["event_timestamp", "zone_id", "event_id"], kind="mergesort")
+   819	    primary = group[group["market_move_role"] == "PRIMARY"]
+   820	    primary_row = primary.iloc[0] if not primary.empty else group.iloc[0]
+   821	    group_start_ts = pd.Timestamp(group["event_timestamp"].map(pd.Timestamp).min())
+   822	    group_end_ts = pd.Timestamp(group["event_timestamp"].map(pd.Timestamp).max())
+   823	    group_span_minutes = _span_minutes(group_start_ts, group_end_ts)
+   824	    evidence = [_event_evidence(row) for _, row in group.iterrows()]
+   825	    lowers = [_float_or_none(item.get("price_lower", "")) for item in evidence]
+   826	    uppers = [_float_or_none(item.get("price_upper", "")) for item in evidence]
+   827	    mids = [_float_or_none(item.get("price_mid", "")) for item in evidence]
+   828	    representative_mid = _float_or_none(_event_evidence(primary_row).get("price_mid", ""))
+   829	    if representative_mid is None:
+   830	        representative_mid = next((value for value in mids if value is not None), 0.0)
+   831	    precision_statuses = _pipe_unique(str(item.get("precision_status", "")) for item in evidence)
+   832	    confidence_tiers = _pipe_unique(str(item.get("confidence_tier", "")) for item in evidence)
+   833	    data_quality = _pipe_unique(str(value) for value in group["data_quality"])
+   834	    selection_reason, selection_components = _primary_selection_diagnostics(group, primary_row.name)
+   835	    row = {
+   836	        "market_move_id": str(primary_row["market_move_id"]),
+   837	        "group_start_timestamp": _format_ts(group_start_ts),
+   838	        "group_end_timestamp": _format_ts(group_end_ts),
+   839	        "group_span_minutes": group_span_minutes,
+   840	        "grouping_window_minutes": MARKET_MOVE_GROUP_WINDOW_MINUTES,
+   841	        "grouping_window_mode": GROUPING_WINDOW_MODE,
+   842	        "event_timestamp": _format_ts(group_start_ts),
+   843	        "side": str(primary_row["side"]),
+   844	        "primary_event_id": str(primary_row["event_id"]),
+   845	        "primary_zone_id": str(primary_row["zone_id"]),
+   846	        "primary_selection_reason": selection_reason,
+   847	        "primary_selection_components_json": _json(selection_components),
+   848	        "event_count": len(group),
+   849	        "zone_ids": "|".join(str(value) for value in group["zone_id"]),
+   850	        "event_ids": "|".join(str(value) for value in group["event_id"]),
+   851	        "min_zone_price_lower": min((value for value in lowers if value is not None), default=0.0),
+   852	        "max_zone_price_upper": max((value for value in uppers if value is not None), default=0.0),
+   853	        "representative_zone_price_mid": representative_mid,
+   854	        "max_excursion_abs": _numeric_max(group, "excursion_abs"),
+   855	        "max_volume_zscore": _numeric_max(group, "volume_zscore"),
+   856	        "max_abs_delta_zscore": _numeric_abs_max(group, "delta_zscore"),
+   857	        "total_oi_change": _numeric_sum(group, "oi_change"),
+   858	        "precision_statuses": precision_statuses,
+   859	        "confidence_tiers": confidence_tiers,
+   860	        "data_quality": data_quality,
+   861	    }
+   862	    row["evidence_json"] = _json(
+   863	        {
+   864	            "event_count": int(row["event_count"]),
+   865	            "event_ids": str(row["event_ids"]),
+   866	            "group_end_timestamp": str(row["group_end_timestamp"]),
+   867	            "group_span_minutes": float(row["group_span_minutes"]),
+   868	            "group_start_timestamp": str(row["group_start_timestamp"]),
+   869	            "grouping_rule": "same_side_within_anchored_2_minute_window",
+   870	            "grouping_window_minutes": MARKET_MOVE_GROUP_WINDOW_MINUTES,
+   871	            "grouping_window_mode": GROUPING_WINDOW_MODE,
+   872	            "market_move_id": str(row["market_move_id"]),
+   873	            "primary_event_id": str(row["primary_event_id"]),
+   874	            "primary_selection_reason": str(row["primary_selection_reason"]),
+   875	            "primary_zone_id": str(row["primary_zone_id"]),
+   876	            "zone_ids": str(row["zone_ids"]),
+   877	        }
+   878	    )
+   879	    return row
+   880	
+   881	
+   882	def _primary_event_index(group: pd.DataFrame) -> int:
+   883	    scored = group.copy()
+   884	    scored["_confidence_score"] = scored.apply(_event_confidence_score, axis=1)
+   885	    scored["_zone_width_pct"] = scored.apply(_event_zone_width_pct, axis=1)
+   886	    scored["_zone_id_sort"] = scored["zone_id"].astype(str)
+   887	    scored["_event_id_sort"] = scored["event_id"].astype(str)
+   888	    scored = scored.sort_values(
+   889	        [
+   890	            "_confidence_score",
+   891	            "excursion_abs",
+   892	            "_zone_width_pct",
+   893	            "_zone_id_sort",
+   894	            "_event_id_sort",
+   895	        ],
+   896	        ascending=[False, False, True, True, True],
+   897	        kind="mergesort",
+   898	    )
+   899	    return int(scored.index[0])
+   900	
+   901	
+   902	def _primary_selection_diagnostics(group: pd.DataFrame, primary_idx: int) -> tuple[str, dict[str, object]]:
+   903	    scored = group.copy()
+   904	    scored["_confidence_score"] = scored.apply(_event_confidence_score, axis=1)
+   905	    scored["_zone_width_pct"] = scored.apply(_event_zone_width_pct, axis=1)
+   906	    selected = scored.loc[primary_idx]
+   907	    reason = "highest_confidence_score"
+   908	    tie_breakers: list[str] = []
+   909	
+   910	    confidence_peers = scored[scored["_confidence_score"] == selected["_confidence_score"]]
+   911	    if len(confidence_peers) > 1:
+   912	        tie_breakers.append("highest_excursion_abs")
+   913	        excursion_peers = confidence_peers[
+   914	            pd.to_numeric(confidence_peers["excursion_abs"], errors="coerce")
+   915	            == float(selected["excursion_abs"])
+   916	        ]
+   917	        reason = "highest_excursion_abs_tiebreak"
+   918	        if len(excursion_peers) > 1:
+   919	            tie_breakers.append("narrowest_zone")
+   920	            width_peers = excursion_peers[
+   921	                excursion_peers["_zone_width_pct"] == selected["_zone_width_pct"]
+   922	            ]
+   923	            reason = "narrowest_zone_tiebreak"
+   924	            if len(width_peers) > 1:
+   925	                tie_breakers.append("zone_id")
+   926	                zone_peers = width_peers[
+   927	                    width_peers["zone_id"].astype(str) == str(selected["zone_id"])
+   928	                ]
+   929	                reason = "zone_id_tiebreak"
+   930	                if len(zone_peers) > 1:
+   931	                    tie_breakers.append("event_id")
+   932	                    reason = "event_id_tiebreak"
+   933	
+   934	    components = {
+   935	        "selected_confidence_score": float(selected["_confidence_score"]),
+   936	        "selected_event_id": str(selected["event_id"]),
+   937	        "selected_excursion_abs": float(selected["excursion_abs"]),
+   938	        "selected_zone_id": str(selected["zone_id"]),
+   939	        "selected_zone_width_pct": float(selected["_zone_width_pct"]),
+   940	        "tie_breakers_used": tie_breakers,
+   941	    }
+   942	    return reason, components
+   943	
+   944	
+   945	def _event_confidence_score(row: pd.Series) -> float:
+   946	    evidence = _event_evidence(row)
+   947	    return _float_or_none(evidence.get("confidence_score", "")) or 0.0
+   948	
+   949	
+   950	def _event_zone_width_pct(row: pd.Series) -> float:
+   951	    evidence = _event_evidence(row)
+   952	    value = _float_or_none(evidence.get("zone_width_pct", ""))
+   953	    if value is not None:
+   954	        return value
+   955	    lower = _float_or_none(evidence.get("price_lower", ""))
+   956	    upper = _float_or_none(evidence.get("price_upper", ""))
+   957	    mid = _float_or_none(evidence.get("price_mid", ""))
+   958	    if lower is None or upper is None or not mid:
+   959	        return float("inf")
+   960	    return abs(upper - lower) / abs(mid) * 100
+   961	
+   962	
+   963	def _event_evidence(row: pd.Series) -> dict[str, object]:
+   964	    try:
+   965	        return json.loads(str(row.get("evidence_json", "{}")))
+   966	    except json.JSONDecodeError:
+   967	        return {}
+   968	
+   969	
+   970	def _market_move_id(first_ts: pd.Timestamp, side: str, group_number: int) -> str:
+   971	    compact_ts = _format_ts(first_ts).replace("-", "").replace(":", "").replace("Z", "")
+   972	    compact_ts = compact_ts.replace("T", "_")
+   973	    return f"move_{compact_ts}_{side}_{group_number:06d}"
+   974	
+   975	
+   976	def _float_or_none(value) -> float | None:
+   977	    try:
+   978	        if value == "":
+   979	            return None
+   980	        parsed = float(value)
+   981	    except (TypeError, ValueError):
+   982	        return None
+   983	    if pd.isna(parsed):
+   984	        return None
+   985	    return parsed
+   986	
+   987	
+   988	def _numeric_max(frame: pd.DataFrame, column: str) -> float:
+   989	    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+   990	    return 0.0 if values.empty else float(values.max())
+   991	
+   992	
+   993	def _numeric_abs_max(frame: pd.DataFrame, column: str) -> float:
+   994	    values = pd.to_numeric(frame[column], errors="coerce").dropna().abs()
+   995	    return 0.0 if values.empty else float(values.max())
+   996	
+   997	
+   998	def _numeric_sum(frame: pd.DataFrame, column: str) -> float:
+   999	    return float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
+  1000	
+  1001	
+  1002	def _span_minutes(start: pd.Timestamp, end: pd.Timestamp) -> float:
+  1003	    return float((end - start).total_seconds() / 60)
+  1004	
+  1005	
+  1006	def _pipe_unique(values) -> str:
+  1007	    out: list[str] = []
+  1008	    for value in values:
+  1009	        if value and value not in out:
+  1010	            out.append(value)
+  1011	    return "|".join(out)
+  1012	
+  1013	
+  1014	def _format_ts(value) -> str:
+  1015	    return pd.Timestamp(value).tz_convert("UTC").isoformat().replace("+00:00", "Z")
+  1016	
+  1017	
+  1018	def _json(payload: dict[str, object]) -> str:
+  1019	    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+  1020	
+  1021	
+  1022	def _score_instrumentation_evidence(zone: dict[str, object]) -> dict[str, object]:
+  1023	    return {
+  1024	        column: zone.get(column, "")
+  1025	        for column in SCORE_INSTRUMENTATION_COLUMNS
+  1026	        if column in zone
+  1027	    }
