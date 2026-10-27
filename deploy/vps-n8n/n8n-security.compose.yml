@@ -1,0 +1,24 @@
+# Apply with the existing private VPS Compose file; do not run as a standalone stack.
+# Requires Docker Compose >= 2.24.4 for !override.
+services:
+  n8n:
+    # Preserve the already deployed 1.122.5 image; this is not an n8n upgrade.
+    image: n8nio/n8n:1.122.5@sha256:1e8b43a3f6b41a0d3942c5207a1c3cc8aaa65430140998d3a2ff34b5e0666451
+    ports: !override
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_HOST: n8n.zevsflow.sk
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://n8n.zevsflow.sk
+      WEBHOOK_URL: https://n8n.zevsflow.sk/
+      N8N_PROXY_HOPS: "1"
+      N8N_SECURE_COOKIE: "true"
+      # These obsolete Basic Auth variables do not protect n8n 1.x.
+      N8N_BASIC_AUTH_ACTIVE: null
+      N8N_BASIC_AUTH_USER: null
+      N8N_BASIC_AUTH_PASSWORD: null
+  buyer:
+    environment:
+      # Keep the existing webhook path in a root-only deployment env file.
+      N8N_WEBHOOK_URL: ${BUYER_N8N_WEBHOOK_URL:?Set the existing private http://n8n:5678/webhook/ URL}
