@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - direct /app/delta_scout.py execution
 VALID_MODES = {"off", "shadow", "veto"}
 STATE_SCHEMA = "deltascout_loss_filter_state_v1"
 REAL_VALUES = {"0", "false", "no", "n"}
+ARCHIVE_ROUNDING_TOLERANCE = 0.005001
 
 
 @dataclass(frozen=True)
@@ -315,7 +316,7 @@ class LossAvoidanceRuntimeEvaluator:
         if missing:
             self._peak_history_status = "ARCHIVE_INCOMPLETE"
             # An old cache does not prove that events during downtime were
-            # recorded. Keep A untrusted until archive and cache reconcile.
+            # recorded. Recovery needs the archive for the required dates.
             self._state_error = self._state_error or (
                 "ARCHIVE_BOOTSTRAP_INCOMPLETE:" + ",".join(missing)
             )
@@ -362,24 +363,11 @@ class LossAvoidanceRuntimeEvaluator:
             self._peak_history_status = "ARCHIVE_INVALID"
             return False
 
-        # State contains full-precision deltas; archive records round to 2 dp.
-        # Match occurrences one-to-one so a restart cannot count a single
-        # extrema twice merely because the two representations differ.
+        # Event identity is timestamp + side, not the precision of its delta.
+        # Older bootstraps could persist both rounded and precise versions.
         prior = self._dedupe_and_prune(self._peaks, cutoff)
         archived = self._dedupe_and_prune(archive_peaks, cutoff)
-        unmatched = list(prior)
-        merged: list[PeakHistoryEvent] = []
-        for observed in archived:
-            match = next((index for index, stored in enumerate(unmatched)
-                          if stored.event_ts_utc == observed.event_ts_utc
-                          and stored.side == observed.side
-                          and abs(stored.abs_delta - observed.abs_delta) <= 0.005001), None)
-            merged.append(unmatched.pop(match) if match is not None else observed)
-        if unmatched:
-            self._state_error = "ARCHIVE_BOOTSTRAP_STATE_MISMATCH:unarchived_cached_events"
-            self._peak_history_status = "ARCHIVE_INVALID"
-            return False
-        self._peaks = self._dedupe_and_prune(merged, cutoff)
+        self._peaks = self._merge_peak_history(archived, prior)
         self._tracking_started_at_utc = min(self._tracking_started_at_utc, lower)
         self._state_error = None
         if not self._persist_state():
@@ -390,11 +378,33 @@ class LossAvoidanceRuntimeEvaluator:
 
     def _dedupe_and_prune(self, peaks: Iterable[PeakHistoryEvent], cutoff: datetime) -> list[PeakHistoryEvent]:
         lower = cutoff - timedelta(hours=24)
-        unique: dict[tuple[datetime, str, float], PeakHistoryEvent] = {}
+        unique: dict[tuple[datetime, str], PeakHistoryEvent] = {}
         for peak in peaks:
             if lower <= peak.event_ts_utc <= cutoff:
-                unique[(peak.event_ts_utc, peak.side, peak.abs_delta)] = peak
-        return sorted(unique.values(), key=lambda item: (item.event_ts_utc, item.side, item.abs_delta))
+                key = (peak.event_ts_utc, peak.side)
+                stored = unique.get(key)
+                # Prefer a full-precision representation regardless of whether
+                # the old archive rounded its value up or down.
+                if stored is None or stored.abs_delta == round(stored.abs_delta, 2) or peak.abs_delta != round(peak.abs_delta, 2):
+                    unique[key] = peak
+        return sorted(unique.values(), key=lambda item: (item.event_ts_utc, item.side))
+
+    def _merge_peak_history(
+        self, archived: list[PeakHistoryEvent], cached: list[PeakHistoryEvent]
+    ) -> list[PeakHistoryEvent]:
+        """Backfill cached history by event identity, retaining cache-only peaks.
+
+        Delta disagreement chooses a value source; it never invalidates history
+        or creates an additional event. Timestamp + side is the stable identity;
+        archive sequence numbers restart with the detector and are not IDs.
+        """
+        merged = {(peak.event_ts_utc, peak.side): peak for peak in cached}
+        for observed in archived:
+            key = (observed.event_ts_utc, observed.side)
+            stored = merged.get(key)
+            if stored is None or abs(stored.abs_delta - observed.abs_delta) > ARCHIVE_ROUNDING_TOLERANCE:
+                merged[key] = observed
+        return sorted(merged.values(), key=lambda item: (item.event_ts_utc, item.side))
 
     def _persist_state(self) -> bool:
         path = self.config.state_path
@@ -441,10 +451,11 @@ class LossAvoidanceRuntimeEvaluator:
         return len(values), percentile
 
     def _recover_history_if_complete(self, cutoff: datetime) -> bool:
-        """Clear a history fault only after the current 24h archive agrees.
+        """Recover a history fault by backfilling the current 24h archive.
 
-        Archive deltas are rounded to two decimal places; compare to the
-        full-precision state with half-cent tolerance, never fabricate peaks.
+        Merge real events by timestamp + side, tolerating repeated numeric
+        representations and retaining cached events absent from research logs.
+        Healthy evaluations return before opening any archive files.
         An ambiguous local time is safe to ignore only if both possible UTC
         instants lie outside the current interval.
         """
@@ -456,7 +467,7 @@ class LossAvoidanceRuntimeEvaluator:
                  for day in _dates_inclusive(lower.astimezone(zone).date(), cutoff.astimezone(zone).date())]
         if any(not path.exists() for path in paths):
             return False
-        archived: dict[tuple[datetime, str], list[float]] = {}
+        archive_peaks: list[PeakHistoryEvent] = []
         try:
             for path in paths:
                 with path.open("r", encoding="utf-8-sig") as handle:
@@ -480,21 +491,15 @@ class LossAvoidanceRuntimeEvaluator:
                         side = "LONG" if event == "DELTA_MAX" else "SHORT"
                         if str(row.get("kind") or side).upper() != side:
                             return False
-                        archived.setdefault((ts, side), []).append(abs(_finite(row.get("delta"))))
-            cached: dict[tuple[datetime, str], list[float]] = {}
-            for peak in self._peaks:
-                if lower <= peak.event_ts_utc <= cutoff:
-                    cached.setdefault((peak.event_ts_utc, peak.side), []).append(peak.abs_delta)
-            if archived.keys() != cached.keys():
-                return False
-            for key, expected in archived.items():
-                actual = sorted(cached[key])
-                expected.sort()
-                if len(expected) != len(actual) or any(abs(a - b) > 0.005001 for a, b in zip(expected, actual)):
-                    return False
+                        archive_peaks.append(PeakHistoryEvent(ts, side, abs(_finite(row.get("delta")))))
+            archived = self._dedupe_and_prune(archive_peaks, cutoff)
+            cached = self._dedupe_and_prune(self._peaks, cutoff)
             previous_tracking = self._tracking_started_at_utc
+            previous_peaks = self._peaks
+            self._peaks = self._merge_peak_history(archived, cached)
             self._tracking_started_at_utc = min(previous_tracking, lower)
             if not self._persist_state():
+                self._peaks = previous_peaks
                 self._tracking_started_at_utc = previous_tracking
                 return False
             self._state_error = None

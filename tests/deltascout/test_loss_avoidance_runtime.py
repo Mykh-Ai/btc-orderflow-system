@@ -277,7 +277,7 @@ def test_runtime_timestamp_handles_dst_and_rejects_ambiguous_local_minute() -> N
         parse_runtime_timestamp("2026-10-25 02:30:00", "Europe/Bratislava")
 
 
-def test_old_fault_recovers_only_after_current_archive_matches(tmp_path: Path) -> None:
+def test_old_fault_recovers_from_current_archive(tmp_path: Path) -> None:
     cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff - timedelta(hours=1), "LONG", 20.0)])
@@ -292,19 +292,53 @@ def test_old_fault_recovers_only_after_current_archive_matches(tmp_path: Path) -
     assert result.may_veto is True
 
 
-def test_missing_recent_archive_event_prevents_false_a_block(tmp_path: Path) -> None:
+def test_fault_recovery_backfills_archived_extrema_before_deciding(tmp_path: Path) -> None:
     cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
     _write_feed(config.enriched_feed_dir, cutoff=cutoff)
     evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
     assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
-    # A newly archived extrema is missing from in-memory history.
-    with (config.research_archive_dir / "2026-11-01.jsonl").open("a") as handle:
-        handle.write(json.dumps({"event":"DELTA_MAX","kind":"long","ts":"2026-11-01 06:30:00","delta":2}) + "\n")
+    # Two archived extrema missing from cache change A from BLOCK to PASS.
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[
+        (cutoff-timedelta(hours=1), "LONG", 20),
+        (cutoff-timedelta(hours=2), "LONG", 2),
+        (cutoff-timedelta(minutes=30), "LONG", 3),
+    ])
     result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
-    assert result.decision.component_a is None
-    assert result.fail_open_reason.startswith("STATE_RECORD_FAILED")
+    assert result.decision.component_a is False
+    assert result.same_side_peak_count_24h == 3
+    assert result.same_side_peak_percentile_24h == pytest.approx(200/3)
+    assert result.fail_open_reason is None
+    assert result.peak_history_status == "ARCHIVE_VERIFIED_RECOVERED"
+    assert len(json.loads(config.state_path.read_text())["peaks"]) == 3
+
+
+def test_archive_reads_only_on_history_fault_and_stop_after_recovery(tmp_path: Path, monkeypatch) -> None:
+    cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    opened = []
+    original_open = Path.open
+
+    def observe_open(path, *args, **kwargs):
+        if path.parent == config.research_archive_dir:
+            opened.append(path)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", observe_open)
+    for _ in range(3):
+        assert evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5).fail_open_reason is None
+    assert not opened
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    assert evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5).fail_open_reason is None
+    read_count = len(opened)
+    assert read_count == 2
+    for _ in range(3):
+        assert evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5).fail_open_reason is None
+    assert len(opened) == read_count
 
 
 def test_synthetic_b_does_not_cancel_known_a_veto(tmp_path: Path) -> None:
@@ -336,7 +370,7 @@ def test_ambiguous_extrema_in_active_window_remains_untrusted(tmp_path: Path) ->
     assert result.may_veto is True
 
 
-def test_recovery_requires_matching_deltas_and_successful_persist(tmp_path: Path, monkeypatch) -> None:
+def test_recovery_requires_successful_persist(tmp_path: Path, monkeypatch) -> None:
     cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
@@ -365,7 +399,7 @@ def test_restart_with_old_ambiguous_row_outside_window_recovers(tmp_path: Path) 
     assert result.decision.component_a is True and result.may_veto
 
 
-def test_recovery_requires_full_precision_delta_agreement(tmp_path: Path) -> None:
+def test_recovery_reconciles_delta_disagreement_from_archive(tmp_path: Path) -> None:
     cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
@@ -374,8 +408,11 @@ def test_recovery_requires_full_precision_delta_agreement(tmp_path: Path) -> Non
     assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
     evaluator._peaks = [type(evaluator._peaks[0])(evaluator._peaks[0].event_ts_utc, "LONG", 22)]
     result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
-    assert result.decision.component_a is None
-    assert result.fail_open_reason is not None
+    assert result.decision.component_a is True
+    assert result.fail_open_reason is None
+    assert result.peak_history_status == "ARCHIVE_VERIFIED_RECOVERED"
+    assert evaluator._peaks[0].abs_delta == 20
+    assert json.loads(config.state_path.read_text())["peaks"][0]["abs_delta"] == 20
 
 
 def test_incomplete_archive_cannot_make_stale_state_a_trustworthy(tmp_path: Path) -> None:
@@ -404,7 +441,84 @@ def test_bootstrap_merges_rounded_archive_and_precise_state_without_double_count
     assert result.peak_history_status == "ARCHIVE_BOOTSTRAPPED"
 
 
-def test_bootstrap_does_not_trust_unarchived_state_events(tmp_path: Path) -> None:
+@pytest.mark.parametrize("precise", [20.1236, 20.1264])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bootstrap_accepts_old_cache_precision_duplicates(tmp_path: Path, precise: float, reverse: bool) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    ts = cutoff - timedelta(hours=1)
+    rounded = round(precise, 2)
+    values = [rounded, precise]
+    if reverse:
+        values.reverse()
+    # This is the state shape persisted by the old merge + exact-value dedup.
+    _write_state(config.state_path, cutoff=cutoff, peaks=[(ts, "LONG", value) for value in values])
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(ts, "LONG", rounded)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert result.fail_open_reason is None
+    assert result.decision.component_a is False
+    assert result.same_side_peak_count_24h == 1
+    assert evaluator._peaks[0].abs_delta == precise
+    assert len(json.loads(config.state_path.read_text())["peaks"]) == 1
+    # A subsequent restart must preserve the same single-event distribution.
+    restarted = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    again = restarted.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert again.fail_open_reason is None
+    assert again.same_side_peak_count_24h == 1
+    assert restarted._peaks[0].abs_delta == precise
+
+
+def test_bootstrap_delta_difference_uses_archive_without_history_fault(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    ts = cutoff - timedelta(hours=1)
+    _write_state(config.state_path, cutoff=cutoff, peaks=[(ts, "LONG", 22)])
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(ts, "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=21)
+    assert result.fail_open_reason is None
+    assert result.decision.component_a is False
+    assert result.same_side_peak_count_24h == 1
+    assert evaluator._peaks[0].abs_delta == 20
+
+
+@pytest.mark.parametrize("archive_repeats", [1, 2])
+def test_stale_fault_recovers_with_repeated_precision_variants(tmp_path: Path, archive_repeats: int) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    ts = cutoff - timedelta(hours=1)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(ts, "LONG", 20.12)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    # Exercise recovery of an already-running cache, independently of bootstrap.
+    event_type = type(evaluator._peaks[0])
+    evaluator._peaks = [event_type(ts, "LONG", value) for value in (20.12, 20.1236)]
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(ts, "LONG", 20.12)] * archive_repeats)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert result.fail_open_reason is None
+    assert result.peak_history_status == "ARCHIVE_VERIFIED_RECOVERED"
+    assert result.decision.component_a is False
+    assert result.same_side_peak_count_24h == 1
+    assert evaluator._peaks[0].abs_delta == 20.1236
+
+
+def test_repeated_live_record_is_one_event_and_keeps_opposite_side(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[])
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    for side, value in [("LONG", 20.1236), ("LONG", 20.12), ("SHORT", -20.12)]:
+        assert evaluator.record_peak(event_ts=cutoff.isoformat(), side=side, delta=value)
+    assert len(evaluator._peaks) == 2
+    assert evaluator._peak_percentile(cutoff=cutoff, side="LONG", delta=30)[0] == 1
+    assert evaluator._peak_percentile(cutoff=cutoff, side="SHORT", delta=-30)[0] == 1
+
+
+def test_bootstrap_retains_cached_extrema_absent_from_research_archive(tmp_path: Path) -> None:
     cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_state(config.state_path, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
@@ -412,8 +526,32 @@ def test_bootstrap_does_not_trust_unarchived_state_events(tmp_path: Path) -> Non
     _write_feed(config.enriched_feed_dir, cutoff=cutoff)
     evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
     result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
-    assert result.decision.component_a is None
-    assert result.fail_open_reason.startswith("ARCHIVE_BOOTSTRAP_STATE_MISMATCH")
+    assert result.decision.component_a is True
+    assert result.same_side_peak_count_24h == 1
+    assert result.fail_open_reason is None
+    assert result.peak_history_status == "ARCHIVE_BOOTSTRAPPED"
+    assert evaluator._peaks[0].abs_delta == 20
+
+
+def test_recovery_unions_event_ids_without_merging_other_times_or_sides(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    ts = cutoff-timedelta(hours=1)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(ts, "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    # A cache-only opposite-side event must survive repair.
+    assert evaluator.record_peak(event_ts=ts.isoformat(), side="SHORT", delta=-20)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[
+        (ts, "LONG", 20), (ts+timedelta(minutes=1), "LONG", 20),
+    ])
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert result.fail_open_reason is None
+    assert {(peak.event_ts_utc, peak.side) for peak in evaluator._peaks} == {
+        (ts, "LONG"), (ts+timedelta(minutes=1), "LONG"), (ts, "SHORT"),
+    }
+    assert result.same_side_peak_count_24h == 2
 
 
 @pytest.mark.parametrize("count", [1, 2, 3])
