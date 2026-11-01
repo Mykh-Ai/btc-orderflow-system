@@ -176,6 +176,7 @@ def test_runtime_exact_cross_midnight_window_matches_policy_and_may_veto(tmp_pat
             (cutoff - timedelta(hours=2), "LONG", 20.0),
         ],
     )
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=5), "LONG", 10), (cutoff-timedelta(hours=2), "LONG", 20)])
     _write_feed(config.enriched_feed_dir, cutoff=cutoff)
     evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
 
@@ -208,10 +209,11 @@ def test_incomplete_initial_peak_history_leaves_a_unknown_b_can_still_block(tmp_
     assert result.may_veto is True
 
 
-def test_missing_exact_cutoff_is_global_fail_open(tmp_path: Path) -> None:
+def test_missing_exact_cutoff_does_not_cancel_trustworthy_a_block(tmp_path: Path) -> None:
     cutoff = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
     config = _config(tmp_path)
     _write_state(config.state_path, cutoff=cutoff, peaks=[(cutoff, "LONG", 1.0), (cutoff - timedelta(hours=1), "LONG", 10.0)])
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff, "LONG", 1.0), (cutoff-timedelta(hours=1), "LONG", 10.0)])
     _write_feed(config.enriched_feed_dir, cutoff=cutoff, omit_cutoff=True)
     evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
 
@@ -220,10 +222,10 @@ def test_missing_exact_cutoff_is_global_fail_open(tmp_path: Path) -> None:
     assert result.decision.component_a is True
     assert result.feature_status == "STALE"
     assert result.fail_open_reason == "ENRICHED_STALE"
-    assert result.may_veto is False
+    assert result.may_veto is True
 
 
-def test_corrupt_state_is_fail_open_even_when_component_b_matches(tmp_path: Path) -> None:
+def test_corrupt_state_does_not_cancel_trustworthy_b_block(tmp_path: Path) -> None:
     cutoff = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
     config = _config(tmp_path)
     config.state_path.parent.mkdir(parents=True)
@@ -236,12 +238,14 @@ def test_corrupt_state_is_fail_open_even_when_component_b_matches(tmp_path: Path
     assert result.decision.component_b is True
     assert result.fail_open_reason is not None
     assert result.fail_open_reason.startswith("STATE_LOAD_FAILED")
-    assert result.may_veto is False
+    assert result.decision.component_a is None
+    assert result.may_veto is True
 
 
 def test_synthetic_window_is_fail_open(tmp_path: Path) -> None:
     cutoff = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
     config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[])
     _write_feed(config.enriched_feed_dir, cutoff=cutoff, synthetic_at=cutoff - timedelta(minutes=10))
     evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
 
@@ -271,3 +275,182 @@ def test_runtime_timestamp_handles_dst_and_rejects_ambiguous_local_minute() -> N
     assert parse_runtime_timestamp("2026-03-20 01:36:00", "Europe/Bratislava").isoformat() == "2026-03-20T00:36:00+00:00"
     with pytest.raises(ValueError, match="ambiguous"):
         parse_runtime_timestamp("2026-10-25 02:30:00", "Europe/Bratislava")
+
+
+def test_old_fault_recovers_only_after_current_archive_matches(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff - timedelta(hours=1), "LONG", 20.0)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    assert evaluator._state_error.startswith("STATE_RECORD_FAILED")
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.peak_history_status == "ARCHIVE_VERIFIED_RECOVERED"
+    assert result.fail_open_reason is None
+    assert result.decision.component_a is True
+    assert result.may_veto is True
+
+
+def test_missing_recent_archive_event_prevents_false_a_block(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    # A newly archived extrema is missing from in-memory history.
+    with (config.research_archive_dir / "2026-11-01.jsonl").open("a") as handle:
+        handle.write(json.dumps({"event":"DELTA_MAX","kind":"long","ts":"2026-11-01 06:30:00","delta":2}) + "\n")
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is None
+    assert result.fail_open_reason.startswith("STATE_RECORD_FAILED")
+
+
+def test_synthetic_b_does_not_cancel_known_a_veto(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff, synthetic_at=cutoff-timedelta(minutes=10))
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is True
+    assert result.decision.component_b is None
+    assert result.may_veto is True
+
+
+def test_ambiguous_extrema_in_active_window_remains_untrusted(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    with (config.research_archive_dir / "2026-10-25.jsonl").open("a") as handle:
+        handle.write(json.dumps({"event":"DELTA_MAX","kind":"long","ts":"2026-10-25 02:37:00","delta":10}) + "\n")
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is None
+    assert result.fail_open_reason.startswith("STATE_RECORD_FAILED")
+    # The independent B input may still produce a valid block.
+    assert result.decision.component_b is True
+    assert result.may_veto is True
+
+
+def test_recovery_requires_matching_deltas_and_successful_persist(tmp_path: Path, monkeypatch) -> None:
+    cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    monkeypatch.setattr(evaluator, "_persist_state", lambda: False)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is None
+    assert result.fail_open_reason is not None
+
+
+def test_restart_with_old_ambiguous_row_outside_window_recovers(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 10, 26, 2, 0, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    current = cutoff - timedelta(hours=1)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(current, "LONG", 20)])
+    _write_state(config.state_path, cutoff=cutoff, peaks=[(current, "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    with (config.research_archive_dir / "2026-10-25.jsonl").open("a") as handle:
+        handle.write(json.dumps({"event":"DELTA_MAX","kind":"long","ts":"2026-10-25 02:37:00","delta":10}) + "\n")
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert evaluator._state_error.startswith("ARCHIVE_BOOTSTRAP_FAILED")
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.peak_history_status == "ARCHIVE_VERIFIED_RECOVERED"
+    assert result.decision.component_a is True and result.may_veto
+
+
+def test_recovery_requires_full_precision_delta_agreement(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 6, 7, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    assert not evaluator.record_peak(event_ts="2026-10-25 02:37:00", side="LONG", delta=10)
+    evaluator._peaks = [type(evaluator._peaks[0])(evaluator._peaks[0].event_ts_utc, "LONG", 22)]
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is None
+    assert result.fail_open_reason is not None
+
+
+def test_incomplete_archive_cannot_make_stale_state_a_trustworthy(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_state(config.state_path, cutoff=cutoff-timedelta(hours=4), peaks=[(cutoff-timedelta(hours=6), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.peak_history_status == "ARCHIVE_INCOMPLETE"
+    assert result.decision.component_a is None
+    assert result.fail_open_reason.startswith("ARCHIVE_BOOTSTRAP_INCOMPLETE")
+
+
+def test_bootstrap_merges_rounded_archive_and_precise_state_without_double_count(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    t = cutoff - timedelta(hours=1)
+    _write_state(config.state_path, cutoff=cutoff, peaks=[(t, "LONG", 20.1234)])
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(t, "LONG", 20.12)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=20.122)
+    assert result.same_side_peak_count_24h == 1
+    assert result.same_side_peak_percentile_24h == 0.0
+    assert result.peak_history_status == "ARCHIVE_BOOTSTRAPPED"
+
+
+def test_bootstrap_does_not_trust_unarchived_state_events(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_state(config.state_path, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=5)
+    assert result.decision.component_a is None
+    assert result.fail_open_reason.startswith("ARCHIVE_BOOTSTRAP_STATE_MISMATCH")
+
+
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_synthetic_rows_are_counted_without_inventing_b_values(tmp_path: Path, count: int) -> None:
+    cutoff = datetime(2026, 1, 2, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff)
+    path = config.enriched_feed_dir / "2026-01-02.csv"
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows[5:5+count]:
+        row["IsSynthetic"] = "1"
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert result.decision.component_a is False
+    assert result.decision.component_b is None
+    assert result.detail == (f"limited_synthetic_240m:count={count}" if count <= 2 else "synthetic_240m:count=3")
+
+
+def test_synthetic_exception_rejects_other_invalid_rows(tmp_path: Path) -> None:
+    cutoff = datetime(2026, 1, 2, 12, tzinfo=timezone.utc)
+    config = _config(tmp_path)
+    _write_archive(config.research_archive_dir, cutoff=cutoff, peaks=[(cutoff-timedelta(hours=1), "LONG", 20)])
+    _write_feed(config.enriched_feed_dir, cutoff=cutoff, synthetic_at=cutoff-timedelta(minutes=10))
+    path = config.enriched_feed_dir / "2026-01-02.csv"
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["BuyQty"] = "not-a-number"
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    evaluator = LossAvoidanceRuntimeEvaluator(config, now_fn=lambda: cutoff)
+    result = evaluator.evaluate(signal_ts=cutoff.isoformat(), side="LONG", delta=30)
+    assert result.detail.startswith("invalid_numeric:")
