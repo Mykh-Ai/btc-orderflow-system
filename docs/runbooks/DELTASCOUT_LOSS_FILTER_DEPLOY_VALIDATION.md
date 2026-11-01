@@ -9,12 +9,12 @@ disagreement as value reconciliation, not a history-health veto. Recovery
 backfills missing cached events from the archive and retains valid cache-only
 events; it does not require the two copies to be identical. Healthy evaluations
 do not read the archive. The actual predecessor-generated cache upgrade now
-passes locally. No manual cache cleanup is needed. Server deployment and
-verification remain pending.
+passes locally. No manual cache cleanup is needed. The 2026-11-01 deployment was completed and
+verified; the rollout record is below.
 
-This runbook is a verification plan, not authorization to deploy, change server
-configuration, or place a live trade. None of those operations were performed
-during the local review.
+Future server operations require separate operator authorization. The rollout
+below was explicitly authorized after the local review. No live test trade was
+authorized or performed as part of that rollout.
 
 ## Local acceptance before server work
 
@@ -139,3 +139,38 @@ the end of any SSH session.
 - Deployment preflight must instantiate the new evaluator with a temporary copy
   of the existing state and real read-only archive/feed inputs. Do not run a
   second evaluator against the live state path and do not inject a live PEAK.
+
+## Deployment record вЂ” 2026-11-01
+
+- PR: https://github.com/Mykh-Ai/btc-orderflow-system/pull/170; merged into
+  `research` as `24bcb355faca3023db34e8b1eb14e58a6d833756`. The isolated branch
+  contains only the two selected commits, with no unrelated research edits.
+- Validation: 75 DeltaScout tests passed in the isolated research-based checkout;
+  18 Executor tests and 18 local order-stub/guard/recovery probes also passed.
+  GitHub's automatic code review completed without findings.
+- Before deployment, Python 3.10.21 inside the existing container successfully
+  loaded the new runtime against a temporary copy of real state and read-only
+  archive/feed inputs. No evaluator probe wrote the live state or signal bus.
+- The first deployment attempt started the new runtime but automatically rolled
+  back because the deployment verifier compared Docker mount list order. Docker
+  returns that list in varying order. The verifier was corrected to compare
+  sorted mount contents while retaining all configuration/value checks; runtime
+  code did not change between attempts. Original attempt backup:
+  `/root/volume-alert/backups/deltascout_loss_filter_20261101T173143Z_217131d`.
+- Successful restart: `2026-11-01T17:34:33Z` (18:34 Europe/Berlin). Backup:
+  `/root/volume-alert/backups/deltascout_loss_filter_20261101T173417Z_217131d`.
+  This preserves both original runtime files and the pre-deployment state.
+- Only `delta_scout.py` and `loss_avoidance_runtime.py` were replaced. Mounted
+  SHA256 values match the release manifest. The same DeltaScout container,
+  image, mounts and environment were preserved, including `LOSS_FILTER_MODE=veto`.
+- Executor, Buyer and n8n retained their container identities, start times and
+  configurations. Executor sizing remained 3500 USDC. The deployment did not clear
+  state, edit raw archives, inject a PEAK or issue a trading request.
+- Normal startup produced 20 cache rows for 20 unique event identities. A
+  post-deployment probe at 17:36 UTC found a current EXACT enriched window and
+  no history error. At 17:37 UTC startup was complete, runtime error count was
+  zero, and the main process's read counters had advanced between observations.
+- Server receipts: `/root/volume-alert/releases/deltascout-loss-filter-217131d/`
+  contains `manifest.json`, `deployment.json` and `verification.json`. These are
+  operational receipts, not test code. Live exchange fills and protection-order
+  placement were not tested by this deployment.
