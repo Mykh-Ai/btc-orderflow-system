@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - direct /app/delta_scout.py execution
 VALID_MODES = {"off", "shadow", "veto"}
 STATE_SCHEMA = "deltascout_loss_filter_state_v1"
 REAL_VALUES = {"0", "false", "no", "n"}
+ARCHIVE_ROUNDING_TOLERANCE = 0.005001
 
 
 @dataclass(frozen=True)
@@ -108,11 +109,20 @@ class RuntimeFilterEvaluation:
 
     @property
     def may_veto(self) -> bool:
-        return (
-            self.configured_mode == "veto"
-            and self.decision.union is True
-            and self.fail_open_reason is None
-        )
+        if self.configured_mode != "veto" or self.decision.union is not True:
+            return False
+        if self.fail_open_reason is None:
+            return True
+        # A feed problem affects B; a history problem affects A. Never promote
+        # an unknown component; a completed, trusted BLOCK still applies if
+        # evaluation exceeded its timing budget.
+        if self.fail_open_reason == "EVALUATION_BUDGET_EXCEEDED":
+            return True
+        if self.fail_open_reason.startswith("ENRICHED_"):
+            return self.decision.component_a is True
+        if self.fail_open_reason.startswith(("STATE_", "ARCHIVE_BOOTSTRAP_")):
+            return self.decision.component_b is True
+        return False
 
     def to_audit_fields(self) -> dict[str, Any]:
         fields = {
@@ -305,6 +315,11 @@ class LossAvoidanceRuntimeEvaluator:
         missing = [path.name for path in paths if not path.exists()]
         if missing:
             self._peak_history_status = "ARCHIVE_INCOMPLETE"
+            # An old cache does not prove that events during downtime were
+            # recorded. Recovery needs the archive for the required dates.
+            self._state_error = self._state_error or (
+                "ARCHIVE_BOOTSTRAP_INCOMPLETE:" + ",".join(missing)
+            )
             return False
 
         archive_peaks: list[PeakHistoryEvent] = []
@@ -348,7 +363,11 @@ class LossAvoidanceRuntimeEvaluator:
             self._peak_history_status = "ARCHIVE_INVALID"
             return False
 
-        self._peaks = self._dedupe_and_prune([*self._peaks, *archive_peaks], cutoff)
+        # Event identity is timestamp + side, not the precision of its delta.
+        # Older bootstraps could persist both rounded and precise versions.
+        prior = self._dedupe_and_prune(self._peaks, cutoff)
+        archived = self._dedupe_and_prune(archive_peaks, cutoff)
+        self._peaks = self._merge_peak_history(archived, prior)
         self._tracking_started_at_utc = min(self._tracking_started_at_utc, lower)
         self._state_error = None
         if not self._persist_state():
@@ -359,11 +378,33 @@ class LossAvoidanceRuntimeEvaluator:
 
     def _dedupe_and_prune(self, peaks: Iterable[PeakHistoryEvent], cutoff: datetime) -> list[PeakHistoryEvent]:
         lower = cutoff - timedelta(hours=24)
-        unique: dict[tuple[datetime, str, float], PeakHistoryEvent] = {}
+        unique: dict[tuple[datetime, str], PeakHistoryEvent] = {}
         for peak in peaks:
             if lower <= peak.event_ts_utc <= cutoff:
-                unique[(peak.event_ts_utc, peak.side, peak.abs_delta)] = peak
-        return sorted(unique.values(), key=lambda item: (item.event_ts_utc, item.side, item.abs_delta))
+                key = (peak.event_ts_utc, peak.side)
+                stored = unique.get(key)
+                # Prefer a full-precision representation regardless of whether
+                # the old archive rounded its value up or down.
+                if stored is None or stored.abs_delta == round(stored.abs_delta, 2) or peak.abs_delta != round(peak.abs_delta, 2):
+                    unique[key] = peak
+        return sorted(unique.values(), key=lambda item: (item.event_ts_utc, item.side))
+
+    def _merge_peak_history(
+        self, archived: list[PeakHistoryEvent], cached: list[PeakHistoryEvent]
+    ) -> list[PeakHistoryEvent]:
+        """Backfill cached history by event identity, retaining cache-only peaks.
+
+        Delta disagreement chooses a value source; it never invalidates history
+        or creates an additional event. Timestamp + side is the stable identity;
+        archive sequence numbers restart with the detector and are not IDs.
+        """
+        merged = {(peak.event_ts_utc, peak.side): peak for peak in cached}
+        for observed in archived:
+            key = (observed.event_ts_utc, observed.side)
+            stored = merged.get(key)
+            if stored is None or abs(stored.abs_delta - observed.abs_delta) > ARCHIVE_ROUNDING_TOLERANCE:
+                merged[key] = observed
+        return sorted(merged.values(), key=lambda item: (item.event_ts_utc, item.side))
 
     def _persist_state(self) -> bool:
         path = self.config.state_path
@@ -408,6 +449,64 @@ class LossAvoidanceRuntimeEvaluator:
         current = abs(_finite(delta))
         percentile = sum(value <= current for value in values) / len(values) * 100.0
         return len(values), percentile
+
+    def _recover_history_if_complete(self, cutoff: datetime) -> bool:
+        """Recover a history fault by backfilling the current 24h archive.
+
+        Merge real events by timestamp + side, tolerating repeated numeric
+        representations and retaining cached events absent from research logs.
+        Healthy evaluations return before opening any archive files.
+        An ambiguous local time is safe to ignore only if both possible UTC
+        instants lie outside the current interval.
+        """
+        if not self._state_error:
+            return True
+        lower = cutoff - timedelta(hours=24)
+        zone = ZoneInfo(self.config.source_timezone)
+        paths = [self.config.research_archive_dir / f"{day.isoformat()}.jsonl"
+                 for day in _dates_inclusive(lower.astimezone(zone).date(), cutoff.astimezone(zone).date())]
+        if any(not path.exists() for path in paths):
+            return False
+        archive_peaks: list[PeakHistoryEvent] = []
+        try:
+            for path in paths:
+                with path.open("r", encoding="utf-8-sig") as handle:
+                    for line in handle:
+                        if not line.strip():
+                            continue
+                        row = json.loads(line)
+                        event = str(row.get("event") or "")
+                        if event not in {"DELTA_MAX", "DELTA_MIN"}:
+                            continue
+                        raw = datetime.fromisoformat(str(row.get("ts") or "").replace("Z", "+00:00"))
+                        if raw.tzinfo is None:
+                            possible = [raw.replace(tzinfo=zone, fold=fold).astimezone(timezone.utc) for fold in (0, 1)]
+                            if possible[0] != possible[1]:
+                                if all(t < lower or t > cutoff for t in possible):
+                                    continue
+                                return False
+                        ts = parse_runtime_timestamp(row.get("ts"), self.config.source_timezone)
+                        if not lower <= ts <= cutoff:
+                            continue
+                        side = "LONG" if event == "DELTA_MAX" else "SHORT"
+                        if str(row.get("kind") or side).upper() != side:
+                            return False
+                        archive_peaks.append(PeakHistoryEvent(ts, side, abs(_finite(row.get("delta")))))
+            archived = self._dedupe_and_prune(archive_peaks, cutoff)
+            cached = self._dedupe_and_prune(self._peaks, cutoff)
+            previous_tracking = self._tracking_started_at_utc
+            previous_peaks = self._peaks
+            self._peaks = self._merge_peak_history(archived, cached)
+            self._tracking_started_at_utc = min(previous_tracking, lower)
+            if not self._persist_state():
+                self._peaks = previous_peaks
+                self._tracking_started_at_utc = previous_tracking
+                return False
+            self._state_error = None
+            self._peak_history_status = "ARCHIVE_VERIFIED_RECOVERED"
+            return True
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return False
 
     def _parse_enriched_ts(self, value: Any) -> datetime:
         parsed = datetime.fromisoformat(str(value or "").strip().replace("Z", "+00:00"))
@@ -459,8 +558,25 @@ class LossAvoidanceRuntimeEvaluator:
             return EnrichedFeatureWindow(None, False, None, "MISSING", last_ts, "non_contiguous_240m")
         rows_240 = [bars[ts] for ts in expected_240]
         try:
-            if any(str(row.get("IsSynthetic") or "").strip().lower() not in REAL_VALUES for row in rows_240):
-                return EnrichedFeatureWindow(None, False, None, "INVALID", last_ts, "synthetic_240m")
+            flags = [str(row.get("IsSynthetic") or "").strip().lower() for row in rows_240]
+            if any(flag not in REAL_VALUES and flag not in {"1", "true", "yes"} for flag in flags):
+                return EnrichedFeatureWindow(None, False, None, "INVALID", last_ts, "invalid_synthetic_flag")
+            synthetic = [row for row, flag in zip(rows_240, flags) if flag not in REAL_VALUES]
+            if synthetic:
+                if len(synthetic) <= 2:
+                    # Do not infer the missing minute. Validate every other
+                    # row first so a second data error cannot hide behind it.
+                    real = [row for row, flag in zip(rows_240, flags) if flag in REAL_VALUES]
+                    for row in real:
+                        _finite(row.get("BuyQty"))
+                        _finite(row.get("SellQty"))
+                    for row, flag in zip(rows_240[-60:], flags[-60:]):
+                        if flag in REAL_VALUES:
+                            _finite(row.get("OpenInterest"))
+                    if sum(_finite(row.get("BuyQty")) + _finite(row.get("SellQty")) for row in real) <= 0:
+                        return EnrichedFeatureWindow(None, False, None, "INVALID", last_ts, "non_positive_240m_volume")
+                    return EnrichedFeatureWindow(None, False, None, "INVALID", last_ts, f"limited_synthetic_240m:count={len(synthetic)}")
+                return EnrichedFeatureWindow(None, False, None, "INVALID", last_ts, f"synthetic_240m:count={len(synthetic)}")
             buy = sum(_finite(row.get("BuyQty")) for row in rows_240)
             sell = sum(_finite(row.get("SellQty")) for row in rows_240)
             total = buy + sell
@@ -501,7 +617,10 @@ class LossAvoidanceRuntimeEvaluator:
             side_value = str(side).upper()
             if side_value not in {"LONG", "SHORT"}:
                 raise ValueError("invalid side")
+            self._recover_history_if_complete(cutoff)
             count, percentile = self._peak_percentile(cutoff=cutoff, side=side_value, delta=delta)
+            if self._state_error:
+                percentile = None
             window = self._load_enriched_features(cutoff, side_value)
             decision = evaluate_loss_avoidance_policy(
                 same_side_peak_percentile_24h=percentile,
@@ -511,12 +630,12 @@ class LossAvoidanceRuntimeEvaluator:
             )
             elapsed = (time.monotonic() - started) * 1000.0
             fail_open: str | None = None
-            if self._state_error:
+            if elapsed > self.config.evaluation_budget_ms:
+                fail_open = "EVALUATION_BUDGET_EXCEEDED"
+            elif self._state_error:
                 fail_open = self._state_error
             elif window.feature_status != "EXACT":
                 fail_open = f"ENRICHED_{window.feature_status}"
-            elif elapsed > self.config.evaluation_budget_ms:
-                fail_open = "EVALUATION_BUDGET_EXCEEDED"
             return RuntimeFilterEvaluation(
                 configured_mode=self.config.mode,
                 rule_id=self.config.rule_id,

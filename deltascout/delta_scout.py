@@ -268,14 +268,40 @@ class Scout:
                 "rule_id": audit_fields.get("rule_id"),
                 "component_a": audit_fields.get("component_a"),
                 "component_b": audit_fields.get("component_b"),
+                "audit_write_failed": bool(audit_fields.get("audit_write_failed")),
                 "oi_change_60m": audit_fields.get("oi_change_60m"),
                 "directional_delta_pct_240m": audit_fields.get("directional_delta_pct_240m"),
                 "text": (
                     f"DeltaScout filter blocked {str(audit_fields.get('kind') or '').upper()} "
                     f"PEAK | A={audit_fields.get('component_a')} B={audit_fields.get('component_b')} "
-                    f"rule={audit_fields.get('rule_id')} | archived for replay"
+                    f"rule={audit_fields.get('rule_id')} | "
+                    + ("WARNING: decision audit write failed" if audit_fields.get("audit_write_failed") else "archived for replay")
                 ),
             })
+        except Exception as e:
+            print(f"[LOSS FILTER WEBHOOK ERROR] {e}", file=sys.stderr, flush=True)
+
+    def _notify_loss_filter_unverified(self, peak: dict, admission: dict, reason: str):
+        """Warn whether a signal with unverified filters was blocked or emitted."""
+        if not WEBHOOK_URL:
+            return
+        side = str(peak.get("kind") or "unknown").upper()
+        a = (admission.get("filter_a") or {}).get("status", "UNKNOWN")
+        b = (admission.get("filter_b") or {}).get("status", "UNKNOWN")
+        emitted = admission.get("effective_action") == "EMIT"
+        payload = {
+            "event": "LOSS_FILTER_UNVERIFIED_EMITTED" if emitted else "LOSS_FILTER_UNVERIFIED_BLOCKED",
+            "source": "DeltaScout", "action": "RESEARCH_ONLY",
+            "ts": peak.get("ts"), "kind": peak.get("kind"),
+            "price": peak.get("price"), "rule_id": admission.get("policy_id"),
+            "filter_a": a, "filter_b": b, "reason": reason,
+            "text": (f"⚠️ DeltaScout: {side} PEAK "
+                     + ("відправлено з неперевіреним фільтром" if emitted else "заблоковано через недостатньо достовірні дані")
+                     + f" | A={a} B={b} | причина: {reason}. "
+                     + ("Це сигнал, не підтвердження відкриття угоди." if emitted else "Сигнал не відправлено на ринок.")),
+        }
+        try:
+            post_json(WEBHOOK_URL, payload)
         except Exception as e:
             print(f"[LOSS FILTER WEBHOOK ERROR] {e}", file=sys.stderr, flush=True)
 
@@ -311,12 +337,16 @@ class Scout:
                 "policy_id": getattr(getattr(self.loss_filter, "config", None), "rule_id", None),
                 "configured_mode": getattr(self.loss_filter, "mode", None),
                 "decision": "EVALUATION_ERROR",
-                "effective_action": "EMIT",
+                "effective_action": "BLOCK" if self.loss_filter.mode == "veto" else "EMIT",
                 "filter_a": {"status": "UNKNOWN"},
                 "filter_b": {"status": "UNKNOWN"},
-                "unknown_policy": "EVALUATION_ERROR_FAIL_OPEN",
+                "unknown_policy": "EVALUATION_ERROR_BLOCK" if self.loss_filter.mode == "veto" else "SHADOW_EMIT",
             }
             research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
+            if self.loss_filter.mode == "veto":
+                self._emit_research("PEAK_LOSS_FILTER_DATA_BLOCK", {**research_payload, "reason": "EVALUATION_ERROR"})
+                self._notify_loss_filter_unverified(peak_payload, peak_payload["loss_filter_admission"], "EVALUATION_ERROR")
+                return False
             self._emit_json(peak_payload)
             self._emit_research("PEAK_EMIT", research_payload)
             return True
@@ -325,13 +355,29 @@ class Scout:
         if evaluation.decision.decision == "UNKNOWN_KEEP" or evaluation.fail_open_reason:
             self._loss_filter_counts["unknown"] += 1
 
-        would_block = evaluation.decision.union is True and evaluation.fail_open_reason is None
+        would_block = evaluation.decision.union is True and (
+            evaluation.fail_open_reason is None or evaluation.may_veto
+        )
+        # A reliable BLOCK must not be bypassed by a stale circuit flag.
         circuit_was_open = self._loss_filter_circuit_open
         if would_block:
             self._loss_filter_consecutive_would_block += 1
         else:
             self._loss_filter_consecutive_would_block = 0
 
+        uncertain = evaluation.decision.decision == "UNKNOWN_KEEP" or (
+            bool(evaluation.fail_open_reason) and not evaluation.may_veto
+            and evaluation.fail_open_reason != "EVALUATION_BUDGET_EXCEEDED"
+        )
+        limited_synthetic_exception = (
+            self.loss_filter.mode == "veto"
+            and evaluation.decision.component_a is False
+            and evaluation.decision.component_b is None
+            and evaluation.fail_open_reason == "ENRICHED_INVALID"
+            and evaluation.detail in {"limited_synthetic_240m:count=1", "limited_synthetic_240m:count=2"}
+        )
+        data_block = self.loss_filter.mode == "veto" and uncertain and not limited_synthetic_exception
+        effective_block = evaluation.may_veto or data_block
         audit_fields = evaluation.to_audit_fields()
         audit_fields.update({
             "ts": peak_payload.get("ts"),
@@ -343,7 +389,9 @@ class Scout:
             "would_be_peak": dict(peak_payload),
             "circuit_open": circuit_was_open,
             "consecutive_would_block": self._loss_filter_consecutive_would_block,
-            "effective_action": "BLOCK" if evaluation.may_veto and not circuit_was_open else "EMIT",
+            "effective_action": "BLOCK" if effective_block else "EMIT",
+            "runtime_unknown_policy": "BLOCK_AND_WARN" if self.loss_filter.mode == "veto" else "SHADOW_EMIT",
+            "quality_exception": "UP_TO_TWO_SYNTHETIC_240M_A_PASS" if limited_synthetic_exception else None,
         })
         peak_payload["loss_filter_admission"] = evaluation.to_entry_admission_fields(
             effective_action=audit_fields["effective_action"]
@@ -352,31 +400,39 @@ class Scout:
             "signal_ts_utc": audit_fields.get("signal_ts_utc"),
             "evaluation_ms": audit_fields.get("evaluation_ms"),
             "circuit_open": circuit_was_open,
+            "runtime_unknown_policy": audit_fields["runtime_unknown_policy"],
+            "unknown_policy": audit_fields["runtime_unknown_policy"],
+            "quality_exception": audit_fields["quality_exception"],
         })
         # The additive admission block is part of the emitted signal. Keep the
         # audit's copy consistent with that final signal shape.
         audit_fields["would_be_peak"] = dict(peak_payload)
         research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
         audit_ok = self._emit_research("PEAK_LOSS_FILTER_DECISION", audit_fields)
-        effective_block = evaluation.may_veto and not circuit_was_open and audit_ok
         peak_payload["loss_filter_admission"]["effective_action"] = "BLOCK" if effective_block else "EMIT"
         research_payload["loss_filter_admission"] = peak_payload["loss_filter_admission"]
 
-        if would_block and self._loss_filter_consecutive_would_block >= 5:
-            self._loss_filter_circuit_open = True
-            if not circuit_was_open:
-                print("[LOSS FILTER CIRCUIT OPEN] five consecutive would-block decisions", file=sys.stderr, flush=True)
-
         if effective_block:
+            if not audit_ok:
+                print("[LOSS FILTER AUDIT ERROR] PEAK blocked despite audit write failure", file=sys.stderr, flush=True)
             self._loss_filter_counts["blocked"] += 1
+            if data_block:
+                reason = evaluation.fail_open_reason or "FILTER_INPUT_UNKNOWN"
+                if evaluation.detail:
+                    reason += ": " + evaluation.detail
+                self._emit_research("PEAK_LOSS_FILTER_DATA_BLOCK", {**audit_fields, "reason": reason, "audit_write_failed": not audit_ok})
+                self._notify_loss_filter_unverified(peak_payload, peak_payload["loss_filter_admission"], reason)
+                return False
             reject_fields = dict(audit_fields)
             reject_fields["reject_reason"] = "loss_avoidance_union"
-            self._emit_research("PEAK_LOSS_FILTER_REJECT", reject_fields)
-            self._notify_loss_filter_block(audit_fields)
+            reject_fields["audit_write_failed"] = not audit_ok
+            reject_ok = self._emit_research("PEAK_LOSS_FILTER_REJECT", reject_fields)
+            if not reject_ok:
+                reject_fields["audit_write_failed"] = True
+                print("[LOSS FILTER AUDIT ERROR] reject archive write failed", file=sys.stderr, flush=True)
+            self._notify_loss_filter_block(reject_fields)
             return False
 
-        if evaluation.may_veto and not audit_ok:
-            print("[LOSS FILTER FAIL OPEN] audit write failed; PEAK emitted", file=sys.stderr, flush=True)
         self._loss_filter_counts["kept"] += 1
         self._emit_json(peak_payload)
         mirror = dict(research_payload)
@@ -388,6 +444,8 @@ class Scout:
             "loss_filter_fail_open_reason": evaluation.fail_open_reason,
         })
         self._emit_research("PEAK_EMIT", mirror)
+        if limited_synthetic_exception:
+            self._notify_loss_filter_unverified(peak_payload, peak_payload["loss_filter_admission"], evaluation.detail)
         return True
 
     # ---- JSON SIGNAL ----

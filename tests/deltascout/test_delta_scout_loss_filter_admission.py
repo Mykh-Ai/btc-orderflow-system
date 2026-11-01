@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
+import pytest
 import sys
 from datetime import datetime, timezone
 
@@ -121,7 +123,7 @@ def test_veto_blocks_only_after_successful_durable_audit(monkeypatch, tmp_path) 
     assert len(notifications) == 1
 
 
-def test_veto_audit_failure_is_fail_open(monkeypatch, tmp_path) -> None:
+def test_veto_still_blocks_on_audit_failure(monkeypatch, tmp_path) -> None:
     module = _module(monkeypatch, tmp_path)
     scout, bus, research, notifications = _scout(
         module,
@@ -132,14 +134,15 @@ def test_veto_audit_failure_is_fail_open(monkeypatch, tmp_path) -> None:
 
     admitted = scout._admit_peak(peak, mirror)
 
-    assert admitted is True
-    assert bus == [peak]
-    assert [event for event, _ in research] == ["PEAK_LOSS_FILTER_DECISION", "PEAK_EMIT"]
-    assert bus[0]["loss_filter_admission"]["effective_action"] == "EMIT"
-    assert notifications == []
+    assert admitted is False
+    assert bus == []
+    assert [event for event, _ in research] == ["PEAK_LOSS_FILTER_DECISION", "PEAK_LOSS_FILTER_REJECT"]
+    assert peak["loss_filter_admission"]["effective_action"] == "BLOCK"
+    assert len(notifications) == 1
+    assert notifications[0]["audit_write_failed"] is True
 
 
-def test_runtime_fail_open_reason_prevents_veto(monkeypatch, tmp_path) -> None:
+def test_invalid_b_does_not_bypass_known_a_veto(monkeypatch, tmp_path) -> None:
     module = _module(monkeypatch, tmp_path)
     scout, bus, research, _ = _scout(
         module,
@@ -149,26 +152,25 @@ def test_runtime_fail_open_reason_prevents_veto(monkeypatch, tmp_path) -> None:
 
     admitted = scout._admit_peak(peak, mirror)
 
-    assert admitted is True
-    assert bus == [peak]
-    assert research[0][1]["effective_action"] == "EMIT"
-    assert bus[0]["loss_filter_admission"]["filter_a"]["status"] == "BLOCK"
-    assert bus[0]["loss_filter_admission"]["fail_open_reason"] == "ENRICHED_STALE"
+    assert admitted is False
+    assert bus == []
+    assert research[0][1]["effective_action"] == "BLOCK"
+    assert peak["loss_filter_admission"]["filter_a"]["status"] == "BLOCK"
+    assert peak["loss_filter_admission"]["fail_open_reason"] == "ENRICHED_STALE"
 
 
-def test_circuit_opens_after_five_consecutive_would_blocks(monkeypatch, tmp_path) -> None:
+def test_reliable_blocks_are_not_bypassed_after_five_decisions(monkeypatch, tmp_path) -> None:
     module = _module(monkeypatch, tmp_path)
     scout, bus, research, _ = _scout(module, _evaluation(mode="veto", block=True))
     peak, mirror = _payloads()
 
     results = [scout._admit_peak(peak, mirror) for _ in range(6)]
 
-    assert results == [False, False, False, False, False, True]
-    assert scout._loss_filter_circuit_open is True
-    assert bus == [peak]
+    assert results == [False, False, False, False, False, False]
+    assert scout._loss_filter_circuit_open is False
+    assert bus == []
     decision_rows = [fields for event, fields in research if event == "PEAK_LOSS_FILTER_DECISION"]
-    assert decision_rows[-1]["circuit_open"] is True
-    assert bus[0]["loss_filter_admission"]["effective_action"] == "EMIT"
+    assert decision_rows[-1]["effective_action"] == "BLOCK"
 
 
 def test_filter_status_explains_blocker_flags_for_entry_assessor(monkeypatch, tmp_path) -> None:
@@ -182,3 +184,130 @@ def test_filter_status_explains_blocker_flags_for_entry_assessor(monkeypatch, tm
     assert admission["filter_a"]["status"] == "PASS"
     assert admission["filter_b"]["status"] == "PASS"
     assert admission["combined_rule"].startswith("A OR B blocker")
+
+
+def test_problematic_signal_is_blocked_and_warned(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, research, _ = _scout(module, _evaluation(mode="veto", block=False, fail_open="ENRICHED_STALE"))
+    warnings = []
+    scout._notify_loss_filter_unverified = lambda peak, admission, reason: warnings.append((peak, admission, reason))
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert len(bus) == 0 and len(warnings) == 1
+    assert warnings[0][2] == "ENRICHED_STALE"
+    assert warnings[0][1]["filter_a"]["status"] == "PASS"
+    assert research[-1][0] == "PEAK_LOSS_FILTER_DATA_BLOCK"
+
+
+def test_warning_webhook_identifies_signal_not_order(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(module, "WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(module, "post_json", lambda url, payload: sent.append(payload))
+    scout, _, _, _ = _scout(module, _evaluation(mode="veto", block=False))
+    peak, _ = _payloads()
+    scout._notify_loss_filter_unverified(peak, {"filter_a":{"status":"UNKNOWN"},"filter_b":{"status":"PASS"}}, "FILTER_INPUT_UNKNOWN")
+    assert sent[0]["event"] == "LOSS_FILTER_UNVERIFIED_BLOCKED"
+    assert sent[0]["action"] == "RESEARCH_ONLY"
+    assert "Сигнал не відправлено на ринок" in sent[0]["text"]
+
+
+def test_warning_webhook_for_emitted_signal_does_not_claim_order_open(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(module, "WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(module, "post_json", lambda url, payload: sent.append(payload))
+    scout, _, _, _ = _scout(module, _evaluation(mode="veto", block=False))
+    peak, _ = _payloads()
+    scout._notify_loss_filter_unverified(peak, {"effective_action":"EMIT", "filter_a":{"status":"PASS"}, "filter_b":{"status":"UNKNOWN"}}, "limited_synthetic_240m:count=2")
+    assert sent[0]["event"] == "LOSS_FILTER_UNVERIFIED_EMITTED"
+    assert "не підтвердження відкриття угоди" in sent[0]["text"]
+
+
+def test_successful_block_sends_no_unverified_signal_warning(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, _, _ = _scout(module, _evaluation(mode="veto", block=True))
+    warnings = []
+    scout._notify_loss_filter_unverified = lambda *args: warnings.append(args)
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == [] and warnings == []
+
+
+def test_completed_block_applies_even_over_evaluation_budget(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, _, _ = _scout(module, _evaluation(mode="veto", block=True, fail_open="EVALUATION_BUDGET_EXCEEDED"))
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == []
+
+
+def test_both_unknown_are_blocked_and_alerted(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    initial = _evaluation(mode="veto", block=False)
+    decision = evaluate_loss_avoidance_policy(same_side_peak_percentile_24h=None, oi_change_60m=None, oi_trusted_60m=False, directional_delta_pct_240m=None)
+    evaluation = replace(initial, decision=decision, fail_open_reason="STATE_RECORD_FAILED:ValueError")
+    scout, bus, research, _ = _scout(module, evaluation)
+    alerts = []
+    scout._notify_loss_filter_unverified = lambda peak, admission, reason: alerts.append(reason)
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == [] and alerts == ["STATE_RECORD_FAILED:ValueError"]
+    assert research[0][1]["effective_action"] == "BLOCK"
+    assert research[-1][0] == "PEAK_LOSS_FILTER_DATA_BLOCK"
+    assert peak["loss_filter_admission"]["unknown_policy"] == "BLOCK_AND_WARN"
+
+
+def test_evaluation_exception_blocks_and_alerts_in_veto(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, research, _ = _scout(module, _evaluation(mode="veto", block=False))
+    def fail(**kwargs):
+        raise ValueError("failure")
+    scout.loss_filter.evaluate = fail
+    alerts = []
+    scout._notify_loss_filter_unverified = lambda peak, admission, reason: alerts.append(reason)
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == [] and alerts == ["EVALUATION_ERROR"]
+    assert peak["loss_filter_admission"]["effective_action"] == "BLOCK"
+    assert research[-1][0] == "PEAK_LOSS_FILTER_DATA_BLOCK"
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_a_pass_with_up_to_two_synthetic_minutes_emits_with_warning(monkeypatch, tmp_path, count):
+    module = _module(monkeypatch, tmp_path)
+    initial = _evaluation(mode="veto", block=False)
+    decision = evaluate_loss_avoidance_policy(same_side_peak_percentile_24h=75, oi_change_60m=None, oi_trusted_60m=False, directional_delta_pct_240m=None)
+    reason = f"limited_synthetic_240m:count={count}"
+    evaluation = replace(initial, decision=decision, feature_status="INVALID", fail_open_reason="ENRICHED_INVALID", detail=reason)
+    scout, bus, research, _ = _scout(module, evaluation)
+    alerts = []
+    scout._notify_loss_filter_unverified = lambda peak, admission, reason: alerts.append((admission, reason))
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is True
+    assert len(bus) == 1 and len(alerts) == 1 and alerts[0][1] == reason
+    assert alerts[0][0]["filter_b"]["status"] == "UNKNOWN"
+    assert research[0][1]["quality_exception"] == "UP_TO_TWO_SYNTHETIC_240M_A_PASS"
+
+
+def test_three_synthetic_minutes_still_blocks_and_warns(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    initial = _evaluation(mode="veto", block=False)
+    decision = evaluate_loss_avoidance_policy(same_side_peak_percentile_24h=75, oi_change_60m=None, oi_trusted_60m=False, directional_delta_pct_240m=None)
+    evaluation = replace(initial, decision=decision, feature_status="INVALID", fail_open_reason="ENRICHED_INVALID", detail="synthetic_240m:count=3")
+    scout, bus, _, _ = _scout(module, evaluation)
+    alerts = []
+    scout._notify_loss_filter_unverified = lambda *args: alerts.append(args)
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == [] and len(alerts) == 1
+
+
+def test_failed_audit_still_suppresses_signal(monkeypatch, tmp_path):
+    module = _module(monkeypatch, tmp_path)
+    scout, bus, _, _ = _scout(module, _evaluation(mode="veto", block=True), audit_success=False)
+    warnings = []
+    scout._notify_loss_filter_unverified = lambda peak, admission, reason: warnings.append(reason)
+    peak, mirror = _payloads()
+    assert scout._admit_peak(peak, mirror) is False
+    assert bus == [] and warnings == []
